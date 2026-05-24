@@ -1,0 +1,85 @@
+# Configuration
+
+AgentLedger 使用 TOML 配置。配置文件不存在时，`config.Load()` 会写入默认配置。
+
+## 默认配置
+
+```toml
+[database]
+path = "~/.local/share/agent-ledger/agent-ledger.db"
+
+[privacy]
+mode = "envelope"
+redact_paths_on_export = true
+
+[import]
+gracing_minutes = 15
+single_thread = false
+
+[cleanup]
+default_mode = "quarantine"
+older_than_days = 30
+purge_after_days = 90
+
+[reports]
+timezone = "UTC"
+currency = "USD"
+
+[agents.claude]
+enabled = true
+paths = ["~/.claude"]
+
+[agents.codex]
+enabled = true
+paths = ["~/.codex"]
+
+[agents.gemini]
+enabled = true
+paths = ["~/.gemini"]
+
+[agents.qwen]
+enabled = true
+paths = ["~/.qwen"]
+```
+
+## 当前生效的键
+
+| Key | 当前用途 |
+|---|---|
+| `[database].path` | SQLite 数据库路径；支持 `~/` 展开。 |
+| `[import].gracing_minutes` | `import` 跳过最近修改文件的时间窗口。 |
+| `[agents.*].enabled` | 是否启用对应 adapter。 |
+| `[agents.*].paths` | adapter 扫描的根路径列表；支持 `~/` 展开。 |
+
+## 当前预留的键
+
+| Key | 当前状态 |
+|---|---|
+| `[privacy].mode` | 已保存到配置，但当前 import/export 逻辑尚未按该值切换隐私模式。 |
+| `[privacy].redact_paths_on_export` | 预留；当前 `export` 只是复制 SQLite 数据库。 |
+| `[import].single_thread` | 预留；当前 import 是顺序遍历。 |
+| `[cleanup].*` | 预留；当前 CLI 没有 `cleanup` 命令。 |
+| `[reports].timezone` | 预留；当前报表使用 SQLite UTC date bucket。 |
+| `[reports].currency` | 预留；当前没有 currency conversion。 |
+
+## 修改 agent 路径
+
+如果某个 agent 的日志不在默认目录：
+
+```toml
+[agents.codex]
+enabled = true
+paths = ["~/custom-codex-logs"]
+```
+
+如果暂时不导入某个 agent：
+
+```toml
+[agents.gemini]
+enabled = false
+paths = ["~/.gemini"]
+```
+
+## 路径和隐私
+
+配置里的路径是本机路径，不应写进公开 issue、PR 描述或截图。公开示例使用 `~` 或占位路径即可。
