@@ -6,7 +6,7 @@ AgentLedger 使用 TOML 配置。配置文件不存在时，`config.Load()` 会�
 
 ```toml
 [database]
-path = "~/.local/share/agent-ledger/agent-ledger.db"
+path = "local/data/agent-ledger.db"
 
 [privacy]
 mode = "envelope"

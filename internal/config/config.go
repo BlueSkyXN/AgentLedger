@@ -58,7 +58,7 @@ type AgentConfig struct {
 func Default() *Config {
 	return &Config{
 		Database: DatabaseConfig{
-			Path: "~/.local/share/agent-ledger/agent-ledger.db",
+			Path: filepath.Join(DataDir(), "agent-ledger.db"),
 		},
 		Privacy: PrivacyConfig{
 			Mode:                "envelope",
@@ -87,8 +87,54 @@ func Default() *Config {
 }
 
 func ConfigPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".config", "agent-ledger", "config.toml")
+	return filepath.Join(DataDir(), "config.toml")
+}
+
+func DataDir() string {
+	if explicit := strings.TrimSpace(os.Getenv("AGENT_LEDGER_DATA_DIR")); explicit != "" {
+		return ExpandHome(explicit)
+	}
+
+	if root := detectProjectRoot(); root != "" {
+		return filepath.Join(root, "local", "data")
+	}
+
+	home, err := os.UserHomeDir()
+	if err == nil {
+		return filepath.Join(home, ".local", "share", "agent-ledger")
+	}
+	return filepath.Join(".", "local", "data")
+}
+
+func detectProjectRoot() string {
+	if cwd, err := os.Getwd(); err == nil {
+		if root := findAncestorWithGoMod(cwd); root != "" {
+			return root
+		}
+	}
+
+	if exe, err := os.Executable(); err == nil {
+		if root := findAncestorWithGoMod(filepath.Dir(exe)); root != "" {
+			return root
+		}
+	}
+
+	return ""
+}
+
+func findAncestorWithGoMod(start string) string {
+	dir := filepath.Clean(start)
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return ""
 }
 
 func Load() (*Config, error) {

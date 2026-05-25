@@ -28,9 +28,9 @@ agent-ledger init
 
 初始化会创建或复用：
 
-- `~/.config/agent-ledger/config.toml`
-- `~/.local/share/agent-ledger/agent-ledger.db`
-- `~/.local/share/agent-ledger/device_id`
+- `<repo-root>/local/data/config.toml`
+- `<repo-root>/local/data/agent-ledger.db`
+- `<repo-root>/local/data/device_id`
 
 `device_id` 使用 ULID 并持久化，后续运行会复用同一个设备标识。
 

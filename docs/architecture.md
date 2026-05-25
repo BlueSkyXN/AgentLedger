@@ -60,7 +60,7 @@ local agent logs
 数据库默认路径：
 
 ```text
-~/.local/share/agent-ledger/agent-ledger.db
+<repo-root>/local/data/agent-ledger.db
 ```
 
 连接参数：

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BlueSkyXN/AgentLedger/internal/config"
 	"github.com/oklog/ulid/v2"
 )
 
@@ -44,8 +45,7 @@ func CurrentDevice() (*Device, error) {
 }
 
 func deviceIDPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".local", "share", "agent-ledger", "device_id")
+	return filepath.Join(config.DataDir(), "device_id")
 }
 
 func loadOrCreateDeviceID() (string, error) {
