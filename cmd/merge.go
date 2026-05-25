@@ -5,7 +5,6 @@ import (
 
 	"github.com/BlueSkyXN/AgentLedger/internal/config"
 	"github.com/BlueSkyXN/AgentLedger/internal/db"
-	"github.com/BlueSkyXN/AgentLedger/internal/model"
 	"github.com/spf13/cobra"
 )
 
@@ -27,13 +26,7 @@ var mergeCmd = &cobra.Command{
 		}
 		defer database.Close()
 
-		dev, err := model.CurrentDevice()
-		if err != nil {
-			return fmt.Errorf("failed to get device: %w", err)
-		}
-		_ = database.UpsertDevice(dev)
-
-		inserted, skipped, err := database.MergeFrom(incomingPath, dev.DeviceID)
+		inserted, skipped, err := database.MergeFrom(incomingPath)
 		if err != nil {
 			return fmt.Errorf("merge failed: %w", err)
 		}

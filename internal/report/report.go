@@ -9,217 +9,145 @@ import (
 	"time"
 )
 
-func Generate(conn *sql.DB, reportType, since, until, groupBy string, asJSON bool) error {
+type Filters struct {
+	Since    string
+	Until    string
+	Channel  string
+	Provider string
+	Model    string
+	Session  string
+}
+
+type ReportRow struct {
+	Label              string   `json:"label"`
+	Events             int64    `json:"events"`
+	TotalTokens        int64    `json:"total_tokens"`
+	InputTokens        int64    `json:"input_tokens"`
+	OutputTokens       int64    `json:"output_tokens"`
+	AvgTotalDurationMs *float64 `json:"avg_total_duration_ms"`
+	AvgTTFTMs          *float64 `json:"avg_ttft_ms"`
+	AvgOutputTPS       *float64 `json:"avg_output_tps"`
+	RecordedCostUSD    float64  `json:"recorded_cost_usd"`
+}
+
+type SlowRow struct {
+	EventID          string   `json:"event_id"`
+	Timestamp        string   `json:"timestamp"`
+	Channel          string   `json:"channel"`
+	Model            string   `json:"model"`
+	SessionID        string   `json:"session_id"`
+	TotalTokens      int64    `json:"total_tokens"`
+	OutputTokens     int64    `json:"output_tokens"`
+	TotalDurationMs  *int64   `json:"total_duration_ms"`
+	TTFTMs           *int64   `json:"ttft_ms"`
+	OutputDurationMs *int64   `json:"output_duration_ms"`
+	OutputTPS        *float64 `json:"output_tps"`
+}
+
+func Generate(conn *sql.DB, reportType string, filters Filters, asJSON bool) error {
 	switch reportType {
 	case "daily":
-		return generateDaily(conn, since, until, asJSON)
+		return generateGrouped(conn, "date(timestamp_ms/1000, 'unixepoch')", filters, asJSON, "Date", "label DESC")
 	case "weekly":
-		return generateWeekly(conn, since, until, asJSON)
+		return generateGrouped(conn, "strftime('%Y-W%W', timestamp_ms/1000, 'unixepoch')", filters, asJSON, "Week", "label DESC")
 	case "monthly":
-		return generateMonthly(conn, since, until, groupBy, asJSON)
+		return generateGrouped(conn, "strftime('%Y-%m', timestamp_ms/1000, 'unixepoch')", filters, asJSON, "Month", "label DESC")
 	case "models":
-		return generateModels(conn, since, until, asJSON)
+		return generateGrouped(conn, "COALESCE(model_normalized, model_raw, 'unknown')", filters, asJSON, "Model", "total_tokens DESC")
 	case "channels":
-		return generateChannels(conn, since, until, asJSON)
-	case "devices":
-		return generateDevices(conn, asJSON)
+		return generateGrouped(conn, "COALESCE(channel, 'unknown')", filters, asJSON, "Channel", "total_tokens DESC")
 	case "sessions":
-		return generateSessions(conn, since, until, asJSON)
+		return generateGrouped(conn, "COALESCE(session_id, 'no-session')", filters, asJSON, "Session", "total_tokens DESC LIMIT 50")
+	case "slow":
+		return generateSlow(conn, filters, asJSON)
 	default:
 		return fmt.Errorf("unknown report type: %s", reportType)
 	}
 }
 
-type ReportRow struct {
-	Label        string  `json:"label"`
-	Events       int64   `json:"events"`
-	TotalTokens  int64   `json:"total_tokens"`
-	InputTokens  int64   `json:"input_tokens"`
-	OutputTokens int64   `json:"output_tokens"`
-	CostUSD      float64 `json:"cost_usd"`
+func generateGrouped(conn *sql.DB, labelExpr string, filters Filters, asJSON bool, labelHeader, order string) error {
+	query := fmt.Sprintf(`SELECT
+        %s AS label,
+        COUNT(*) AS events,
+        COALESCE(SUM(total_tokens), 0) AS total_tokens,
+        COALESCE(SUM(input_tokens), 0) AS input_tokens,
+        COALESCE(SUM(output_tokens), 0) AS output_tokens,
+        AVG(total_duration_ms) AS avg_total_duration_ms,
+        AVG(ttft_ms) AS avg_ttft_ms,
+        AVG(output_tps) AS avg_output_tps,
+        COALESCE(SUM(recorded_cost_usd), 0) AS recorded_cost_usd
+    FROM usage_events WHERE 1=1`, labelExpr)
+	args := make([]any, 0)
+	query = addFilters(query, &args, filters)
+	query += " GROUP BY label ORDER BY " + order
+	return executeReport(conn, query, args, asJSON, labelHeader)
 }
 
-func generateDaily(conn *sql.DB, since, until string, asJSON bool) error {
-	query := `SELECT 
-        date(timestamp_ms/1000, 'unixepoch') as day,
-        COUNT(*) as events,
-        SUM(total_tokens) as total_tokens,
-        SUM(input_tokens) as input_tokens,
-        SUM(output_tokens) as output_tokens,
-        SUM(cost_usd) as cost_usd
-    FROM usage_events
-    WHERE 1=1`
+func generateSlow(conn *sql.DB, filters Filters, asJSON bool) error {
+	query := `SELECT
+        event_id,
+        timestamp_ms,
+        channel,
+        COALESCE(model_normalized, model_raw, 'unknown') AS model,
+        COALESCE(session_id, '') AS session_id,
+        total_tokens,
+        output_tokens,
+        total_duration_ms,
+        ttft_ms,
+        output_duration_ms,
+        output_tps
+    FROM usage_events WHERE (output_tps IS NOT NULL OR ttft_ms IS NOT NULL OR total_duration_ms IS NOT NULL)`
+	args := make([]any, 0)
+	query = addFilters(query, &args, filters)
+	query += " ORDER BY output_tps IS NULL ASC, output_tps ASC, ttft_ms DESC, total_duration_ms DESC LIMIT 50"
 
-	var args []interface{}
-	if since != "" {
-		query += " AND date(timestamp_ms/1000, 'unixepoch') >= ?"
-		args = append(args, since)
+	rows, err := conn.Query(query, args...)
+	if err != nil {
+		return fmt.Errorf("query failed: %w", err)
 	}
-	if until != "" {
-		query += " AND date(timestamp_ms/1000, 'unixepoch') <= ?"
-		args = append(args, until)
-	}
-	query += " GROUP BY day ORDER BY day DESC"
+	defer rows.Close()
 
-	return executeReport(conn, query, args, asJSON, "Date")
+	var results []SlowRow
+	for rows.Next() {
+		var item SlowRow
+		var timestamp int64
+		var totalDuration, ttft, outputDuration sql.NullInt64
+		var outputTPS sql.NullFloat64
+		if err := rows.Scan(&item.EventID, &timestamp, &item.Channel, &item.Model, &item.SessionID, &item.TotalTokens, &item.OutputTokens, &totalDuration, &ttft, &outputDuration, &outputTPS); err != nil {
+			return err
+		}
+		item.Timestamp = time.UnixMilli(timestamp).UTC().Format(time.RFC3339)
+		item.TotalDurationMs = nullInt64(totalDuration)
+		item.TTFTMs = nullInt64(ttft)
+		item.OutputDurationMs = nullInt64(outputDuration)
+		item.OutputTPS = nullFloat64(outputTPS)
+		results = append(results, item)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	if asJSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(results)
+	}
+	if len(results) == 0 {
+		fmt.Println("No slow/timing data found for the specified filters.")
+		return nil
+	}
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintf(w, "Time\tChannel\tModel\tSession\tOutput\tTPS\tTTFT(ms)\tTotal(ms)\n")
+	fmt.Fprintf(w, "---\t---\t---\t---\t---\t---\t---\t---\n")
+	for _, row := range results {
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d\t%s\t%s\t%s\n",
+			row.Timestamp, row.Channel, truncate(row.Model, 32), truncate(row.SessionID, 16), row.OutputTokens,
+			formatFloatPtr(row.OutputTPS), formatIntPtr(row.TTFTMs), formatIntPtr(row.TotalDurationMs))
+	}
+	return w.Flush()
 }
 
-func generateWeekly(conn *sql.DB, since, until string, asJSON bool) error {
-	query := `SELECT 
-        strftime('%Y-W%W', timestamp_ms/1000, 'unixepoch') as week,
-        COUNT(*) as events,
-        SUM(total_tokens) as total_tokens,
-        SUM(input_tokens) as input_tokens,
-        SUM(output_tokens) as output_tokens,
-        SUM(cost_usd) as cost_usd
-    FROM usage_events
-    WHERE 1=1`
-
-	var args []interface{}
-	if since != "" {
-		query += " AND date(timestamp_ms/1000, 'unixepoch') >= ?"
-		args = append(args, since)
-	}
-	if until != "" {
-		query += " AND date(timestamp_ms/1000, 'unixepoch') <= ?"
-		args = append(args, until)
-	}
-	query += " GROUP BY week ORDER BY week DESC"
-
-	return executeReport(conn, query, args, asJSON, "Week")
-}
-
-func generateMonthly(conn *sql.DB, since, until, groupBy string, asJSON bool) error {
-	labelExpr := "strftime('%Y-%m', timestamp_ms/1000, 'unixepoch')"
-	switch groupBy {
-	case "agent":
-		labelExpr = "agent || ' / ' || strftime('%Y-%m', timestamp_ms/1000, 'unixepoch')"
-	case "model":
-		labelExpr = "model_normalized || ' / ' || strftime('%Y-%m', timestamp_ms/1000, 'unixepoch')"
-	case "provider":
-		labelExpr = "model_provider || ' / ' || strftime('%Y-%m', timestamp_ms/1000, 'unixepoch')"
-	case "":
-		// default grouping by month only
-	default:
-		return fmt.Errorf("unsupported --by value %q, allowed: agent, model, provider", groupBy)
-	}
-
-	query := fmt.Sprintf(`SELECT 
-        %s as label,
-        COUNT(*) as events,
-        SUM(total_tokens) as total_tokens,
-        SUM(input_tokens) as input_tokens,
-        SUM(output_tokens) as output_tokens,
-        SUM(cost_usd) as cost_usd
-    FROM usage_events
-    WHERE 1=1`, labelExpr)
-
-	var args []interface{}
-	if since != "" {
-		query += " AND date(timestamp_ms/1000, 'unixepoch') >= ?"
-		args = append(args, since)
-	}
-	if until != "" {
-		query += " AND date(timestamp_ms/1000, 'unixepoch') <= ?"
-		args = append(args, until)
-	}
-	query += " GROUP BY label ORDER BY label DESC"
-
-	return executeReport(conn, query, args, asJSON, "Month")
-}
-
-func generateModels(conn *sql.DB, since, until string, asJSON bool) error {
-	query := `SELECT 
-        COALESCE(model_normalized, model_raw, 'unknown') as model,
-        COUNT(*) as events,
-        SUM(total_tokens) as total_tokens,
-        SUM(input_tokens) as input_tokens,
-        SUM(output_tokens) as output_tokens,
-        SUM(cost_usd) as cost_usd
-    FROM usage_events
-    WHERE 1=1`
-
-	var args []interface{}
-	if since != "" {
-		query += " AND date(timestamp_ms/1000, 'unixepoch') >= ?"
-		args = append(args, since)
-	}
-	if until != "" {
-		query += " AND date(timestamp_ms/1000, 'unixepoch') <= ?"
-		args = append(args, until)
-	}
-	query += " GROUP BY model ORDER BY total_tokens DESC"
-
-	return executeReport(conn, query, args, asJSON, "Model")
-}
-
-func generateChannels(conn *sql.DB, since, until string, asJSON bool) error {
-	query := `SELECT 
-        COALESCE(source_channel, 'unknown') as channel,
-        COUNT(*) as events,
-        SUM(total_tokens) as total_tokens,
-        SUM(input_tokens) as input_tokens,
-        SUM(output_tokens) as output_tokens,
-        SUM(cost_usd) as cost_usd
-    FROM usage_events
-    WHERE 1=1`
-
-	var args []interface{}
-	if since != "" {
-		query += " AND date(timestamp_ms/1000, 'unixepoch') >= ?"
-		args = append(args, since)
-	}
-	if until != "" {
-		query += " AND date(timestamp_ms/1000, 'unixepoch') <= ?"
-		args = append(args, until)
-	}
-	query += " GROUP BY channel ORDER BY total_tokens DESC"
-
-	return executeReport(conn, query, args, asJSON, "Channel")
-}
-
-func generateDevices(conn *sql.DB, asJSON bool) error {
-	query := `SELECT 
-        d.device_name || ' (' || d.device_id || ')' as device,
-        COUNT(*) as events,
-        SUM(e.total_tokens) as total_tokens,
-        SUM(e.input_tokens) as input_tokens,
-        SUM(e.output_tokens) as output_tokens,
-        SUM(e.cost_usd) as cost_usd
-    FROM usage_events e
-    JOIN devices d ON e.origin_device_id = d.device_id
-    GROUP BY e.origin_device_id
-    ORDER BY total_tokens DESC`
-
-	return executeReport(conn, query, nil, asJSON, "Device")
-}
-
-func generateSessions(conn *sql.DB, since, until string, asJSON bool) error {
-	query := `SELECT 
-        COALESCE(session_id, 'no-session') as session,
-        COUNT(*) as events,
-        SUM(total_tokens) as total_tokens,
-        SUM(input_tokens) as input_tokens,
-        SUM(output_tokens) as output_tokens,
-        SUM(cost_usd) as cost_usd
-    FROM usage_events
-    WHERE 1=1`
-
-	var args []interface{}
-	if since != "" {
-		query += " AND date(timestamp_ms/1000, 'unixepoch') >= ?"
-		args = append(args, since)
-	}
-	if until != "" {
-		query += " AND date(timestamp_ms/1000, 'unixepoch') <= ?"
-		args = append(args, until)
-	}
-	query += " GROUP BY session_id ORDER BY cost_usd DESC LIMIT 50"
-
-	return executeReport(conn, query, args, asJSON, "Session")
-}
-
-func executeReport(conn *sql.DB, query string, args []interface{}, asJSON bool, labelHeader string) error {
+func executeReport(conn *sql.DB, query string, args []any, asJSON bool, labelHeader string) error {
 	rows, err := conn.Query(query, args...)
 	if err != nil {
 		return fmt.Errorf("query failed: %w", err)
@@ -230,23 +158,23 @@ func executeReport(conn *sql.DB, query string, args []interface{}, asJSON bool, 
 	for rows.Next() {
 		var r ReportRow
 		var totalTokens, inputTokens, outputTokens sql.NullInt64
-		var costUSD sql.NullFloat64
-		if err := rows.Scan(&r.Label, &r.Events, &totalTokens, &inputTokens, &outputTokens, &costUSD); err != nil {
+		var avgDuration, avgTTFT, avgTPS, recordedCost sql.NullFloat64
+		if err := rows.Scan(&r.Label, &r.Events, &totalTokens, &inputTokens, &outputTokens, &avgDuration, &avgTTFT, &avgTPS, &recordedCost); err != nil {
 			return err
 		}
-		if totalTokens.Valid {
-			r.TotalTokens = totalTokens.Int64
-		}
-		if inputTokens.Valid {
-			r.InputTokens = inputTokens.Int64
-		}
-		if outputTokens.Valid {
-			r.OutputTokens = outputTokens.Int64
-		}
-		if costUSD.Valid {
-			r.CostUSD = costUSD.Float64
+		r.TotalTokens = nullInt64Value(totalTokens)
+		r.InputTokens = nullInt64Value(inputTokens)
+		r.OutputTokens = nullInt64Value(outputTokens)
+		r.AvgTotalDurationMs = nullFloat64(avgDuration)
+		r.AvgTTFTMs = nullFloat64(avgTTFT)
+		r.AvgOutputTPS = nullFloat64(avgTPS)
+		if recordedCost.Valid {
+			r.RecordedCostUSD = recordedCost.Float64
 		}
 		results = append(results, r)
+	}
+	if err := rows.Err(); err != nil {
+		return err
 	}
 
 	if asJSON {
@@ -254,32 +182,108 @@ func executeReport(conn *sql.DB, query string, args []interface{}, asJSON bool, 
 		enc.SetIndent("", "  ")
 		return enc.Encode(results)
 	}
-
 	if len(results) == 0 {
-		fmt.Println("No data found for the specified period.")
+		fmt.Println("No data found for the specified filters.")
 		return nil
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintf(w, "%s\tEvents\tTokens\tInput\tOutput\tCost(USD)\n", labelHeader)
-	fmt.Fprintf(w, "---\t---\t---\t---\t---\t---\n")
+	fmt.Fprintf(w, "%s\tEvents\tTokens\tInput\tOutput\tAvg TPS\tAvg TTFT(ms)\tCost(USD)\n", labelHeader)
+	fmt.Fprintf(w, "---\t---\t---\t---\t---\t---\t---\t---\n")
 	for _, r := range results {
-		fmt.Fprintf(w, "%s\t%d\t%d\t%d\t%d\t$%.4f\n",
-			truncate(r.Label, 40), r.Events, r.TotalTokens, r.InputTokens, r.OutputTokens, r.CostUSD)
+		fmt.Fprintf(w, "%s\t%d\t%d\t%d\t%d\t%s\t%s\t$%.4f\n",
+			truncate(r.Label, 40), r.Events, r.TotalTokens, r.InputTokens, r.OutputTokens,
+			formatFloatPtr(r.AvgOutputTPS), formatFloatPtr(r.AvgTTFTMs), r.RecordedCostUSD)
 	}
 	_ = w.Flush()
 
 	var totalEvents int64
 	var totalTokens int64
-	var totalCost float64
 	for _, r := range results {
 		totalEvents += r.Events
 		totalTokens += r.TotalTokens
-		totalCost += r.CostUSD
 	}
-	fmt.Printf("\nTotal: %d events, %d tokens, $%.4f\n", totalEvents, totalTokens, totalCost)
-
+	fmt.Printf("\nTotal: %d events, %d tokens\n", totalEvents, totalTokens)
 	return nil
+}
+
+func addFilters(query string, args *[]any, filters Filters) string {
+	if filters.Since != "" {
+		query += " AND timestamp_ms >= ?"
+		*args = append(*args, dateStartMillis(filters.Since))
+	}
+	if filters.Until != "" {
+		query += " AND timestamp_ms < ?"
+		*args = append(*args, dateAfterMillis(filters.Until))
+	}
+	if filters.Channel != "" {
+		query += " AND channel = ?"
+		*args = append(*args, filters.Channel)
+	}
+	if filters.Provider != "" {
+		query += " AND provider = ?"
+		*args = append(*args, filters.Provider)
+	}
+	if filters.Model != "" {
+		query += " AND (model_normalized = ? OR model_raw = ?)"
+		*args = append(*args, filters.Model, filters.Model)
+	}
+	if filters.Session != "" {
+		query += " AND session_id = ?"
+		*args = append(*args, filters.Session)
+	}
+	return query
+}
+
+func dateStartMillis(value string) int64 {
+	parsed, err := time.Parse("2006-01-02", value)
+	if err != nil {
+		return 0
+	}
+	return parsed.UTC().UnixMilli()
+}
+
+func dateAfterMillis(value string) int64 {
+	parsed, err := time.Parse("2006-01-02", value)
+	if err != nil {
+		return 0
+	}
+	return parsed.AddDate(0, 0, 1).UTC().UnixMilli()
+}
+
+func nullInt64(value sql.NullInt64) *int64 {
+	if !value.Valid {
+		return nil
+	}
+	return &value.Int64
+}
+
+func nullFloat64(value sql.NullFloat64) *float64 {
+	if !value.Valid {
+		return nil
+	}
+	return &value.Float64
+}
+
+func nullInt64Value(value sql.NullInt64) int64 {
+	if !value.Valid {
+		return 0
+	}
+	return value.Int64
+}
+
+func formatIntPtr(value *int64) string {
+	if value == nil {
+		return "-"
+	}
+	return fmt.Sprintf("%d", *value)
+}
+
+func formatFloatPtr(value *float64) string {
+	if value == nil {
+		return "-"
+	}
+	return fmt.Sprintf("%.2f", *value)
 }
 
 func truncate(s string, maxLen int) string {

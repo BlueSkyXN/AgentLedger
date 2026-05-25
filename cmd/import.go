@@ -30,17 +30,9 @@ var importCmd = &cobra.Command{
 		}
 		defer database.Close()
 
-		dev, err := model.CurrentDevice()
-		if err != nil {
-			return fmt.Errorf("failed to get device info: %w", err)
-		}
-		if err := database.UpsertDevice(dev); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to register device: %v\n", err)
-		}
-
 		entropy := ulid.Monotonic(rand.Reader, 0)
 		runID := ulid.MustNew(ulid.Timestamp(time.Now()), entropy).String()
-		if err := database.StartImportRun(runID, dev.DeviceID); err != nil {
+		if err := database.StartImportRun(runID); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: failed to record import run start: %v\n", err)
 		}
 
@@ -49,6 +41,7 @@ var importCmd = &cobra.Command{
 
 		totalFiles := 0
 		totalAdded := 0
+		totalUpdated := 0
 		totalSkipped := 0
 
 		allAdapters := adapters.AllAdapters()
@@ -91,66 +84,107 @@ var importCmd = &cobra.Command{
 					fp, strategy := fingerprint.Compute(rec)
 					nowMs := time.Now().UnixMilli()
 
-					normalized, provider, family := adapters.NormalizeModelName(rec.Model)
+					normalized, modelProvider, _ := adapters.NormalizeModelName(rec.Model)
+					provider := rec.Provider
+					if provider == "" || provider == "unknown" {
+						provider = modelProvider
+					}
 
 					event := &model.UsageEvent{
-						EventFingerprint:    fp,
+						EventID:             fp,
 						DedupeKey:           fp,
-						FingerprintStrategy: string(strategy),
-						OriginDeviceID:      dev.DeviceID,
-						FirstSeenDeviceID:   dev.DeviceID,
-						LastSeenDeviceID:    dev.DeviceID,
-						Agent:               rec.Agent,
-						Provider:            rec.Provider,
-						SourceChannel:       "local",
-						SourceKind:          "log",
+						DedupeStrategy:      string(strategy),
+						Channel:             rec.Agent,
+						Provider:            provider,
 						ModelRaw:            rec.Model,
 						ModelNormalized:     normalized,
-						ModelProvider:       provider,
-						ModelFamily:         family,
 						TimestampMs:         rec.TimestampMs,
 						SessionID:           rec.SessionID,
+						ProjectPath:         rec.ProjectPath,
 						MessageID:           rec.MessageID,
 						RequestID:           rec.RequestID,
+						SourceFile:          rec.SourceFile,
+						LineNumber:          rec.LineNumber,
+						RawSHA256:           rec.RawSHA256,
 						InputTokens:         rec.InputTokens,
 						OutputTokens:        rec.OutputTokens,
 						CacheCreationTokens: rec.CacheCreationTokens,
 						CacheReadTokens:     rec.CacheReadTokens,
 						ReasoningTokens:     rec.ReasoningTokens,
 						TotalTokens:         rec.TotalTokens,
-						CostUSD:             rec.CostUSD,
+						RecordedCostUSD:     rec.CostUSD,
 						RawUsageJSON:        rec.RawJSON,
-						RawSHA256:           rec.RawSHA256,
-						CreatedAtMs:         nowMs,
+						ImportedAtMs:        nowMs,
 						UpdatedAtMs:         nowMs,
 					}
 
 					if event.TotalTokens == 0 {
-						event.TotalTokens = event.InputTokens + event.OutputTokens + event.CacheCreationTokens + event.CacheReadTokens + event.ReasoningTokens
+						event.TotalTokens = event.TotalTokensComputed()
 					}
+					applyTimingFields(event, rec)
 
-					inserted, err := database.InsertEvent(event)
+					result, err := database.UpsertEvent(event)
 					if err != nil {
 						fmt.Fprintf(os.Stderr, "Warning: insert error: %v\n", err)
 						continue
 					}
-					if inserted {
+					switch result {
+					case "inserted":
 						totalAdded++
-					} else {
+					case "updated":
+						totalUpdated++
+					default:
 						totalSkipped++
 					}
 				}
 			}
 		}
 
-		if err := database.FinishImportRun(runID, totalFiles, totalAdded, totalSkipped); err != nil {
+		if err := database.FinishImportRun(runID, totalFiles, totalAdded, totalUpdated, totalSkipped); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: failed to record import run finish: %v\n", err)
 		}
 
 		fmt.Printf("Import complete:\n")
 		fmt.Printf("  Files processed: %d\n", totalFiles)
 		fmt.Printf("  Events added:    %d\n", totalAdded)
+		fmt.Printf("  Events updated:  %d\n", totalUpdated)
 		fmt.Printf("  Events skipped:  %d (duplicates)\n", totalSkipped)
 		return nil
 	},
+}
+
+func applyTimingFields(event *model.UsageEvent, rec *fingerprint.ParsedRecord) {
+	event.RequestStartedAtMs = positiveInt64Ptr(rec.RequestStartedAtMs)
+	event.FirstTokenAtMs = positiveInt64Ptr(rec.FirstTokenAtMs)
+	event.CompletedAtMs = positiveInt64Ptr(rec.CompletedAtMs)
+	event.TotalDurationMs = positiveInt64Ptr(rec.TotalDurationMs)
+	event.TTFTMs = positiveInt64Ptr(rec.TTFTMs)
+	event.OutputDurationMs = positiveInt64Ptr(rec.OutputDurationMs)
+
+	if event.TTFTMs == nil && event.RequestStartedAtMs != nil && event.FirstTokenAtMs != nil {
+		if value := *event.FirstTokenAtMs - *event.RequestStartedAtMs; value >= 0 {
+			event.TTFTMs = &value
+		}
+	}
+	if event.OutputDurationMs == nil && event.FirstTokenAtMs != nil && event.CompletedAtMs != nil {
+		if value := *event.CompletedAtMs - *event.FirstTokenAtMs; value > 0 {
+			event.OutputDurationMs = &value
+		}
+	}
+	if event.TotalDurationMs == nil && event.RequestStartedAtMs != nil && event.CompletedAtMs != nil {
+		if value := *event.CompletedAtMs - *event.RequestStartedAtMs; value >= 0 {
+			event.TotalDurationMs = &value
+		}
+	}
+	if event.OutputTPS == nil && event.OutputDurationMs != nil && *event.OutputDurationMs > 0 && event.OutputTokens > 0 {
+		value := float64(event.OutputTokens) / (float64(*event.OutputDurationMs) / 1000.0)
+		event.OutputTPS = &value
+	}
+}
+
+func positiveInt64Ptr(value int64) *int64 {
+	if value <= 0 {
+		return nil
+	}
+	return &value
 }

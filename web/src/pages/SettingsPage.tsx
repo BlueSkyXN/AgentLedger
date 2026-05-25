@@ -12,17 +12,18 @@ export function SettingsPage() {
           <h2>运行状态</h2>
           <dl>
             <dt>版本</dt><dd>{health?.version ?? "-"}</dd>
+            <dt>Schema</dt><dd>v{status?.schema_version ?? "-"}</dd>
             <dt>前端资源</dt><dd>{health?.asset_mode ?? "-"}</dd>
             <dt>数据库</dt><dd className="mono">{health?.database ?? "-"}</dd>
             <dt>数据库大小</dt><dd>{formatInt(health?.database_bytes)} bytes</dd>
           </dl>
         </div>
         <div>
-          <h2>账本概况</h2>
+          <h2>统计概况</h2>
           <dl>
             <dt>总事件</dt><dd>{formatInt(status?.total_events)}</dd>
             <dt>总 Tokens</dt><dd>{formatInt(status?.total_tokens)}</dd>
-            <dt>总成本</dt><dd>{formatCost(status?.total_cost_usd)}</dd>
+            <dt>记录成本</dt><dd>{formatCost(status?.total_recorded_cost_usd)}</dd>
             <dt>配置路径</dt><dd className="mono">{config?.config_path ?? "-"}</dd>
           </dl>
         </div>

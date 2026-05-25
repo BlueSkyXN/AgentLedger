@@ -15,7 +15,7 @@ module github.com/BlueSkyXN/AgentLedger
 - `github.com/spf13/cobra`: CLI command framework
 - `github.com/BurntSushi/toml`: config file encoding/decoding
 - `github.com/mattn/go-sqlite3`: SQLite driver
-- `github.com/oklog/ulid/v2`: device id and import run id
+- `github.com/oklog/ulid/v2`: import run id
 
 由于 SQLite driver 使用 `github.com/mattn/go-sqlite3`，本地构建通常需要 `CGO_ENABLED=1` 和可用的 C toolchain。
 
@@ -94,7 +94,7 @@ go run . serve
 - 不要猜测外部 agent 的日志格式；新增 adapter 前先保留真实样例或测试 fixture。
 - 新增 report 参数时必须做 allowlist 校验，避免把未验证用户输入拼入 SQL。
 - `merge` 涉及 SQLite `ATTACH DATABASE`，必须继续保留路径校验和 SQLite header 校验。
-- 当前 `sources`、`source_files`、`raw_records`、`event_observations`、`event_conflicts` 是 schema 层预留能力；如果开始写入这些表，需要补迁移策略和回归测试。
+- v2 schema 只保留 `meta`、`import_runs`、`usage_events`；不要重新引入 source/observation/conflict 表，除非先完成新的 schema 设计和回归测试。
 - 成本估算不要硬编码成不可追踪常量；应记录 pricing source/version，并明确价格更新时间。
 
 ## 发布前检查

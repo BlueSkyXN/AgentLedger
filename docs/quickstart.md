@@ -1,102 +1,73 @@
 # Quickstart
 
-本文档只覆盖当前 Go CLI 已实现能力。
-
-## 1. 构建
-
-Prerequisite:
-
-- 使用 `go.mod` 声明的 Go 版本或兼容版本。
-- 本项目依赖 `github.com/mattn/go-sqlite3`，本地构建通常需要 `CGO_ENABLED=1` 和可用的 C toolchain（例如 macOS Xcode Command Line Tools 或 Linux `gcc`）。
+## 1. Build
 
 ```bash
-git clone https://github.com/BlueSkyXN/AgentLedger.git
-cd AgentLedger
 mkdir -p bin
 go build -o bin/agent-ledger .
 ./bin/agent-ledger --help
 ```
 
-本文后续示例使用 `./bin/agent-ledger`，对应上面的源码构建产物。如果你已经把二进制安装到 `PATH`，可以直接使用 `agent-ledger`。
-
-开发时也可以直接运行：
-
-```bash
-go run . --help
-go test ./...
-go build ./...
-```
-
-## 2. 初始化
+## 2. Init
 
 ```bash
 ./bin/agent-ledger init
 ```
 
-初始化会创建或复用本机配置、SQLite 数据库和持久化设备标识。数据目录选择顺序是：`AGENT_LEDGER_DATA_DIR`、源码仓库内的 `<repo-root>/local/data`、最后才是 `~/.local/share/agent-ledger`；如果只是阅读文档或验证 help 输出，不需要运行它。
+如果当前数据目录里已有旧 v1 数据库，v2 会拒绝打开并提示 reset：
 
-## 3. 导入本机日志
+```bash
+./bin/agent-ledger init --reset
+```
+
+`--reset` 会删除当前配置指向的本地数据库及 WAL/SHM 文件，然后创建空的 schema v2 数据库。需要保留旧数据时先手动备份。
+
+## 3. Import
 
 ```bash
 ./bin/agent-ledger import
 ```
 
-导入会扫描启用的 Claude Code、Codex、Gemini CLI、Qwen 路径，把可解析的 usage envelope 写入 `usage_events`。当前实现不会移动、删除或改写原始 agent 日志。
+默认读取配置中启用的 agent 路径：
 
-默认会跳过最近仍可能被写入的文件，grace period 来自 `[import].gracing_minutes`，默认 `15` 分钟。
+- Claude Code: `~/.claude`
+- Codex: `~/.codex`
+- Gemini CLI: `~/.gemini`
+- Qwen: `~/.qwen`
 
-## 4. 查看状态和报表
+## 4. Status
 
 ```bash
 ./bin/agent-ledger status
+```
+
+输出 schema version、事件数、导入次数、token 汇总和 recorded cost 汇总。
+
+## 5. Reports
+
+```bash
 ./bin/agent-ledger report daily
-./bin/agent-ledger report weekly
-./bin/agent-ledger report monthly --by agent
+./bin/agent-ledger report weekly --channel claude
+./bin/agent-ledger report monthly --provider anthropic
 ./bin/agent-ledger report models --json
-./bin/agent-ledger report sessions
+./bin/agent-ledger report channels --since 2026-05-01
+./bin/agent-ledger report sessions --model gpt-5.5
+./bin/agent-ledger report slow --sort output_tps --limit 50
 ```
 
-所有 report 子命令都暴露 `--since`、`--until`、`--json`。当前只有 `report monthly` 使用 `--by agent|model|provider` 改变分组。
-
-## 5. 跨设备合并
-
-在设备 A：
+所有 report 子命令支持：
 
 ```bash
-./bin/agent-ledger import
-./bin/agent-ledger export --output device-a.aldb
+--since YYYY-MM-DD
+--until YYYY-MM-DD
+--channel string
+--provider string
+--model string
+--session string
+--json
 ```
 
-把 `device-a.aldb` 复制到设备 B 后：
-
-```bash
-./bin/agent-ledger merge device-a.aldb
-./bin/agent-ledger report monthly --by agent
-```
-
-`.aldb` 是 SQLite 数据库副本，包含本地 usage 数据。不要把真实导出文件当作普通公开附件传播。
-
-## 6. 维护命令
-
-```bash
-./bin/agent-ledger doctor
-./bin/agent-ledger verify
-./bin/agent-ledger vacuum
-```
-
-- `doctor` 显示配置路径、数据库是否存在，以及各 adapter 可发现的源文件数量。
-- `verify` 执行 SQLite `PRAGMA integrity_check`。
-- `vacuum` 执行 SQLite `VACUUM` 回收空间。
-
-## 7. 本地 Web 面板
-
-```bash
-./bin/agent-ledger serve
-```
-
-打开 `http://127.0.0.1:8765` 查看只读面板。面板实时读取当前 SQLite 聚合结果，但不会从浏览器触发导入、合并、清理或配置修改。
-
-如果看到 placeholder，说明 React 面板还没有构建：
+## 6. Web panel
 
 ```bash
 cd web
@@ -106,6 +77,19 @@ cd ..
 ./bin/agent-ledger serve
 ```
 
-## 当前没有的命令
+打开：
 
-当前 CLI 没有 `cleanup` 或 `restore` 命令。旧设计稿里的 quarantine、purge、restore 流程还没有落到 Go CLI，不要按这些命令操作真实日志。
+```text
+http://127.0.0.1:8765
+```
+
+Web 面板只读，不会从浏览器触发 import、merge、vacuum 或配置修改。
+
+## 7. Export / merge
+
+```bash
+./bin/agent-ledger export --output usage.aldb
+./bin/agent-ledger merge usage.aldb
+```
+
+`merge` 只接受 schema v2 AgentLedger SQLite 数据库，并只合并本地未见过的 `usage_events`。

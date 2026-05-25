@@ -6,6 +6,16 @@ export function formatCost(value: number | null | undefined): string {
   return value == null ? "-" : `$${value.toFixed(4)}`;
 }
 
+export function formatMs(value: number | null | undefined): string {
+  if (value == null) return "-";
+  if (value >= 1000) return `${(value / 1000).toFixed(2)}s`;
+  return `${Math.round(value)}ms`;
+}
+
+export function formatTPS(value: number | null | undefined): string {
+  return value == null ? "-" : `${value.toFixed(2)}/s`;
+}
+
 export function formatDate(value: string | null | undefined): string {
   if (!value) return "-";
   const date = new Date(value);

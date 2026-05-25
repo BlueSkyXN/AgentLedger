@@ -25,10 +25,10 @@ func testServer(t *testing.T) *Server {
 	cfg.Agents.Codex.Paths = []string{"~/private-codex"}
 	base := time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC).UnixMilli()
 	_, err = database.Conn().Exec(`INSERT INTO usage_events (
-		event_fingerprint, dedupe_key, fingerprint_strategy, origin_device_id, first_seen_device_id, last_seen_device_id,
-		agent, provider, source_channel, source_kind, model_raw, model_normalized, model_provider, timestamp_ms,
-		session_id, message_id, input_tokens, output_tokens, total_tokens, raw_usage_json, raw_meta_json, created_at_ms, updated_at_ms
-	) VALUES ('fp1', 'fp1', 'message_id', 'dev1', 'dev1', 'dev1', 'codex', 'openai', 'local', 'log', 'gpt-5', 'gpt-5', 'openai', ?, 's1', 'm1', 100, 50, 150, '{"secret":"hidden"}', '{"path":"/private"}', 1, 1)`, base)
+		event_id, dedupe_key, dedupe_strategy, channel, provider, model_raw, model_normalized, timestamp_ms,
+		session_id, message_id, input_tokens, output_tokens, total_tokens, output_duration_ms, output_tps,
+		raw_usage_json, imported_at_ms, updated_at_ms
+	) VALUES ('fp1', 'fp1', 'message_id', 'codex', 'openai', 'gpt-5', 'gpt-5', ?, 's1', 'm1', 100, 50, 150, 2500, 20.0, '{"secret":"hidden"}', 1, 1)`, base)
 	if err != nil {
 		t.Fatalf("insert event: %v", err)
 	}
@@ -57,6 +57,7 @@ func TestAPIValidation(t *testing.T) {
 	cases := []string{
 		"/api/v1/analytics/timeseries?bucket=hourly",
 		"/api/v1/analytics/breakdown?by=raw",
+		"/api/v1/analytics/slow?sort=raw",
 		"/api/v1/events?limit=0",
 		"/api/v1/events?since=2026/05/01",
 	}
@@ -70,15 +71,25 @@ func TestAPIValidation(t *testing.T) {
 	}
 }
 
-func TestEventsAndConfigDoNotExposeRawJSON(t *testing.T) {
+func TestEventsConfigAndFilters(t *testing.T) {
 	server := testServer(t)
 	for _, path := range []string{"/api/v1/events", "/api/v1/config"} {
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodGet, path, nil)
 		server.Handler().ServeHTTP(recorder, request)
 		body := recorder.Body.String()
-		if strings.Contains(body, "raw_usage_json") || strings.Contains(body, "raw_meta_json") || strings.Contains(body, "secret") {
+		if strings.Contains(body, "raw_usage_json") || strings.Contains(body, "secret") {
 			t.Fatalf("%s leaked private fields: %s", path, body)
 		}
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/filter-options", nil)
+	server.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("filter-options status = %d body = %s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "codex") {
+		t.Fatalf("filter options missing channel: %s", recorder.Body.String())
 	}
 }

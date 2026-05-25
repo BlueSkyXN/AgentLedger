@@ -10,6 +10,7 @@ const TrendsPage = lazy(() => import("@/pages/TrendsPage").then((module) => ({ d
 const ModelsPage = lazy(() => import("@/pages/ModelsPage").then((module) => ({ default: module.ModelsPage })));
 const AgentsPage = lazy(() => import("@/pages/AgentsPage").then((module) => ({ default: module.AgentsPage })));
 const SessionsPage = lazy(() => import("@/pages/SessionsPage").then((module) => ({ default: module.SessionsPage })));
+const SlowPage = lazy(() => import("@/pages/SlowPage").then((module) => ({ default: module.SlowPage })));
 const ImportsPage = lazy(() => import("@/pages/ImportsPage").then((module) => ({ default: module.ImportsPage })));
 const SettingsPage = lazy(() => import("@/pages/SettingsPage").then((module) => ({ default: module.SettingsPage })));
 
@@ -25,6 +26,7 @@ export default function App() {
               <Route path="/models" element={<ModelsPage />} />
               <Route path="/agents" element={<AgentsPage />} />
               <Route path="/sessions" element={<SessionsPage />} />
+              <Route path="/slow" element={<SlowPage />} />
               <Route path="/imports" element={<ImportsPage />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="*" element={<OverviewPage />} />

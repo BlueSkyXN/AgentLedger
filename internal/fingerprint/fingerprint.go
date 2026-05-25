@@ -15,6 +15,7 @@ type ParsedRecord struct {
 	Model               string
 	TimestampMs         int64
 	SessionID           string
+	ProjectPath         string
 	MessageID           string
 	RequestID           string
 	InputTokens         int64
@@ -23,7 +24,13 @@ type ParsedRecord struct {
 	CacheReadTokens     int64
 	ReasoningTokens     int64
 	TotalTokens         int64
-	CostUSD             float64
+	CostUSD             *float64
+	RequestStartedAtMs  int64
+	FirstTokenAtMs      int64
+	CompletedAtMs       int64
+	TotalDurationMs     int64
+	TTFTMs              int64
+	OutputDurationMs    int64
 	RawJSON             string
 	SourceFile          string
 	LineNumber          int

@@ -1,4 +1,4 @@
-import type { ConfigSnapshot, EventItem, Filters, Health, ImportRun, MetricRow, Status, Summary } from "./types";
+import type { ConfigSnapshot, EventItem, FilterOptions, Filters, Health, ImportRun, MetricRow, SlowSort, Status, Summary } from "./types";
 
 const API_BASE = "/api/v1";
 
@@ -36,8 +36,11 @@ export const api = {
   summary: (filters: Filters) => request<Summary>(`/analytics/summary${query(filters)}`),
   timeseries: (bucket: "daily" | "weekly" | "monthly", filters: Filters) =>
     request<MetricRow[]>(`/analytics/timeseries${query({ ...filters, bucket })}`),
-  breakdown: (by: "agent" | "model" | "provider" | "device", filters: Filters) =>
+  breakdown: (by: "channel" | "model" | "provider" | "session", filters: Filters) =>
     request<MetricRow[]>(`/analytics/breakdown${query({ ...filters, by })}`),
+  slow: (sort: SlowSort, filters: Filters, limit = 50) =>
+    request<EventItem[]>(`/analytics/slow${query({ ...filters, sort, limit })}`),
+  filterOptions: () => request<FilterOptions>("/filter-options"),
   sessions: (filters: Filters, limit = 50) =>
     request<MetricRow[]>(`/sessions${query({ ...filters, limit })}`),
   importRuns: (limit = 20) => request<ImportRun[]>(`/import-runs${query({ limit })}`),

@@ -8,6 +8,10 @@ type StoredFilterState = {
   range: TimeRange;
   customSince: string;
   customUntil: string;
+  channel: string;
+  provider: string;
+  model: string;
+  session: string;
 };
 
 type FilterContextValue = {
@@ -17,9 +21,17 @@ type FilterContextValue = {
   customUntil: string;
   activeSince: string;
   activeUntil: string;
+  channel: string;
+  provider: string;
+  model: string;
+  session: string;
   setRange: (value: TimeRange) => void;
   setCustomSince: (value: string) => void;
   setCustomUntil: (value: string) => void;
+  setChannel: (value: string) => void;
+  setProvider: (value: string) => void;
+  setModel: (value: string) => void;
+  setSession: (value: string) => void;
   clearFilters: () => void;
 };
 
@@ -46,15 +58,24 @@ function monthStart(): string {
 }
 
 function readInitialState(): StoredFilterState {
-  if (typeof window === "undefined") return { range: "all", customSince: "", customUntil: "" };
+  const empty = { range: "all" as TimeRange, customSince: "", customUntil: "", channel: "", provider: "", model: "", session: "" };
+  if (typeof window === "undefined") return empty;
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { range: "all", customSince: "", customUntil: "" };
+    if (!raw) return empty;
     const parsed = JSON.parse(raw) as Partial<StoredFilterState>;
     const range = parsed.range && ["all", "7d", "30d", "month", "custom"].includes(parsed.range) ? parsed.range : "all";
-    return { range, customSince: parsed.customSince ?? "", customUntil: parsed.customUntil ?? "" };
+    return {
+      range,
+      customSince: parsed.customSince ?? "",
+      customUntil: parsed.customUntil ?? "",
+      channel: parsed.channel ?? "",
+      provider: parsed.provider ?? "",
+      model: parsed.model ?? "",
+      session: parsed.session ?? "",
+    };
   } catch (_) {
-    return { range: "all", customSince: "", customUntil: "" };
+    return empty;
   }
 }
 
@@ -80,7 +101,14 @@ export function FilterProvider({ children }: { children: ReactNode }) {
     () => buildDateRange(state.range, state.customSince, state.customUntil),
     [state.range, state.customSince, state.customUntil]
   );
-  const filters = useMemo(() => ({ since: activeSince, until: activeUntil }), [activeSince, activeUntil]);
+  const filters = useMemo(() => ({
+    since: activeSince,
+    until: activeUntil,
+    channel: state.channel,
+    provider: state.provider,
+    model: state.model,
+    session: state.session,
+  }), [activeSince, activeUntil, state.channel, state.model, state.provider, state.session]);
 
   useEffect(() => {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -93,11 +121,19 @@ export function FilterProvider({ children }: { children: ReactNode }) {
     customUntil: state.customUntil,
     activeSince,
     activeUntil,
+    channel: state.channel,
+    provider: state.provider,
+    model: state.model,
+    session: state.session,
     setRange: (range) => setState((current) => ({ ...current, range })),
     setCustomSince: (customSince) => setState((current) => ({ ...current, range: "custom", customSince })),
     setCustomUntil: (customUntil) => setState((current) => ({ ...current, range: "custom", customUntil })),
-    clearFilters: () => setState({ range: "all", customSince: "", customUntil: "" }),
-  }), [activeSince, activeUntil, filters, state.customSince, state.customUntil, state.range]);
+    setChannel: (channel) => setState((current) => ({ ...current, channel })),
+    setProvider: (provider) => setState((current) => ({ ...current, provider })),
+    setModel: (model) => setState((current) => ({ ...current, model })),
+    setSession: (session) => setState((current) => ({ ...current, session })),
+    clearFilters: () => setState({ range: "all", customSince: "", customUntil: "", channel: "", provider: "", model: "", session: "" }),
+  }), [activeSince, activeUntil, filters, state.channel, state.customSince, state.customUntil, state.model, state.provider, state.range, state.session]);
 
   return <FilterContext.Provider value={value}>{children}</FilterContext.Provider>;
 }

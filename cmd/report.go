@@ -12,7 +12,7 @@ import (
 var reportCmd = &cobra.Command{
 	Use:   "report [type]",
 	Short: "Generate usage reports",
-	Long:  "Available report types: daily, weekly, monthly, models, channels, devices, sessions",
+	Long:  "Available report types: daily, weekly, monthly, models, channels, sessions, slow",
 }
 
 var reportDailyCmd = &cobra.Command{
@@ -45,16 +45,16 @@ var reportChannelsCmd = &cobra.Command{
 	RunE:  runReport("channels"),
 }
 
-var reportDevicesCmd = &cobra.Command{
-	Use:   "devices",
-	Short: "Device breakdown",
-	RunE:  runReport("devices"),
-}
-
 var reportSessionsCmd = &cobra.Command{
 	Use:   "sessions",
 	Short: "Session listing",
 	RunE:  runReport("sessions"),
+}
+
+var reportSlowCmd = &cobra.Command{
+	Use:   "slow",
+	Short: "Slow and timing event listing",
+	RunE:  runReport("slow"),
 }
 
 func init() {
@@ -63,13 +63,16 @@ func init() {
 	reportCmd.AddCommand(reportMonthlyCmd)
 	reportCmd.AddCommand(reportModelsCmd)
 	reportCmd.AddCommand(reportChannelsCmd)
-	reportCmd.AddCommand(reportDevicesCmd)
 	reportCmd.AddCommand(reportSessionsCmd)
+	reportCmd.AddCommand(reportSlowCmd)
 
-	for _, cmd := range []*cobra.Command{reportDailyCmd, reportWeeklyCmd, reportMonthlyCmd, reportModelsCmd, reportChannelsCmd, reportDevicesCmd, reportSessionsCmd} {
+	for _, cmd := range []*cobra.Command{reportDailyCmd, reportWeeklyCmd, reportMonthlyCmd, reportModelsCmd, reportChannelsCmd, reportSessionsCmd, reportSlowCmd} {
 		cmd.Flags().String("since", "", "Start date (YYYY-MM-DD)")
 		cmd.Flags().String("until", "", "End date (YYYY-MM-DD)")
-		cmd.Flags().String("by", "", "Group by (agent, model, provider)")
+		cmd.Flags().String("channel", "", "Filter by agent source channel")
+		cmd.Flags().String("provider", "", "Filter by provider")
+		cmd.Flags().String("model", "", "Filter by normalized or raw model name")
+		cmd.Flags().String("session", "", "Filter by session ID")
 		cmd.Flags().Bool("json", false, "Output as JSON")
 	}
 }
@@ -89,9 +92,19 @@ func runReport(reportType string) func(cmd *cobra.Command, args []string) error 
 
 		since, _ := cmd.Flags().GetString("since")
 		until, _ := cmd.Flags().GetString("until")
-		groupBy, _ := cmd.Flags().GetString("by")
+		channel, _ := cmd.Flags().GetString("channel")
+		provider, _ := cmd.Flags().GetString("provider")
+		modelName, _ := cmd.Flags().GetString("model")
+		session, _ := cmd.Flags().GetString("session")
 		asJSON, _ := cmd.Flags().GetBool("json")
 
-		return report.Generate(database.Conn(), reportType, since, until, groupBy, asJSON)
+		return report.Generate(database.Conn(), reportType, report.Filters{
+			Since:    since,
+			Until:    until,
+			Channel:  channel,
+			Provider: provider,
+			Model:    modelName,
+			Session:  session,
+		}, asJSON)
 	}
 }

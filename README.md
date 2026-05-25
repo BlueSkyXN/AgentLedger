@@ -1,29 +1,38 @@
 # AgentLedger
 
-**面向 AI Coding Agent 的本地优先用量账本。**
+**面向 AI Coding Agent 的本地 usage 统计分析器。**
 
-AgentLedger 是一个本地优先的 AI Coding Agent 用量账本。它把 Claude Code、Codex、Gemini CLI、Qwen 等本机日志解析为统一事件，写入 SQLite，并提供跨设备合并、确定性去重、统计报表和基础维护命令。
+AgentLedger 把 Claude Code、Codex、Gemini CLI、Qwen 等本机日志解析为统一 usage event，写入本地 SQLite，并提供按渠道、模型、provider、时间和 session 的筛选、聚合与慢请求分析。
 
-## 当前状态
+## 当前定位
 
-AgentLedger 当前是 Go CLI 项目，核心能力已落在 `cmd/` 和 `internal/`：
+v2 已从“多表账本 / 审计系统”收敛为“本地 usage analytics”。核心目标是简单、可解释、可查询：
 
-- 导入本机 agent 日志到 SQLite
-- 使用事件指纹做确定性去重
-- 导出 / 合并 `.aldb` SQLite 数据库
-- 按日、周、月、模型、渠道、设备、session 输出报表
-- 提供 `status`、`doctor`、`verify`、`vacuum` 维护命令
+- 导入本机 agent 日志到 SQLite。
+- 用稳定 fingerprint 做确定性去重。
+- 重复事件使用 upsert，保留更完整记录。
+- 围绕 `channel`、`provider`、`model`、`time`、`session` 做筛选和统计。
+- 统计 token、耗时、TTFT、输出 TPS。
+- timing 只在日志明确提供时记录，缺失保持 `NULL`。
+- 成本计算暂不进入主线，只保留日志中已有的 `recorded_cost_usd`。
 
-尚未实现的设计项包括：原始日志 cleanup/quarantine 命令、价格表驱动的成本估算、加密 raw archive、完整 source file 增量状态追踪。
+v2 不迁移旧 v1 本地数据库。打开旧 schema 会报错，并提示运行：
+
+```bash
+agent-ledger init --reset
+```
+
+`--reset` 会删除当前配置指向的本地数据库及 WAL/SHM 文件，然后初始化空的 v2 数据库。需要保留旧数据时，请先手动备份 `.db` / `.aldb`。
 
 ## 功能特性
 
-- **多 agent 导入**：Claude Code、Codex、Gemini CLI、Qwen
-- **SQLite 存储**：以事件为粒度记录 token、model、session、timestamp、device 和原始 usage metadata 字段
-- **确定性去重**：基于 message id、session-token 元组、规范化 raw JSON hash，以及兜底的 file-line hash
-- **跨设备合并**：导出 / 导入可移植的 `.aldb` 文件，并且只写入未见过的事件
-- **统计报表**：按日、周、月、模型、渠道、设备、session 查看用量
-- **本地优先**：除非你明确复制或导出数据，否则数据只保留在本机
+- **多 agent 导入**：Claude Code、Codex、Gemini CLI、Qwen。
+- **三表 SQLite schema**：只保留 `meta`、`import_runs`、`usage_events`。
+- **扁平事实表**：`usage_events` 直接保存 channel、provider、model、time、session、token、timing、source line 和 raw usage envelope。
+- **确定性去重 + 完整度 upsert**：重复事件优先保留有 timing、有 recorded cost、有 model、token 总量更高的记录。
+- **常用报表**：`daily`、`weekly`、`monthly`、`models`、`channels`、`sessions`、`slow`。
+- **只读 Web 面板**：Overview、趋势、渠道 / provider、模型、session、慢请求、导入 / 设置。
+- **本地优先**：除非你明确复制、导出或截图，数据只保留在本机。
 
 ## 安装
 
@@ -32,7 +41,7 @@ AgentLedger 当前是 Go CLI 项目，核心能力已落在 `cmd/` 和 `internal
 前置条件：
 
 - 本机 Go 版本需要与 `go.mod` 兼容。
-- 本项目使用 `github.com/mattn/go-sqlite3`，本地构建通常需要 `CGO_ENABLED=1` 和可用的 C toolchain（例如 macOS Xcode Command Line Tools 或 Linux `gcc`）。
+- 本项目使用 `github.com/mattn/go-sqlite3`，本地构建通常需要 `CGO_ENABLED=1` 和可用的 C toolchain，例如 macOS Xcode Command Line Tools 或 Linux `gcc`。
 
 ```bash
 git clone https://github.com/BlueSkyXN/AgentLedger.git
@@ -42,9 +51,7 @@ go build -o bin/agent-ledger .
 ./bin/agent-ledger --help
 ```
 
-下文命令默认使用 `agent-ledger` 表示已经把二进制放入 `PATH`。如果只是按上面的源码构建步骤运行，请把命令替换为 `./bin/agent-ledger ...`。
-
-本地开发时，也可以不安装，直接运行以下命令：
+下文命令默认使用 `agent-ledger` 表示已经把二进制放入 `PATH`。源码开发时也可以直接运行：
 
 ```bash
 go run . --help
@@ -52,11 +59,22 @@ go test ./...
 go build ./...
 ```
 
+前端面板构建：
+
+```bash
+cd web
+npm install
+npm run build
+```
+
 ## 快速开始
 
 ```bash
-# 初始化配置、数据库和本机 device id
+# 初始化配置和 v2 数据库
 agent-ledger init
+
+# 如果已有旧 v1 数据库，直接重建本地 v2 空库
+agent-ledger init --reset
 
 # 从已启用的本机 agent 导入用量数据
 agent-ledger import
@@ -64,16 +82,18 @@ agent-ledger import
 # 查看数据库统计信息
 agent-ledger status
 
-# 查看报表
+# 常用报表
 agent-ledger report daily
-agent-ledger report monthly --by agent
+agent-ledger report weekly --channel claude
+agent-ledger report monthly --model claude-sonnet-4
 agent-ledger report models --json
+agent-ledger report channels --since 2026-05-01
+agent-ledger report sessions --provider anthropic
+agent-ledger report slow --sort output_tps --limit 50
 
-# 导出用于跨设备合并
-agent-ledger export --output my-device.aldb
-
-# 合并另一台设备的导出文件
-agent-ledger merge other-device.aldb
+# 导出 / 合并 v2 SQLite 数据库
+agent-ledger export --output usage.aldb
+agent-ledger merge usage.aldb
 
 # 维护命令
 agent-ledger verify
@@ -87,30 +107,63 @@ agent-ledger serve
 ## 命令
 
 | 命令 | 说明 |
-|---------|-------------|
-| `init` | 如果配置 / 数据库不存在，则创建它们，并注册当前设备 |
-| `import` | 从已配置的本机 agent 日志路径导入用量事件 |
-| `export` | 将当前 SQLite 数据库复制为可移植的 `.aldb` 文件 |
-| `merge [file.aldb]` | 将另一个 AgentLedger SQLite 导出文件合并到本地数据库 |
-| `report daily` | 按日拆分用量 |
-| `report weekly` | 按周汇总用量 |
-| `report monthly` | 按月汇总，可选择按 `agent`、`model` 或 `provider` 分组 |
-| `report models` | 按模型拆分 token / 事件用量 |
-| `report channels` | 按来源渠道拆分用量 |
-| `report devices` | 按设备拆分用量 |
-| `report sessions` | session 列表；当前实现按成本排序 |
-| `status` | 显示数据库统计信息 |
-| `doctor` | 显示配置 / 数据库路径，以及发现的 source file 数量 |
-| `verify` | 运行 SQLite `PRAGMA integrity_check` |
-| `vacuum` | 运行 SQLite `VACUUM` |
-| `serve` | 启动本机只读 Web 面板和 `/api/v1/*` JSON API |
-| `completion` | 通过 Cobra 生成 shell completion 脚本 |
+|---|---|
+| `init` | 创建配置和 v2 数据库；`--reset` 可重建本地空库。 |
+| `import` | 从已配置的本机 agent 日志路径导入 usage events。 |
+| `export` | 将当前 SQLite 数据库复制为可移植的 `.aldb` 文件。 |
+| `merge [file.aldb]` | 合并另一个 schema v2 AgentLedger SQLite 导出文件。 |
+| `report daily` | 按日聚合用量。 |
+| `report weekly` | 按周聚合用量。 |
+| `report monthly` | 按月聚合用量。 |
+| `report models` | 按模型拆分 token / timing。 |
+| `report channels` | 按 agent 来源渠道拆分用量。 |
+| `report sessions` | 按 session 拆分用量。 |
+| `report slow` | 慢请求列表，支持按低输出 TPS、高 TTFT 或高总耗时排序。 |
+| `status` | 显示数据库统计信息。 |
+| `doctor` | 显示配置、数据库路径和 agent 日志发现诊断。 |
+| `verify` | 运行 SQLite `PRAGMA integrity_check`。 |
+| `vacuum` | 运行 SQLite `VACUUM`。 |
+| `serve` | 启动本机只读 Web 面板和 `/api/v1/*` JSON API。 |
+| `completion` | 通过 Cobra 生成 shell completion 脚本。 |
 
-Cobra 也会提供生成的 `completion` 命令。
+## 报表
+
+所有 report 子命令统一支持：
+
+```bash
+--since YYYY-MM-DD
+--until YYYY-MM-DD
+--channel string
+--provider string
+--model string
+--session string
+--json
+```
+
+`report slow` 额外支持：
+
+```bash
+--sort output_tps|ttft_ms|total_duration_ms
+--limit 50
+```
+
+示例：
+
+```bash
+agent-ledger report daily --since 2026-05-01
+agent-ledger report weekly --channel codex
+agent-ledger report monthly --provider anthropic
+agent-ledger report models --model gpt-5.5 --json
+agent-ledger report channels
+agent-ledger report sessions --until 2026-05-31
+agent-ledger report slow --sort ttft_ms --limit 20
+```
+
+报表会输出事件数、token 分项、平均总耗时、平均 TTFT、平均输出 TPS 和 recorded cost。没有 explicit timing 的事件不会参与 timing 平均值，相关字段保持空值。
 
 ## 本地 Web 面板
 
-`serve` 会启动一个只读本地面板，实时从当前 SQLite 数据库查询聚合结果。第一版只读展示，不提供浏览器触发 `import`、`merge`、`vacuum` 或修改配置的能力。
+`serve` 会启动一个只读本地面板，实时从当前 SQLite 数据库查询聚合结果。不提供浏览器触发 `import`、`merge`、`vacuum` 或修改配置的能力。
 
 ```bash
 agent-ledger serve
@@ -131,38 +184,46 @@ npm install
 npm run build
 ```
 
-面板不会返回 `raw_usage_json` 或 `raw_meta_json`，但聚合数据、session id、模型名和数据库路径仍属于本机私有使用数据，不应作为公开截图或附件传播。
+面板不会返回 `raw_usage_json`。聚合数据、session id、模型名、项目路径和数据库路径仍属于本机私有使用数据，不应作为公开截图或附件传播。
 
-## 报表
+## 只读 API
 
-所有报表子命令都支持：
+主要接口：
 
-- `--since YYYY-MM-DD`
-- `--until YYYY-MM-DD`
-- `--json`
+| Method | Path | 说明 |
+|---|---|---|
+| `GET` | `/api/v1/health` | 版本、数据库路径、数据库大小、面板资源模式。 |
+| `GET` | `/api/v1/status` | schema version、事件数、导入次数、token 和 recorded cost 汇总。 |
+| `GET` | `/api/v1/config` | 脱敏配置快照。 |
+| `GET` | `/api/v1/analytics/summary` | 总览 KPI，支持统一 filters。 |
+| `GET` | `/api/v1/analytics/timeseries?bucket=daily\|weekly\|monthly` | 时间趋势。 |
+| `GET` | `/api/v1/analytics/breakdown?by=channel\|model\|provider\|session` | 维度排行。 |
+| `GET` | `/api/v1/analytics/slow?sort=output_tps\|ttft_ms\|total_duration_ms&limit=50` | 慢请求列表。 |
+| `GET` | `/api/v1/filter-options` | 当前库中存在的 channel、provider、model、session 选项。 |
+| `GET` | `/api/v1/events` | 最近 usage events，不返回 raw JSON。 |
+| `GET` | `/api/v1/import-runs` | 最近 import runs。 |
 
-`report monthly` 还支持 `--by agent|model|provider`。
+统一 filters：
 
-```bash
-agent-ledger report daily --since 2026-05-01
-agent-ledger report weekly
-agent-ledger report monthly --by model
-agent-ledger report models --json
-agent-ledger report channels
-agent-ledger report devices
-agent-ledger report sessions --until 2026-05-31
+```text
+since=YYYY-MM-DD
+until=YYYY-MM-DD
+channel=claude
+provider=anthropic
+model=claude-sonnet-4
+session=<session-id>
 ```
 
 ## 支持的 Agent
 
 | Agent | 默认路径 | 解析格式 | 说明 |
-|-------|--------------|---------------|-------|
-| Claude Code | `~/.claude` | JSONL | 读取带有 `usage` 或 `message.usage` 的 assistant 消息 |
-| Codex | `~/.codex` | JSONL | 读取 token count 记录；存在 `last_token_usage` 时优先使用它 |
-| Gemini CLI | `~/.gemini` | JSON / JSONL | 读取 `usageMetadata` |
-| Qwen | `~/.qwen` | JSONL | 读取 `usage` |
+|---|---|---|---|
+| Claude Code | `~/.claude` | JSONL | 读取带有 `usage` 或 `message.usage` 的 assistant 消息。 |
+| Codex | `~/.codex` | JSONL | 读取 token count 记录；存在 `last_token_usage` 时优先使用。 |
+| Gemini CLI | `~/.gemini` | JSON / JSONL | 读取 `usageMetadata`。 |
+| Qwen | `~/.qwen` | JSONL | 读取 `usage`。 |
 
-可在 AgentLedger 配置文件中修改已配置路径。配置文件路径由数据目录决定，见下方“配置”。
+`channel` 固定表示 agent 来源，例如 `claude`、`codex`、`gemini`、`qwen`。
 
 ## 配置
 
@@ -216,41 +277,12 @@ paths = ["~/.qwen"]
 
 - Config: `<data-dir>/config.toml`
 - Database: 默认 `<data-dir>/agent-ledger.db`，也可通过 `[database].path` 修改
-- Device ID: `<data-dir>/device_id`
 
-当前 `[cleanup]`、`[reports].timezone`、`[reports].currency` 和 `[privacy].redact_paths_on_export` 仍是 schema / config 占位配置；现有命令尚未实现 cleanup、timezone 转换、currency 转换或 export redaction。
-
-## 跨设备工作流
-
-```bash
-# 设备 A
-agent-ledger import
-agent-ledger export --output device-a.aldb
-
-# 设备 B
-agent-ledger merge device-a.aldb
-agent-ledger report monthly --by agent
-```
-
-合并时会先校验传入路径存在，并且是常规 SQLite 数据库文件；随后 attach 该数据库，并按主键插入本地未见过的 `usage_events`。已有事件会被跳过。
+当前 `[cleanup]`、`[reports].timezone`、`[reports].currency` 和 `[privacy].redact_paths_on_export` 仍是配置占位；现有命令尚未实现 cleanup、timezone 转换、currency 转换或 export redaction。
 
 ## 文档
 
 - [文档索引](docs/README.md)
 - [快速开始](docs/quickstart.md)
-- [CLI 参考](docs/cli-reference.md)
-- [配置](docs/configuration.md)
-- [Source Adapter](docs/source-adapters.md)
 - [数据模型](docs/data-model.md)
-- [报表与合并](docs/reports-and-merge.md)
-- [隐私与运维](docs/privacy-and-operations.md)
-- [开发](docs/development.md)
-- [路线图](docs/roadmap.md)
-
-## 隐私说明
-
-AgentLedger 是本地优先工具，但它会把从 source log 中解析出的 usage envelope 和原始 usage JSON 存入 SQLite。导出 `.aldb` 会复制该数据库。除非你已经审阅并脱敏，否则应把导出文件视为私有用量数据。
-
-## 许可证
-
-GPL-3.0
+- [CLI Reference](docs/cli-reference.md)

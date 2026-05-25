@@ -28,17 +28,16 @@ var statusCmd = &cobra.Command{
 			return fmt.Errorf("failed to get stats: %w", err)
 		}
 
-		totalCost, _ := stats["total_cost_usd"].(float64)
+		totalCost, _ := stats["total_recorded_cost_usd"].(float64)
 
 		fmt.Println("AgentLedger Status")
 		fmt.Println("==================")
 		fmt.Printf("Database: %s\n", cfg.DBPath())
+		fmt.Printf("Schema version:    %v\n", stats["schema_version"])
 		fmt.Printf("Total events:      %v\n", stats["total_events"])
-		fmt.Printf("Total devices:     %v\n", stats["total_devices"])
 		fmt.Printf("Import runs:       %v\n", stats["total_import_runs"])
-		fmt.Printf("Source files:      %v\n", stats["total_source_files"])
 		fmt.Printf("Total tokens:      %v\n", stats["total_tokens"])
-		fmt.Printf("Total cost (USD):  $%.4f\n", totalCost)
+		fmt.Printf("Recorded cost USD: $%.4f\n", totalCost)
 		return nil
 	},
 }

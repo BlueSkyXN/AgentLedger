@@ -68,7 +68,7 @@ nav a:hover, nav a.active { color: var(--text); border-color: var(--line); backg
 h1 { margin: 6px 0 0; font-size: clamp(2.15rem, 5.6vw, 4.9rem); line-height: .98; max-width: 900px; letter-spacing: -.075em; }
 h2 { margin: 0 0 18px; font-size: 18px; letter-spacing: -.02em; }
 .hero-copy { max-width: 720px; color: var(--muted); font-size: 15px; line-height: 1.7; margin: 16px 0 0; }
-.filter-bar { display: grid; grid-template-columns: 1fr 140px 140px auto; align-items: end; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 24px; background: var(--panel); box-shadow: var(--shadow); backdrop-filter: blur(16px); }
+.filter-bar { display: grid; grid-template-columns: minmax(240px, 1.4fr) repeat(4, minmax(120px, 1fr)) minmax(180px, 1.2fr) minmax(180px, 1.2fr) auto; align-items: end; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 24px; background: var(--panel); box-shadow: var(--shadow); backdrop-filter: blur(16px); }
 .filter-bar label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 12px; }
 .filter-bar small { grid-column: 1 / -1; color: var(--muted); }
 input, select { color: var(--text); background: var(--panel-strong); border: 1px solid var(--line); border-radius: 12px; padding: 8px 10px; min-height: 38px; }
@@ -100,5 +100,6 @@ dd { margin: 0; overflow-wrap: anywhere; }
 .empty-cell { text-align: center; color: var(--muted); padding: 28px 10px; }
 .chart { width: 100%; }
 .route-loading { color: var(--muted); padding: 32px 0; }
-@media (max-width: 1080px) { .topbar { grid-template-columns: 1fr auto; } nav { grid-column: 1 / -1; } .hero, .split { grid-template-columns: 1fr; } .filter-bar { grid-template-columns: 1fr 1fr; } .range-tabs { grid-column: 1 / -1; flex-wrap: wrap; justify-content: flex-start; } }
+@media (max-width: 1280px) { .filter-bar { grid-template-columns: repeat(3, minmax(0, 1fr)); } .range-tabs { grid-column: 1 / -1; flex-wrap: wrap; justify-content: flex-start; } }
+@media (max-width: 1080px) { .topbar { grid-template-columns: 1fr auto; } nav { grid-column: 1 / -1; } .hero, .split { grid-template-columns: 1fr; } .filter-bar { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 720px) { .shell { width: min(100vw - 18px, 1500px); } .kpi-grid, .kpi-grid.small { grid-template-columns: 1fr; } .filter-bar { grid-template-columns: 1fr; } .panel { padding: 14px; border-radius: 20px; } h1 { font-size: 2.55rem; } .topbar { gap: 12px; } }

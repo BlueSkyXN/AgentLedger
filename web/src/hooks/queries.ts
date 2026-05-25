@@ -15,6 +15,10 @@ export function useConfig() {
   return useQuery({ queryKey: ["config"], queryFn: api.config });
 }
 
+export function useFilterOptions() {
+  return useQuery({ queryKey: ["filter-options"], queryFn: api.filterOptions });
+}
+
 export function useSummary() {
   const { filters } = useFilterContext();
   return useQuery({ queryKey: ["summary", filters], queryFn: () => api.summary(filters) });
@@ -25,9 +29,14 @@ export function useTimeseries(bucket: "daily" | "weekly" | "monthly") {
   return useQuery({ queryKey: ["timeseries", bucket, filters], queryFn: () => api.timeseries(bucket, filters) });
 }
 
-export function useBreakdown(by: "agent" | "model" | "provider" | "device") {
+export function useBreakdown(by: "channel" | "model" | "provider" | "session") {
   const { filters } = useFilterContext();
   return useQuery({ queryKey: ["breakdown", by, filters], queryFn: () => api.breakdown(by, filters) });
+}
+
+export function useSlow(sort: "output_tps" | "ttft_ms" | "total_duration_ms", limit = 50) {
+  const { filters } = useFilterContext();
+  return useQuery({ queryKey: ["slow", sort, filters, limit], queryFn: () => api.slow(sort, filters, limit) });
 }
 
 export function useSessions(limit = 50) {

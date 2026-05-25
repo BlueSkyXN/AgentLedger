@@ -9,10 +9,10 @@ import (
 
 var rootCmd = &cobra.Command{
 	Use:   "agent-ledger",
-	Short: "A local-first usage ledger for AI coding agents",
+	Short: "A local-first usage analytics tool for AI coding agents",
 	Long: `AgentLedger imports usage data from multiple AI agents (Claude Code, Codex, Gemini, Qwen),
-stores it in SQLite with cross-device merge and deterministic deduplication,
-and provides rich usage reports.`,
+stores it in a simple SQLite analytics schema with deterministic deduplication,
+and provides token, timing, TTFT, and output TPS reports.`,
 }
 
 func Execute() {

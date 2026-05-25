@@ -75,6 +75,10 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 		s.handleTimeseries(w, r)
 	case "/api/v1/analytics/breakdown":
 		s.handleBreakdown(w, r)
+	case "/api/v1/analytics/slow":
+		s.handleSlow(w, r)
+	case "/api/v1/filter-options":
+		s.handleFilterOptions(w, r)
 	case "/api/v1/sessions":
 		s.handleSessions(w, r)
 	case "/api/v1/import-runs":
@@ -107,13 +111,12 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"database":           s.cfg.DBPath(),
-		"total_events":       stats["total_events"],
-		"total_devices":      stats["total_devices"],
-		"total_import_runs":  stats["total_import_runs"],
-		"total_source_files": stats["total_source_files"],
-		"total_tokens":       stats["total_tokens"],
-		"total_cost_usd":     stats["total_cost_usd"],
+		"database":                s.cfg.DBPath(),
+		"schema_version":          stats["schema_version"],
+		"total_events":            stats["total_events"],
+		"total_import_runs":       stats["total_import_runs"],
+		"total_tokens":            stats["total_tokens"],
+		"total_recorded_cost_usd": stats["total_recorded_cost_usd"],
 	})
 }
 
@@ -174,6 +177,32 @@ func (s *Server) handleBreakdown(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, rows)
+}
+
+func (s *Server) handleSlow(w http.ResponseWriter, r *http.Request) {
+	filters, ok := parseFilters(w, r)
+	if !ok {
+		return
+	}
+	limit, ok := parseLimit(w, r, 50, 1, 500)
+	if !ok {
+		return
+	}
+	rows, err := analytics.BuildSlow(s.database.Conn(), r.URL.Query().Get("sort"), filters, limit)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (s *Server) handleFilterOptions(w http.ResponseWriter, r *http.Request) {
+	result, err := analytics.BuildFilterOptions(s.database.Conn())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
@@ -264,8 +293,12 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 
 func parseFilters(w http.ResponseWriter, r *http.Request) (analytics.Filters, bool) {
 	filters := analytics.Filters{
-		Since: strings.TrimSpace(r.URL.Query().Get("since")),
-		Until: strings.TrimSpace(r.URL.Query().Get("until")),
+		Since:    strings.TrimSpace(r.URL.Query().Get("since")),
+		Until:    strings.TrimSpace(r.URL.Query().Get("until")),
+		Channel:  strings.TrimSpace(r.URL.Query().Get("channel")),
+		Provider: strings.TrimSpace(r.URL.Query().Get("provider")),
+		Model:    strings.TrimSpace(r.URL.Query().Get("model")),
+		Session:  strings.TrimSpace(r.URL.Query().Get("session")),
 	}
 	if filters.Since != "" && !validDate(filters.Since) {
 		writeError(w, http.StatusBadRequest, "since must use YYYY-MM-DD")

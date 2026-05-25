@@ -1,6 +1,6 @@
 # Reports and Merge
 
-本文档覆盖当前已实现的报表与跨设备合并行为。
+本文档覆盖当前已实现的报表与 schema v2 数据库合并行为。
 
 ## 通用 report flags
 
@@ -9,68 +9,76 @@
 ```bash
 --since YYYY-MM-DD
 --until YYYY-MM-DD
+--channel string
+--provider string
+--model string
+--session string
 --json
---by agent|model|provider
 ```
 
-当前只有 `report monthly` 实际使用 `--by`。其它 report 子命令会读取该 flag，但不会改变分组。
-
-日期过滤使用 SQLite：
-
-```sql
-date(timestamp_ms/1000, 'unixepoch')
-```
-
-当前 `[reports].timezone` 尚未参与计算。
+日期过滤使用事件 `timestamp_ms`。当前 `[reports].timezone` 尚未参与计算。
 
 ## Report types
 
-| Command | 分组 | 排序 |
+| Command | 分组 / 行 | 排序 |
 |---|---|---|
-| `report daily` | UTC date | date desc |
+| `report daily` | 日期 | date desc |
 | `report weekly` | `strftime('%Y-W%W')` | week desc |
-| `report monthly` | month 或 `agent/model/provider + month` | label desc |
+| `report monthly` | 月份 | month desc |
 | `report models` | `model_normalized` / `model_raw` | total tokens desc |
-| `report channels` | `source_channel` | total tokens desc |
-| `report devices` | `origin_device_id` joined with `devices` | total tokens desc |
-| `report sessions` | `session_id` | cost desc, limit 50 |
+| `report channels` | `channel` | total tokens desc |
+| `report sessions` | `session_id` | total tokens desc |
+| `report slow` | 单个 timed event | sort flag 决定 |
 
-输出列：
+聚合报表输出：
 
 ```text
-Label, Events, Tokens, Input, Output, Cost(USD)
+Label, Events, Tokens, Input, Output, Reasoning, Cache, Avg Duration, Avg TTFT, Avg TPS, Recorded Cost
 ```
 
-JSON 输出使用同一数据结构：
+JSON 输出使用同一语义字段：
 
 ```json
 [
   {
-    "label": "example",
-    "events": 1,
-    "total_tokens": 100,
-    "input_tokens": 60,
-    "output_tokens": 40,
-    "cost_usd": 0
+    "label": "claude",
+    "events": 10,
+    "total_tokens": 12345,
+    "input_tokens": 8000,
+    "output_tokens": 3000,
+    "reasoning_tokens": 1000,
+    "cache_tokens": 345,
+    "avg_total_duration_ms": 12000,
+    "avg_ttft_ms": 900,
+    "avg_output_tps": 42.5,
+    "recorded_cost_usd": 0.12
   }
 ]
 ```
 
-## Monthly grouping
+Timing 平均值只统计非 `NULL` 指标。没有 explicit timing 的事件不会被硬推断。
+
+## Slow report
 
 ```bash
-agent-ledger report monthly
-agent-ledger report monthly --by agent
-agent-ledger report monthly --by model
-agent-ledger report monthly --by provider
+agent-ledger report slow
+agent-ledger report slow --sort output_tps --limit 50
+agent-ledger report slow --sort ttft_ms --limit 20
+agent-ledger report slow --sort total_duration_ms --channel codex
 ```
 
-非法 `--by` 值会返回错误。当前 allowlist 是 `agent`、`model`、`provider`。
+Sort allowlist：
+
+| Sort | 语义 |
+|---|---|
+| `output_tps` | 输出 TPS 升序，越低越慢。 |
+| `ttft_ms` | TTFT 降序，越高越慢。 |
+| `total_duration_ms` | 总耗时降序，越高越慢。 |
 
 ## Export
 
 ```bash
-agent-ledger export --output device-a.aldb
+agent-ledger export --output usage.aldb
 ```
 
 当前 export 是简单文件复制：
@@ -84,7 +92,7 @@ agent-ledger export --output device-a.aldb
 ## Merge
 
 ```bash
-agent-ledger merge device-a.aldb
+agent-ledger merge usage.aldb
 ```
 
 当前 merge 流程：
@@ -93,16 +101,16 @@ agent-ledger merge device-a.aldb
 2. 确认路径存在且不是目录。
 3. 读取 SQLite header，要求是 SQLite database。
 4. `ATTACH DATABASE` 为 `incoming`。
-5. 统计 `incoming.usage_events`。
-6. `INSERT OR IGNORE INTO usage_events ... SELECT ... FROM incoming.usage_events`。
-7. 返回 inserted 和 duplicate skipped 数量。
+5. 要求 `incoming.meta.schema_version` 为 `2`。
+6. 统计 incoming `usage_events`。
+7. 插入本地未见过的 `usage_events`。
+8. 返回 inserted 和 duplicate skipped 数量。
 
-去重依据是 `usage_events.event_fingerprint` 主键。
+去重依据是 `usage_events.event_id` 主键。
 
 ## Merge 限制
 
 - 当前只合并 `usage_events`。
-- 当前不写 `merge_runs`。
-- 当前不写 `event_observations`，因此不会记录“同一事件被哪些设备观察到”的多行历史。
-- 当前不会自动合并 source file tracking 表。
-- 输入文件必须是当前 schema 可读的 AgentLedger SQLite 数据库。
+- 当前不会记录设备级 observation history。
+- 当前不会记录 conflict 审计。
+- 输入文件必须是 schema v2 AgentLedger SQLite 数据库。

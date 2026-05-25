@@ -1,95 +1,50 @@
 # Source Adapters
 
-AgentLedger 通过 adapter 发现并解析不同 AI Coding Agent 的本机 usage 日志。当前 adapter 接口在 `internal/adapters/adapter.go`：
+AgentLedger v2 通过 adapter 读取本机 agent 日志，解析出统一的 `ParsedRecord`，再写入 `usage_events`。
 
-```go
-type Adapter interface {
-    Name() string
-    Discover(paths []string) ([]string, error)
-    ParseFile(path string) ([]*fingerprint.ParsedRecord, error)
-}
-```
+## 支持来源
 
-## 共同导入行为
+| Agent | 默认路径 | 文件类型 | 主要 usage 字段 |
+|---|---|---|---|
+| Claude Code | `~/.claude` | JSONL | `usage` / `message.usage`、`sessionId`、`uuid`、`requestId`、project path。 |
+| Codex | `~/.codex` | JSONL | `usage`、`response.usage`、`payload.info.last_token_usage`。 |
+| Gemini CLI | `~/.gemini` | JSON / JSONL | `usageMetadata`、`promptTokenCount`、`candidatesTokenCount`、`totalTokenCount`。 |
+| Qwen | `~/.qwen` | JSONL | `usage`、`message_id`、token fields。 |
 
-- `Discover(paths)` 会递归扫描 configured paths。
-- JSONL adapter 使用 10 MB scanner buffer，以处理较长单行日志。
-- `import` 会跳过修改时间晚于 `now - gracing_minutes` 的文件。
-- 每条 ParsedRecord 会计算 fingerprint，然后写入 `usage_events`。
-- 当前导入路径不会写入 `source_files` 或 `raw_records` 表。
+## Parsed fields
 
-## Claude Code
+Adapter 会尽量提供：
 
-| 项 | 当前实现 |
-|---|---|
-| Adapter name | `claude` |
-| 默认路径 | `~/.claude` |
-| 文件类型 | `.jsonl` |
-| Provider | `anthropic` |
+- `Agent`: 写入 `channel`，例如 `claude`、`codex`、`gemini`、`qwen`。
+- `Provider`
+- `Model`
+- `TimestampMs`
+- `SessionID`
+- `ProjectPath`
+- `MessageID`
+- `RequestID`
+- token fields
+- `CostUSD`
+- explicit timing fields
+- `SourceFile`
+- `LineNumber`
+- `RawSHA256`
+- `RawUsageJSON`
 
-解析口径：
+## Timing 边界
 
-- 只处理 `type == "assistant"` 的 JSONL 行。
-- usage 可来自顶层 `usage` 或 `message.usage`。
-- model 可来自顶层 `model` 或 `message.model`。
-- session 优先用 `sessionId`，缺失时从路径推断。
-- message id 使用 `uuid`，request id 使用 `requestId`。
-- cache token 字段读取 `cache_creation_input_tokens` 和 `cache_read_input_tokens`。
+Adapter 拿不到 explicit timing 时必须留空。AgentLedger 不从文本长度、相邻 timestamp 或文件顺序推断耗时。
 
-## Codex
+可写入或派生的 timing 字段包括：
 
-| 项 | 当前实现 |
-|---|---|
-| Adapter name | `codex` |
-| 默认路径 | `~/.codex` |
-| 文件类型 | `.jsonl` |
-| Provider | `openai` |
+- `request_started_at_ms`
+- `first_token_at_ms`
+- `completed_at_ms`
+- `total_duration_ms`
+- `ttft_ms`
+- `output_duration_ms`
+- `output_tps`
 
-解析口径：
+## Source tracking 边界
 
-- usage 可来自顶层 `usage`、`response.usage`，或 `payload.info`。
-- 当 `payload.info.last_token_usage` 存在时优先使用它，避免把 cumulative `total_token_usage` 当作单条事件。
-- session 从文件名推断。
-- input tokens 同时兼容 `input_tokens` 和 `prompt_tokens`。
-- output tokens 同时兼容 `output_tokens` 和 `completion_tokens`。
-- reasoning tokens 同时兼容 `reasoning_tokens` 和 `reasoning_output_tokens`。
-
-## Gemini CLI
-
-| 项 | 当前实现 |
-|---|---|
-| Adapter name | `gemini` |
-| 默认路径 | `~/.gemini` |
-| 文件类型 | `.json`, `.jsonl` |
-| Provider | `google` |
-
-解析口径：
-
-- JSON 文件支持单个 object 或 object array。
-- JSONL 文件逐行解析。
-- usage 可来自顶层 `usageMetadata` 或 `response.usageMetadata`。
-- token 字段读取 `promptTokenCount`、`candidatesTokenCount`、`totalTokenCount`。
-
-## Qwen
-
-| 项 | 当前实现 |
-|---|---|
-| Adapter name | `qwen` |
-| 默认路径 | `~/.qwen` |
-| 文件类型 | `.jsonl` |
-| Provider | `alibaba` |
-
-解析口径：
-
-- 逐行读取 JSONL。
-- usage 来自顶层 `usage`。
-- session 从文件名推断。
-- message id 使用 `message_id`。
-- input/output tokens 兼容 `input_tokens`/`prompt_tokens` 和 `output_tokens`/`completion_tokens`。
-
-## 新增 adapter 的最低要求
-
-- 先用真实样例或 fixture 确认日志格式，不要凭字段名猜测。
-- 明确 provider、model、timestamp、session、message/request id 和 token 字段映射。
-- 补 fingerprint 或 adapter 单元测试，覆盖重复导入和关键字段缺失。
-- 不要在 adapter 里实现报表、merge 或 cleanup；adapter 只负责发现和解析。
+v2 不再写入 `sources`、`source_files` 或 `raw_records` 表，因为这些表已经从 schema 删除。来源定位信息直接保存在 `usage_events.source_file`、`usage_events.line_number` 和 `usage_events.raw_sha256`。

@@ -1,7 +1,7 @@
 import { useState } from "react";
 
 import { useEvents, useSessions } from "@/hooks/queries";
-import { formatCost, formatDate, formatInt, shortHash } from "@/utils/format";
+import { formatCost, formatDate, formatInt, formatMs, formatTPS, shortHash } from "@/utils/format";
 
 const EVENT_LIMITS = [50, 100, 200, 500];
 
@@ -16,10 +16,10 @@ export function SessionsPage() {
         <h2>Top 会话</h2>
         <div className="table-wrap">
           <table>
-            <thead><tr><th>会话</th><th>事件</th><th>Tokens</th><th>输入</th><th>输出</th><th>成本</th></tr></thead>
+            <thead><tr><th>会话</th><th>事件</th><th>Tokens</th><th>输入</th><th>输出</th><th>平均 TPS</th><th>记录成本</th></tr></thead>
             <tbody>
-              {(sessions ?? []).map((row) => <tr key={row.label}><td className="mono">{shortHash(row.label)}</td><td>{formatInt(row.events)}</td><td>{formatInt(row.total_tokens)}</td><td>{formatInt(row.input_tokens)}</td><td>{formatInt(row.output_tokens)}</td><td>{formatCost(row.cost_usd)}</td></tr>)}
-              {(sessions ?? []).length === 0 && <tr><td colSpan={6} className="empty-cell">暂无会话数据</td></tr>}
+              {(sessions ?? []).map((row) => <tr key={row.label}><td className="mono">{shortHash(row.label)}</td><td>{formatInt(row.events)}</td><td>{formatInt(row.total_tokens)}</td><td>{formatInt(row.input_tokens)}</td><td>{formatInt(row.output_tokens)}</td><td>{formatTPS(row.avg_output_tps)}</td><td>{formatCost(row.recorded_cost_usd)}</td></tr>)}
+              {(sessions ?? []).length === 0 && <tr><td colSpan={7} className="empty-cell">暂无会话数据</td></tr>}
             </tbody>
           </table>
         </div>
@@ -36,10 +36,10 @@ export function SessionsPage() {
         </header>
         <div className="table-wrap">
           <table>
-            <thead><tr><th>时间</th><th>Agent</th><th>模型</th><th>会话</th><th>Tokens</th><th>指纹策略</th></tr></thead>
+            <thead><tr><th>时间</th><th>Channel</th><th>模型</th><th>会话</th><th>Tokens</th><th>TPS</th><th>TTFT</th><th>去重策略</th></tr></thead>
             <tbody>
-              {(events ?? []).map((row) => <tr key={row.event_fingerprint}><td>{formatDate(row.timestamp)}</td><td>{row.agent}</td><td>{row.model_normalized ?? row.model_raw ?? "-"}</td><td className="mono">{shortHash(row.session_id)}</td><td>{formatInt(row.total_tokens)}</td><td>{row.fingerprint_strategy}</td></tr>)}
-              {(events ?? []).length === 0 && <tr><td colSpan={6} className="empty-cell">暂无事件数据</td></tr>}
+              {(events ?? []).map((row) => <tr key={row.event_id}><td>{formatDate(row.timestamp)}</td><td>{row.channel}</td><td>{row.model_normalized ?? row.model_raw ?? "-"}</td><td className="mono">{shortHash(row.session_id)}</td><td>{formatInt(row.total_tokens)}</td><td>{formatTPS(row.output_tps)}</td><td>{formatMs(row.ttft_ms)}</td><td>{row.dedupe_strategy}</td></tr>)}
+              {(events ?? []).length === 0 && <tr><td colSpan={8} className="empty-cell">暂无事件数据</td></tr>}
             </tbody>
           </table>
         </div>

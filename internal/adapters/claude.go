@@ -89,6 +89,7 @@ func (a *ClaudeAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, err
 			Model:               model,
 			TimestampMs:         parseTimestamp(obj["timestamp"]),
 			SessionID:           sessionID,
+			ProjectPath:         extractClaudeProject(path),
 			MessageID:           getString(obj, "uuid"),
 			RequestID:           getString(obj, "requestId"),
 			InputTokens:         getInt64(usage, "input_tokens"),

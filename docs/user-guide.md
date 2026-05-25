@@ -1,148 +1,89 @@
 # User Guide
 
-AgentLedger 是一个本地优先的 AI Coding Agent 用量账本。典型使用流程是：初始化本地配置和数据库，导入本机 agent 日志，查看统计报表，并在多设备之间导出 / 合并 `.aldb` 数据库。
-
-## 安装与验证
-
-```bash
-git clone https://github.com/BlueSkyXN/AgentLedger.git
-cd AgentLedger
-mkdir -p bin
-go build -o bin/agent-ledger .
-./bin/agent-ledger --help
-```
-
-后续示例使用 `./bin/agent-ledger`，对应源码构建产物。如果你已经把二进制安装到 `PATH`，可以直接使用 `agent-ledger`。
-
-开发环境也可以直接运行：
-
-```bash
-go run . --help
-go test ./...
-go build ./...
-```
+AgentLedger v2 是本地 usage 统计分析器。典型使用流程是：初始化 v2 数据库，导入本机 agent 日志，按渠道 / 模型 / provider / 时间 / session 查看统计，并用只读 Web 面板做分析。
 
 ## 初始化
 
 ```bash
-./bin/agent-ledger init
+agent-ledger init
 ```
 
-初始化会创建或复用：
+如果当前本地库是旧 schema，使用：
 
-- `<repo-root>/local/data/config.toml`
-- `<repo-root>/local/data/agent-ledger.db`
-- `<repo-root>/local/data/device_id`
-
-以上路径是在源码仓库内运行时的默认位置。实际数据目录优先使用 `AGENT_LEDGER_DATA_DIR`；如果没有设置且运行环境找不到项目根目录，则使用 `~/.local/share/agent-ledger`。
-
-`device_id` 使用 ULID 并持久化，后续运行会复用同一个设备标识。
-
-## 配置数据源
-
-默认启用四类 agent：
-
-```toml
-[agents.claude]
-enabled = true
-paths = ["~/.claude"]
-
-[agents.codex]
-enabled = true
-paths = ["~/.codex"]
-
-[agents.gemini]
-enabled = true
-paths = ["~/.gemini"]
-
-[agents.qwen]
-enabled = true
-paths = ["~/.qwen"]
+```bash
+agent-ledger init --reset
 ```
 
-如果某个 agent 不需要导入，可以把对应 `enabled` 改成 `false`。如果日志在非默认目录，可以修改 `paths`。
+`--reset` 会删除当前配置指向的数据库及 WAL/SHM 文件并重建空库。它不会迁移旧数据。
 
 ## 导入
 
 ```bash
-./bin/agent-ledger import
+agent-ledger import
 ```
 
-导入流程会：
+导入会遍历配置中启用的 agent 路径，解析 usage 记录并 upsert 到 `usage_events`。重复事件按完整度保留更完整版本：有 timing、有 recorded cost、有 model、token 总量更高。
 
-- 按启用的数据源扫描 JSON/JSONL 文件。
-- 跳过最近修改时间仍在 grace period 内的文件，默认 `15` 分钟。
-- 解析 usage envelope，生成统一 `usage_events`。
-- 计算事件指纹，并用 `INSERT OR IGNORE` 跳过重复事件。
-- 写入一条 `import_runs` 记录。
-
-当前实现不会移动、删除或改写原始 agent 日志。
-
-## 查看状态与诊断
+## 常用报表
 
 ```bash
-./bin/agent-ledger status
-./bin/agent-ledger doctor
-./bin/agent-ledger verify
-./bin/agent-ledger vacuum
+agent-ledger report daily
+agent-ledger report weekly --channel codex
+agent-ledger report monthly --provider anthropic
+agent-ledger report models --json
+agent-ledger report channels
+agent-ledger report sessions --since 2026-05-01
+agent-ledger report slow --sort ttft_ms --limit 20
 ```
 
-- `status` 显示数据库路径、事件数、设备数、导入次数、token 总数和成本字段汇总。
-- `doctor` 显示配置路径、数据库是否存在，以及各 agent 可发现的源文件数量。
-- `verify` 执行 SQLite `PRAGMA integrity_check`。
-- `vacuum` 执行 SQLite `VACUUM` 回收空间。
-
-## 报表
+统一过滤参数：
 
 ```bash
-./bin/agent-ledger report daily
-./bin/agent-ledger report weekly
-./bin/agent-ledger report monthly
-./bin/agent-ledger report monthly --by agent
-./bin/agent-ledger report monthly --by model
-./bin/agent-ledger report monthly --by provider
-./bin/agent-ledger report models
-./bin/agent-ledger report channels
-./bin/agent-ledger report devices
-./bin/agent-ledger report sessions
+--since YYYY-MM-DD
+--until YYYY-MM-DD
+--channel string
+--provider string
+--model string
+--session string
+--json
 ```
 
-常用过滤和输出参数：
+## 指标语义
+
+- `channel`: Agent 来源，例如 `claude`、`codex`、`gemini`、`qwen`。
+- `provider`: 模型或日志 provider，例如 `anthropic`、`openai`、`google`。
+- `model_normalized`: 归一化模型名。
+- `total_tokens`: source 提供时使用 source 值；否则按 input/output/reasoning/cache 分项计算。
+- `ttft_ms`: `first_token_at_ms - request_started_at_ms`。
+- `output_duration_ms`: `completed_at_ms - first_token_at_ms`。
+- `total_duration_ms`: `completed_at_ms - request_started_at_ms`。
+- `output_tps`: `output_tokens / (output_duration_ms / 1000.0)`。
+
+AgentLedger 不从文本长度、相邻 timestamp 或文件顺序推断 token / 耗时。日志没明确提供的 timing 字段保持 `NULL`。
+
+## Web 面板
 
 ```bash
-./bin/agent-ledger report daily --since 2026-05-01 --until 2026-05-31
-./bin/agent-ledger report models --json
+agent-ledger serve
 ```
 
-所有报表子命令都暴露 `--since`、`--until`、`--json`。当前只有 `report monthly` 使用 `--by` 分组。
+默认地址：
 
-## 跨设备合并
+```text
+http://127.0.0.1:8765
+```
 
-在设备 A：
+面板提供 Overview、趋势、渠道 / provider、模型、session、慢请求、导入 / 设置等只读页面。
+
+## Export / merge
 
 ```bash
-./bin/agent-ledger import
-./bin/agent-ledger export --output device-a.aldb
+agent-ledger export --output usage.aldb
+agent-ledger merge usage.aldb
 ```
 
-把 `device-a.aldb` 复制到设备 B 后：
+导出的 `.aldb` 是 SQLite 数据库文件。merge 只接受 schema v2 数据库，只合并未见过的 `usage_events`。
 
-```bash
-./bin/agent-ledger merge device-a.aldb
-./bin/agent-ledger report monthly --by agent
-```
+## 隐私提示
 
-合并会验证输入文件是 SQLite 数据库，然后 attach 到当前数据库，通过 `usage_events.event_fingerprint` 主键跳过重复事件。
-
-## 隐私边界
-
-AgentLedger 不依赖云端服务，但 `.aldb` 是 SQLite 数据库副本，可能包含本机使用痕迹、模型名、session id、token 数和 raw usage JSON。对外发送 `.aldb` 前应按私有数据处理。
-
-当前配置中的 `redact_paths_on_export` 是预留字段，导出命令只是复制数据库文件，并不会执行脱敏。
-
-## 当前限制
-
-- 成本字段当前通常为 `0`，尚未实现模型价格表估算。
-- cleanup/quarantine 尚未实现为 CLI 命令。
-- schema 中有 `sources`、`source_files`、`raw_records` 等表，但当前导入主路径只写 `usage_events` 和 `import_runs`。
-- `[reports].timezone` 和 `[reports].currency` 当前未参与报表计算。
+本地数据库、`.aldb` 文件和面板截图可能包含 session id、项目路径、模型名、token 用量和 raw usage envelope。公开传播前应按私有使用数据处理。

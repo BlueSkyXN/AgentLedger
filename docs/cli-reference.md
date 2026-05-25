@@ -12,10 +12,10 @@ agent-ledger [command]
 
 | Command | 当前状态 | 说明 |
 |---|---|---|
-| `init` | 已实现 | 创建或复用配置和数据库，并注册当前设备。 |
+| `init` | 已实现 | 创建或复用配置和 v2 数据库；支持 `--reset` 重建本地空库。 |
 | `import` | 已实现 | 从启用的本机 agent 日志导入 usage events。 |
 | `export` | 已实现 | 把当前 SQLite 数据库复制为 `.aldb` 文件。 |
-| `merge [file.aldb]` | 已实现 | 合并另一个 AgentLedger SQLite export。 |
+| `merge [file.aldb]` | 已实现 | 合并另一个 schema v2 AgentLedger SQLite export。 |
 | `report` | 已实现 | 报表命令组。 |
 | `status` | 已实现 | 输出数据库统计。 |
 | `doctor` | 已实现 | 输出配置、数据库和源文件发现诊断。 |
@@ -24,20 +24,21 @@ agent-ledger [command]
 | `serve` | 已实现 | 启动本机只读 Web 面板和 `/api/v1/*` JSON API。 |
 | `completion` | 已实现 | Cobra 自动生成的 shell completion 命令。 |
 
-当前没有 `cleanup`、`restore`、`pricing` 或 `workspace` 命令。当前 `serve` 也是只读面板，不提供浏览器触发 import/merge/vacuum 的写操作。
+当前没有 `cleanup`、`restore`、`pricing` 或 `workspace` 命令。当前 `serve` 是只读面板，不提供浏览器触发 import/merge/vacuum 的写操作。
 
 ## `init`
 
 ```bash
 agent-ledger init
+agent-ledger init --reset
 ```
 
 行为：
 
 - 加载或创建 TOML 配置。
-- 打开并初始化 SQLite schema。
-- 创建或复用本机持久化设备标识。
-- upsert 当前设备记录。
+- 打开并初始化 SQLite schema v2。
+- 如果检测到旧 schema，普通 `init` 会报错并提示 reset。
+- `--reset` 会删除当前数据库、WAL、SHM 文件，然后重建空的 v2 数据库。
 
 ## `import`
 
@@ -45,7 +46,7 @@ agent-ledger init
 agent-ledger import
 ```
 
-当前没有 CLI flags。导入行为由配置文件控制。
+当前导入行为由配置文件控制。
 
 关键行为：
 
@@ -53,13 +54,16 @@ agent-ledger import
 - 使用 configured paths 发现 JSON/JSONL 文件。
 - 跳过修改时间处于 grace period 内的文件。
 - 解析 usage record，计算 fingerprint。
-- `INSERT OR IGNORE` 写入 `usage_events`。
+- upsert 写入 `usage_events`。
+- 重复事件按完整度保留更完整记录。
+
+完整度优先级：有 timing、有 recorded cost、有 model、token 总量更高。
 
 ## `export`
 
 ```bash
-agent-ledger export --output my-device.aldb
-agent-ledger export -o my-device.aldb
+agent-ledger export --output usage.aldb
+agent-ledger export -o usage.aldb
 ```
 
 Flags:
@@ -73,16 +77,16 @@ Flags:
 ## `merge`
 
 ```bash
-agent-ledger merge other-device.aldb
+agent-ledger merge usage.aldb
 ```
 
 参数：
 
 | Argument | 说明 |
 |---|---|
-| `file.aldb` | 必填，另一个 AgentLedger SQLite export。 |
+| `file.aldb` | 必填，另一个 schema v2 AgentLedger SQLite export。 |
 
-当前 merge 会验证输入是普通 SQLite 文件，然后 attach 为 `incoming`，通过 `event_fingerprint` 主键插入未见事件。
+当前 merge 会验证输入是普通 SQLite 文件，并要求 incoming 数据库 `meta.schema_version` 为 `2`。合并只插入本地未见过的 `usage_events`。
 
 ## `report`
 
@@ -94,13 +98,13 @@ Report types:
 
 | Type | 说明 |
 |---|---|
-| `daily` | 按 UTC 日期聚合。 |
+| `daily` | 按日期聚合。 |
 | `weekly` | 按 SQLite `%Y-W%W` 周聚合。 |
-| `monthly` | 按月聚合，可用 `--by` 改变分组。 |
+| `monthly` | 按月聚合。 |
 | `models` | 按 normalized model 聚合。 |
-| `channels` | 按 source channel 聚合。 |
-| `devices` | 按 origin device 聚合。 |
-| `sessions` | 按 session 聚合，当前固定按 `cost_usd DESC` 排序并限制 50 行。 |
+| `channels` | 按 agent 来源渠道聚合。 |
+| `sessions` | 按 session 聚合。 |
+| `slow` | 慢请求列表。 |
 
 所有 report subcommand 暴露：
 
@@ -108,10 +112,18 @@ Report types:
 |---|---|
 | `--since string` | 开始日期，格式 `YYYY-MM-DD`。 |
 | `--until string` | 结束日期，格式 `YYYY-MM-DD`。 |
-| `--json` | 输出 JSON 数组。 |
-| `--by string` | Cobra 暴露在所有 report 子命令上，但当前只有 `monthly` 使用，允许 `agent`、`model`、`provider`。 |
+| `--channel string` | 过滤 agent 来源渠道。 |
+| `--provider string` | 过滤 provider。 |
+| `--model string` | 过滤 normalized model。 |
+| `--session string` | 过滤 session id。 |
+| `--json` | 输出 JSON。 |
 
-当前没有 `--order` 或 `--month` flag。
+`report slow` 额外支持：
+
+| Flag | 说明 |
+|---|---|
+| `--sort string` | `output_tps`、`ttft_ms` 或 `total_duration_ms`。 |
+| `--limit int` | 返回条数，默认 50。 |
 
 ## `status`
 
@@ -119,7 +131,7 @@ Report types:
 agent-ledger status
 ```
 
-输出数据库路径、事件数、设备数、导入次数、source file 计数、token 汇总和成本字段汇总。
+输出数据库路径、schema version、事件数、导入次数、token 汇总和 recorded cost 汇总。
 
 ## `doctor`
 
@@ -176,9 +188,10 @@ Flags:
 | `GET` | `/api/v1/health` | 版本、数据库路径、数据库大小、面板资源模式。 |
 | `GET` | `/api/v1/status` | 数据库统计。 |
 | `GET` | `/api/v1/config` | 脱敏配置快照。 |
-| `GET` | `/api/v1/analytics/summary` | 总览统计，支持 `since` / `until`。 |
+| `GET` | `/api/v1/analytics/summary` | 总览统计，支持统一 filters。 |
 | `GET` | `/api/v1/analytics/timeseries` | 趋势数据，`bucket=daily|weekly|monthly`。 |
-| `GET` | `/api/v1/analytics/breakdown` | 维度排行，`by=agent|model|provider|device`。 |
-| `GET` | `/api/v1/sessions` | top sessions，支持 `limit`。 |
-| `GET` | `/api/v1/import-runs` | 最近 import runs。 |
+| `GET` | `/api/v1/analytics/breakdown` | 维度排行，`by=channel|model|provider|session`。 |
+| `GET` | `/api/v1/analytics/slow` | 慢请求列表，`sort=output_tps|ttft_ms|total_duration_ms`。 |
+| `GET` | `/api/v1/filter-options` | 当前库中存在的 channel/provider/model/session 选项。 |
 | `GET` | `/api/v1/events` | 最近 usage events，不返回 raw JSON。 |
+| `GET` | `/api/v1/import-runs` | 最近 import runs。 |

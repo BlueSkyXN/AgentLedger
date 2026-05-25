@@ -3,12 +3,12 @@ import { useMemo } from "react";
 import { Chart } from "@/components/Chart";
 import { KpiCard } from "@/components/KpiCard";
 import { useBreakdown, useSummary, useTimeseries } from "@/hooks/queries";
-import { formatCost, formatDate, formatInt } from "@/utils/format";
+import { formatCost, formatDate, formatInt, formatMs, formatTPS } from "@/utils/format";
 
 export function OverviewPage() {
   const { data: summary } = useSummary();
   const { data: daily } = useTimeseries("daily");
-  const { data: agents } = useBreakdown("agent");
+  const { data: channels } = useBreakdown("channel");
 
   const dailyOption = useMemo(() => {
     const rows = daily ?? [];
@@ -20,14 +20,14 @@ export function OverviewPage() {
     };
   }, [daily]);
 
-  const agentOption = useMemo(() => {
-    const rows = agents ?? [];
+  const channelOption = useMemo(() => {
+    const rows = channels ?? [];
     return {
       tooltip: { trigger: "item" },
       legend: { orient: "vertical", right: 0, top: 12 },
-      series: [{ name: "Agent", type: "pie", radius: ["44%", "72%"], data: rows.map((row) => ({ name: row.label, value: row.total_tokens })) }],
+      series: [{ name: "Channel", type: "pie", radius: ["44%", "72%"], data: rows.map((row) => ({ name: row.label, value: row.total_tokens })) }],
     };
-  }, [agents]);
+  }, [channels]);
 
   return (
     <div className="page-stack">
@@ -38,8 +38,10 @@ export function OverviewPage() {
         <KpiCard label="输出 Tokens" value={formatInt(summary?.output_tokens)} />
         <KpiCard label="推理 Tokens" value={formatInt(summary?.reasoning_tokens)} />
         <KpiCard label="缓存读取" value={formatInt(summary?.cache_read_tokens)} />
-        <KpiCard label="设备数" value={formatInt(summary?.total_devices)} />
-        <KpiCard label="估算成本" value={formatCost(summary?.total_cost_usd)} />
+        <KpiCard label="平均耗时" value={formatMs(summary?.avg_total_duration_ms)} />
+        <KpiCard label="平均 TTFT" value={formatMs(summary?.avg_ttft_ms)} />
+        <KpiCard label="平均输出 TPS" value={formatTPS(summary?.avg_output_tps)} />
+        <KpiCard label="记录成本" value={formatCost(summary?.recorded_cost_usd)} />
       </section>
       <section className="panel split">
         <div>
@@ -47,8 +49,8 @@ export function OverviewPage() {
           <Chart option={dailyOption} />
         </div>
         <div>
-          <h2>Agent 占比</h2>
-          <Chart option={agentOption} />
+          <h2>Channel 占比</h2>
+          <Chart option={channelOption} />
         </div>
       </section>
       <section className="panel meta-row">
