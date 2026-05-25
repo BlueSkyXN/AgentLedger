@@ -1,6 +1,6 @@
 # AgentLedger
 
-**A local-first usage ledger for AI coding agents.**
+**面向 AI Coding Agent 的本地优先用量账本。**
 
 AgentLedger 是一个本地优先的 AI Coding Agent 用量账本。它把 Claude Code、Codex、Gemini CLI、Qwen 等本机日志解析为统一事件，写入 SQLite，并提供跨设备合并、确定性去重、统计报表和基础维护命令。
 
@@ -16,20 +16,20 @@ AgentLedger 当前是 Go CLI 项目，核心能力已落在 `cmd/` 和 `internal
 
 尚未实现的设计项包括：原始日志 cleanup/quarantine 命令、价格表驱动的成本估算、加密 raw archive、完整 source file 增量状态追踪。
 
-## Features
+## 功能特性
 
-- **Multi-agent import**: Claude Code, Codex, Gemini CLI, Qwen
-- **SQLite storage**: event-level usage records with token, model, session, timestamp, device and raw usage metadata fields
-- **Deterministic deduplication**: message id, session-token tuple, canonical raw JSON hash, and fallback file-line hash
-- **Cross-device merge**: export/import portable `.aldb` files and insert only unseen events
-- **Reports**: daily, weekly, monthly, models, channels, devices, sessions
-- **Local-first**: data stays on the local machine unless you explicitly copy/export it
+- **多 agent 导入**：Claude Code、Codex、Gemini CLI、Qwen
+- **SQLite 存储**：以事件为粒度记录 token、model、session、timestamp、device 和原始 usage metadata 字段
+- **确定性去重**：基于 message id、session-token 元组、规范化 raw JSON hash，以及兜底的 file-line hash
+- **跨设备合并**：导出 / 导入可移植的 `.aldb` 文件，并且只写入未见过的事件
+- **统计报表**：按日、周、月、模型、渠道、设备、session 查看用量
+- **本地优先**：除非你明确复制或导出数据，否则数据只保留在本机
 
-## Installation
+## 安装
 
-### Build from source
+### 从源码构建
 
-Prerequisite: Go version compatible with `go.mod`.
+前置条件：本机 Go 版本需要与 `go.mod` 兼容。
 
 ```bash
 git clone https://github.com/BlueSkyXN/AgentLedger.git
@@ -39,7 +39,7 @@ go build -o bin/agent-ledger .
 ./bin/agent-ledger --help
 ```
 
-For local development, the same commands can be run without installing:
+本地开发时，也可以不安装，直接运行以下命令：
 
 ```bash
 go run . --help
@@ -47,67 +47,67 @@ go test ./...
 go build ./...
 ```
 
-## Quick Start
+## 快速开始
 
 ```bash
-# Initialize config, database, and local device id
+# 初始化配置、数据库和本机 device id
 agent-ledger init
 
-# Import usage data from enabled local agents
+# 从已启用的本机 agent 导入用量数据
 agent-ledger import
 
-# Check database statistics
+# 查看数据库统计信息
 agent-ledger status
 
-# View reports
+# 查看报表
 agent-ledger report daily
 agent-ledger report monthly --by agent
 agent-ledger report models --json
 
-# Export for cross-device merge
+# 导出用于跨设备合并
 agent-ledger export --output my-device.aldb
 
-# Merge another device export
+# 合并另一台设备的导出文件
 agent-ledger merge other-device.aldb
 
-# Maintenance
+# 维护命令
 agent-ledger verify
 agent-ledger vacuum
 agent-ledger doctor
 ```
 
-## Commands
+## 命令
 
-| Command | Description |
+| 命令 | 说明 |
 |---------|-------------|
-| `init` | Create config/database if missing and register the current device |
-| `import` | Import usage events from configured local agent log paths |
-| `export` | Copy the current SQLite database to a portable `.aldb` file |
-| `merge [file.aldb]` | Merge another AgentLedger SQLite export into the local database |
-| `report daily` | Daily usage breakdown |
-| `report weekly` | Weekly usage summary |
-| `report monthly` | Monthly summary, optionally grouped by `agent`, `model`, or `provider` |
-| `report models` | Model-level token/event breakdown |
-| `report channels` | Source-channel breakdown |
-| `report devices` | Device-level breakdown |
-| `report sessions` | Session listing, ordered by cost in the current implementation |
-| `status` | Show database statistics |
-| `doctor` | Show config/database paths and discovered source file counts |
-| `verify` | Run SQLite `PRAGMA integrity_check` |
-| `vacuum` | Run SQLite `VACUUM` |
-| `completion` | Generate shell completion scripts from Cobra |
+| `init` | 如果配置 / 数据库不存在，则创建它们，并注册当前设备 |
+| `import` | 从已配置的本机 agent 日志路径导入用量事件 |
+| `export` | 将当前 SQLite 数据库复制为可移植的 `.aldb` 文件 |
+| `merge [file.aldb]` | 将另一个 AgentLedger SQLite 导出文件合并到本地数据库 |
+| `report daily` | 按日拆分用量 |
+| `report weekly` | 按周汇总用量 |
+| `report monthly` | 按月汇总，可选择按 `agent`、`model` 或 `provider` 分组 |
+| `report models` | 按模型拆分 token / 事件用量 |
+| `report channels` | 按来源渠道拆分用量 |
+| `report devices` | 按设备拆分用量 |
+| `report sessions` | session 列表；当前实现按成本排序 |
+| `status` | 显示数据库统计信息 |
+| `doctor` | 显示配置 / 数据库路径，以及发现的 source file 数量 |
+| `verify` | 运行 SQLite `PRAGMA integrity_check` |
+| `vacuum` | 运行 SQLite `VACUUM` |
+| `completion` | 通过 Cobra 生成 shell completion 脚本 |
 
-Cobra also provides the generated `completion` command.
+Cobra 也会提供生成的 `completion` 命令。
 
-## Reports
+## 报表
 
-All report subcommands accept:
+所有报表子命令都支持：
 
 - `--since YYYY-MM-DD`
 - `--until YYYY-MM-DD`
 - `--json`
 
-`report monthly` also uses `--by agent|model|provider`.
+`report monthly` 还支持 `--by agent|model|provider`。
 
 ```bash
 agent-ledger report daily --since 2026-05-01
@@ -119,24 +119,24 @@ agent-ledger report devices
 agent-ledger report sessions --until 2026-05-31
 ```
 
-## Supported Agents
+## 支持的 Agent
 
-| Agent | Default Path | Parsed Format | Notes |
+| Agent | 默认路径 | 解析格式 | 说明 |
 |-------|--------------|---------------|-------|
-| Claude Code | `~/.claude` | JSONL | Reads assistant messages with `usage` or `message.usage` |
-| Codex | `~/.codex` | JSONL | Reads token count records and prefers `last_token_usage` when present |
-| Gemini CLI | `~/.gemini` | JSON / JSONL | Reads `usageMetadata` |
-| Qwen | `~/.qwen` | JSONL | Reads `usage` |
+| Claude Code | `~/.claude` | JSONL | 读取带有 `usage` 或 `message.usage` 的 assistant 消息 |
+| Codex | `~/.codex` | JSONL | 读取 token count 记录；存在 `last_token_usage` 时优先使用它 |
+| Gemini CLI | `~/.gemini` | JSON / JSONL | 读取 `usageMetadata` |
+| Qwen | `~/.qwen` | JSONL | 读取 `usage` |
 
-Configured paths can be changed in `~/.config/agent-ledger/config.toml`.
+可在 `~/.config/agent-ledger/config.toml` 中修改已配置路径。
 
-## Configuration
+## 配置
 
-`agent-ledger init` and `config.Load()` create the config file when it does not exist:
+当配置文件不存在时，`agent-ledger init` 和 `config.Load()` 会创建它：
 
 ```toml
 [database]
-path = "~/.local/share/agent-ledger/agent-ledger.db"
+path = "local/data/agent-ledger.db"
 
 [privacy]
 mode = "envelope"
@@ -172,45 +172,45 @@ enabled = true
 paths = ["~/.qwen"]
 ```
 
-Important paths:
+重要路径：
 
-- Config: `~/.config/agent-ledger/config.toml`
-- Database: `~/.local/share/agent-ledger/agent-ledger.db` by default
-- Device ID: `~/.local/share/agent-ledger/device_id`
+- Config: `<repo-root>/local/data/config.toml`
+- Database: `<repo-root>/local/data/agent-ledger.db`
+- Device ID: `<repo-root>/local/data/device_id`
 
-The `[cleanup]`, `[reports].timezone`, `[reports].currency`, and `[privacy].redact_paths_on_export` settings are schema/config placeholders today; the current commands do not yet implement cleanup, timezone conversion, currency conversion, or export redaction.
+当前 `[cleanup]`、`[reports].timezone`、`[reports].currency` 和 `[privacy].redact_paths_on_export` 仍是 schema / config 占位配置；现有命令尚未实现 cleanup、timezone 转换、currency 转换或 export redaction。
 
-## Cross-Device Workflow
+## 跨设备工作流
 
 ```bash
-# Device A
+# 设备 A
 agent-ledger import
 agent-ledger export --output device-a.aldb
 
-# Device B
+# 设备 B
 agent-ledger merge device-a.aldb
 agent-ledger report monthly --by agent
 ```
 
-Merge validates that the incoming path exists, is a regular SQLite database file, then attaches it and inserts unseen `usage_events` by primary key. Existing events are skipped.
+合并时会先校验传入路径存在，并且是常规 SQLite 数据库文件；随后 attach 该数据库，并按主键插入本地未见过的 `usage_events`。已有事件会被跳过。
 
-## Documentation
+## 文档
 
-- [Docs Index](docs/README.md)
-- [Quickstart](docs/quickstart.md)
-- [CLI Reference](docs/cli-reference.md)
-- [Configuration](docs/configuration.md)
-- [Source Adapters](docs/source-adapters.md)
-- [Data Model](docs/data-model.md)
-- [Reports and Merge](docs/reports-and-merge.md)
-- [Privacy and Operations](docs/privacy-and-operations.md)
-- [Development](docs/development.md)
-- [Roadmap](docs/roadmap.md)
+- [文档索引](docs/README.md)
+- [快速开始](docs/quickstart.md)
+- [CLI 参考](docs/cli-reference.md)
+- [配置](docs/configuration.md)
+- [Source Adapter](docs/source-adapters.md)
+- [数据模型](docs/data-model.md)
+- [报表与合并](docs/reports-and-merge.md)
+- [隐私与运维](docs/privacy-and-operations.md)
+- [开发](docs/development.md)
+- [路线图](docs/roadmap.md)
 
-## Privacy Notes
+## 隐私说明
 
-AgentLedger is local-first, but it stores parsed usage envelopes and raw usage JSON from source logs in SQLite. Exporting `.aldb` copies that database. Treat exported files as private usage data unless you have reviewed and redacted them.
+AgentLedger 是本地优先工具，但它会把从 source log 中解析出的 usage envelope 和原始 usage JSON 存入 SQLite。导出 `.aldb` 会复制该数据库。除非你已经审阅并脱敏，否则应把导出文件视为私有用量数据。
 
-## License
+## 许可证
 
 GPL-3.0
