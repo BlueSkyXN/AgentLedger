@@ -18,6 +18,13 @@
 coverage.out
 *.prof
 
+# Web panel build artifacts
+/web/node_modules/
+/web/dist/
+/web/.vite/
+/web/*.tsbuildinfo
+/internal/control/embed/dist/
+
 # Runtime database/export files (user data, not committed)
 *.db
 *.sqlite

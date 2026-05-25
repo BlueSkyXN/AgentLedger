@@ -2,7 +2,15 @@
 
 AgentLedger 使用 TOML 配置。配置文件不存在时，`config.Load()` 会写入默认配置。
 
+配置文件保存在数据目录下的 `config.toml`。数据目录选择顺序：
+
+1. 如果设置了 `AGENT_LEDGER_DATA_DIR`，使用该目录。
+2. 如果当前工作目录或可执行文件所在目录的上级能找到 `go.mod`，使用 `<repo-root>/local/data`。
+3. 否则使用 `~/.local/share/agent-ledger`。
+
 ## 默认配置
+
+下面是默认配置的语义示例。实际生成的 `[database].path` 会基于数据目录解析；在源码仓库内运行时通常指向 `<repo-root>/local/data/agent-ledger.db`。
 
 ```toml
 [database]
@@ -46,7 +54,7 @@ paths = ["~/.qwen"]
 
 | Key | 当前用途 |
 |---|---|
-| `[database].path` | SQLite 数据库路径；支持 `~/` 展开。 |
+| `[database].path` | SQLite 数据库路径；支持 `~/` 展开。默认生成在数据目录下。 |
 | `[import].gracing_minutes` | `import` 跳过最近修改文件的时间窗口。 |
 | `[agents.*].enabled` | 是否启用对应 adapter。 |
 | `[agents.*].paths` | adapter 扫描的根路径列表；支持 `~/` 展开。 |

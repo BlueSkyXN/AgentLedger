@@ -29,7 +29,10 @@ AgentLedger 当前是 Go CLI 项目，核心能力已落在 `cmd/` 和 `internal
 
 ### 从源码构建
 
-前置条件：本机 Go 版本需要与 `go.mod` 兼容。
+前置条件：
+
+- 本机 Go 版本需要与 `go.mod` 兼容。
+- 本项目使用 `github.com/mattn/go-sqlite3`，本地构建通常需要 `CGO_ENABLED=1` 和可用的 C toolchain（例如 macOS Xcode Command Line Tools 或 Linux `gcc`）。
 
 ```bash
 git clone https://github.com/BlueSkyXN/AgentLedger.git
@@ -38,6 +41,8 @@ mkdir -p bin
 go build -o bin/agent-ledger .
 ./bin/agent-ledger --help
 ```
+
+下文命令默认使用 `agent-ledger` 表示已经把二进制放入 `PATH`。如果只是按上面的源码构建步骤运行，请把命令替换为 `./bin/agent-ledger ...`。
 
 本地开发时，也可以不安装，直接运行以下命令：
 
@@ -74,6 +79,9 @@ agent-ledger merge other-device.aldb
 agent-ledger verify
 agent-ledger vacuum
 agent-ledger doctor
+
+# 本地只读 Web 面板
+agent-ledger serve
 ```
 
 ## 命令
@@ -95,9 +103,35 @@ agent-ledger doctor
 | `doctor` | 显示配置 / 数据库路径，以及发现的 source file 数量 |
 | `verify` | 运行 SQLite `PRAGMA integrity_check` |
 | `vacuum` | 运行 SQLite `VACUUM` |
+| `serve` | 启动本机只读 Web 面板和 `/api/v1/*` JSON API |
 | `completion` | 通过 Cobra 生成 shell completion 脚本 |
 
 Cobra 也会提供生成的 `completion` 命令。
+
+## 本地 Web 面板
+
+`serve` 会启动一个只读本地面板，实时从当前 SQLite 数据库查询聚合结果。第一版只读展示，不提供浏览器触发 `import`、`merge`、`vacuum` 或修改配置的能力。
+
+```bash
+agent-ledger serve
+# http://127.0.0.1:8765
+```
+
+默认只允许 loopback 地址。可用参数：
+
+```bash
+agent-ledger serve --addr 127.0.0.1:8765 --static-dir web/dist
+```
+
+面板 API 挂在 `/api/v1/*`，前端不直接读取 SQLite。`web/dist` 存在时会托管 React 面板；如果尚未构建，会显示内置 placeholder，并提示运行：
+
+```bash
+cd web
+npm install
+npm run build
+```
+
+面板不会返回 `raw_usage_json` 或 `raw_meta_json`，但聚合数据、session id、模型名和数据库路径仍属于本机私有使用数据，不应作为公开截图或附件传播。
 
 ## 报表
 
@@ -128,11 +162,11 @@ agent-ledger report sessions --until 2026-05-31
 | Gemini CLI | `~/.gemini` | JSON / JSONL | 读取 `usageMetadata` |
 | Qwen | `~/.qwen` | JSONL | 读取 `usage` |
 
-可在 `~/.config/agent-ledger/config.toml` 中修改已配置路径。
+可在 AgentLedger 配置文件中修改已配置路径。配置文件路径由数据目录决定，见下方“配置”。
 
 ## 配置
 
-当配置文件不存在时，`agent-ledger init` 和 `config.Load()` 会创建它：
+当配置文件不存在时，`agent-ledger init` 和 `config.Load()` 会创建它。下面是默认配置的语义示例；实际生成的 `[database].path` 会基于运行时数据目录解析：
 
 ```toml
 [database]
@@ -172,11 +206,17 @@ enabled = true
 paths = ["~/.qwen"]
 ```
 
+数据目录选择顺序：
+
+1. 如果设置了 `AGENT_LEDGER_DATA_DIR`，使用该目录。
+2. 如果当前工作目录或可执行文件所在目录的上级能找到 `go.mod`，使用 `<repo-root>/local/data`。
+3. 否则使用 `~/.local/share/agent-ledger`。
+
 重要路径：
 
-- Config: `<repo-root>/local/data/config.toml`
-- Database: `<repo-root>/local/data/agent-ledger.db`
-- Device ID: `<repo-root>/local/data/device_id`
+- Config: `<data-dir>/config.toml`
+- Database: 默认 `<data-dir>/agent-ledger.db`，也可通过 `[database].path` 修改
+- Device ID: `<data-dir>/device_id`
 
 当前 `[cleanup]`、`[reports].timezone`、`[reports].currency` 和 `[privacy].redact_paths_on_export` 仍是 schema / config 占位配置；现有命令尚未实现 cleanup、timezone 转换、currency 转换或 export redaction。
 

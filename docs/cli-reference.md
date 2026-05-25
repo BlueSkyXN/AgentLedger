@@ -21,9 +21,10 @@ agent-ledger [command]
 | `doctor` | 已实现 | 输出配置、数据库和源文件发现诊断。 |
 | `verify` | 已实现 | 运行 SQLite integrity check。 |
 | `vacuum` | 已实现 | 运行 SQLite vacuum。 |
+| `serve` | 已实现 | 启动本机只读 Web 面板和 `/api/v1/*` JSON API。 |
 | `completion` | 已实现 | Cobra 自动生成的 shell completion 命令。 |
 
-当前没有 `cleanup`、`restore`、`pricing` 或 `workspace` 命令。
+当前没有 `cleanup`、`restore`、`pricing` 或 `workspace` 命令。当前 `serve` 也是只读面板，不提供浏览器触发 import/merge/vacuum 的写操作。
 
 ## `init`
 
@@ -151,3 +152,33 @@ agent-ledger vacuum
 ```sql
 VACUUM;
 ```
+
+## `serve`
+
+```bash
+agent-ledger serve
+agent-ledger serve --addr 127.0.0.1:8765 --static-dir web/dist
+```
+
+Flags:
+
+| Flag | 说明 |
+|---|---|
+| `--addr string` | 本地监听地址，默认 `127.0.0.1:8765`。当前版本只允许 loopback host。 |
+| `--static-dir string` | React 面板构建目录，默认 `web/dist`。不存在时使用内置 placeholder。 |
+
+当前 `serve` 只提供只读能力，不暴露 import、merge、vacuum 或配置修改 API。
+
+主要只读 API：
+
+| Method | Path | 说明 |
+|---|---|---|
+| `GET` | `/api/v1/health` | 版本、数据库路径、数据库大小、面板资源模式。 |
+| `GET` | `/api/v1/status` | 数据库统计。 |
+| `GET` | `/api/v1/config` | 脱敏配置快照。 |
+| `GET` | `/api/v1/analytics/summary` | 总览统计，支持 `since` / `until`。 |
+| `GET` | `/api/v1/analytics/timeseries` | 趋势数据，`bucket=daily|weekly|monthly`。 |
+| `GET` | `/api/v1/analytics/breakdown` | 维度排行，`by=agent|model|provider|device`。 |
+| `GET` | `/api/v1/sessions` | top sessions，支持 `limit`。 |
+| `GET` | `/api/v1/import-runs` | 最近 import runs。 |
+| `GET` | `/api/v1/events` | 最近 usage events，不返回 raw JSON。 |

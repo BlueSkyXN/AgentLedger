@@ -60,6 +60,21 @@ agent-ledger vacuum
 
 用途：执行 SQLite `VACUUM` 回收空间。它会重写数据库文件；运行前建议先确认没有其它 AgentLedger 进程正在访问同一数据库。
 
+### `serve`
+
+```bash
+agent-ledger serve
+```
+
+用途：启动本机只读 Web 面板和 `/api/v1/*` JSON API。当前版本默认监听 `127.0.0.1:8765`，并且只允许 loopback host。
+
+隐私边界：
+
+- API 和面板不返回 `raw_usage_json` 或 `raw_meta_json`。
+- `/api/v1/config` 会对用户主目录路径做 `~` 形式脱敏。
+- 面板仍会展示聚合 token、模型、agent、session 和数据库状态，应按本机私有使用数据处理。
+- 当前没有远程访问和 auth；不要通过代理、端口转发或非 loopback 地址对外暴露。
+
 ## Cleanup 边界
 
 当前 CLI 没有 `cleanup` 或 `restore` 命令，也不会移动、删除或隔离原始 agent 日志。

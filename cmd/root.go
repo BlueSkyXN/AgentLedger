@@ -32,4 +32,5 @@ func init() {
 	rootCmd.AddCommand(doctorCmd)
 	rootCmd.AddCommand(verifyCmd)
 	rootCmd.AddCommand(vacuumCmd)
+	rootCmd.AddCommand(serveCmd)
 }

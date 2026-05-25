@@ -17,6 +17,8 @@ module github.com/BlueSkyXN/AgentLedger
 - `github.com/mattn/go-sqlite3`: SQLite driver
 - `github.com/oklog/ulid/v2`: device id and import run id
 
+由于 SQLite driver 使用 `github.com/mattn/go-sqlite3`，本地构建通常需要 `CGO_ENABLED=1` 和可用的 C toolchain。
+
 ## 常用命令
 
 ```bash
@@ -26,6 +28,7 @@ go vet ./...
 gofmt -l .
 go run . --help
 go run . report monthly --help
+go run . serve --addr 127.0.0.1:8765
 ```
 
 构建本地二进制：
@@ -41,7 +44,9 @@ go build -o bin/agent-ledger .
 ```text
 cmd/                  CLI commands
 internal/adapters/    source log discovery and parsers
+internal/analytics/   read-only SQL aggregations for API and panel
 internal/config/      default config and TOML load/save
+internal/control/     local HTTP API and web panel static hosting
 internal/db/          SQLite connection, schema, insert, merge, stats
 internal/fingerprint/ event fingerprinting
 internal/model/       domain structs
@@ -69,7 +74,20 @@ go run . --help
 go run . <command> --help
 ```
 
-涉及导入、合并或报表 SQL 时，建议使用临时数据库和样例日志，不要直接覆盖真实用户数据库。可以通过临时 `HOME` 或测试 fixture 隔离运行环境。
+涉及 Web 面板时再运行：
+
+```bash
+cd web
+npm install
+npm run lint
+npm run build
+cd ..
+go run . serve
+```
+
+`serve` 第一版是只读面板。不要在没有明确产品决策前新增浏览器触发 `import`、`merge`、`vacuum` 或配置修改的 API。
+
+涉及导入、合并或报表 SQL 时，建议使用临时数据库和样例日志，不要直接覆盖真实用户数据库。优先通过临时 `AGENT_LEDGER_DATA_DIR` 隔离 AgentLedger 数据目录，也可以配合测试 fixture 隔离源日志。
 
 ## 实现注意事项
 

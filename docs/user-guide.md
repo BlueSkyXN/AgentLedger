@@ -12,6 +12,8 @@ go build -o bin/agent-ledger .
 ./bin/agent-ledger --help
 ```
 
+后续示例使用 `./bin/agent-ledger`，对应源码构建产物。如果你已经把二进制安装到 `PATH`，可以直接使用 `agent-ledger`。
+
 开发环境也可以直接运行：
 
 ```bash
@@ -23,7 +25,7 @@ go build ./...
 ## 初始化
 
 ```bash
-agent-ledger init
+./bin/agent-ledger init
 ```
 
 初始化会创建或复用：
@@ -31,6 +33,8 @@ agent-ledger init
 - `<repo-root>/local/data/config.toml`
 - `<repo-root>/local/data/agent-ledger.db`
 - `<repo-root>/local/data/device_id`
+
+以上路径是在源码仓库内运行时的默认位置。实际数据目录优先使用 `AGENT_LEDGER_DATA_DIR`；如果没有设置且运行环境找不到项目根目录，则使用 `~/.local/share/agent-ledger`。
 
 `device_id` 使用 ULID 并持久化，后续运行会复用同一个设备标识。
 
@@ -61,7 +65,7 @@ paths = ["~/.qwen"]
 ## 导入
 
 ```bash
-agent-ledger import
+./bin/agent-ledger import
 ```
 
 导入流程会：
@@ -77,10 +81,10 @@ agent-ledger import
 ## 查看状态与诊断
 
 ```bash
-agent-ledger status
-agent-ledger doctor
-agent-ledger verify
-agent-ledger vacuum
+./bin/agent-ledger status
+./bin/agent-ledger doctor
+./bin/agent-ledger verify
+./bin/agent-ledger vacuum
 ```
 
 - `status` 显示数据库路径、事件数、设备数、导入次数、token 总数和成本字段汇总。
@@ -91,23 +95,23 @@ agent-ledger vacuum
 ## 报表
 
 ```bash
-agent-ledger report daily
-agent-ledger report weekly
-agent-ledger report monthly
-agent-ledger report monthly --by agent
-agent-ledger report monthly --by model
-agent-ledger report monthly --by provider
-agent-ledger report models
-agent-ledger report channels
-agent-ledger report devices
-agent-ledger report sessions
+./bin/agent-ledger report daily
+./bin/agent-ledger report weekly
+./bin/agent-ledger report monthly
+./bin/agent-ledger report monthly --by agent
+./bin/agent-ledger report monthly --by model
+./bin/agent-ledger report monthly --by provider
+./bin/agent-ledger report models
+./bin/agent-ledger report channels
+./bin/agent-ledger report devices
+./bin/agent-ledger report sessions
 ```
 
 常用过滤和输出参数：
 
 ```bash
-agent-ledger report daily --since 2026-05-01 --until 2026-05-31
-agent-ledger report models --json
+./bin/agent-ledger report daily --since 2026-05-01 --until 2026-05-31
+./bin/agent-ledger report models --json
 ```
 
 所有报表子命令都暴露 `--since`、`--until`、`--json`。当前只有 `report monthly` 使用 `--by` 分组。
@@ -117,15 +121,15 @@ agent-ledger report models --json
 在设备 A：
 
 ```bash
-agent-ledger import
-agent-ledger export --output device-a.aldb
+./bin/agent-ledger import
+./bin/agent-ledger export --output device-a.aldb
 ```
 
 把 `device-a.aldb` 复制到设备 B 后：
 
 ```bash
-agent-ledger merge device-a.aldb
-agent-ledger report monthly --by agent
+./bin/agent-ledger merge device-a.aldb
+./bin/agent-ledger report monthly --by agent
 ```
 
 合并会验证输入文件是 SQLite 数据库，然后 attach 到当前数据库，通过 `usage_events.event_fingerprint` 主键跳过重复事件。
