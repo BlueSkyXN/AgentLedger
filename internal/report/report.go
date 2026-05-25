@@ -16,6 +16,8 @@ type Filters struct {
 	Provider string
 	Model    string
 	Session  string
+	SlowSort string
+	Limit    int
 }
 
 type ReportRow struct {
@@ -84,6 +86,15 @@ func generateGrouped(conn *sql.DB, labelExpr string, filters Filters, asJSON boo
 }
 
 func generateSlow(conn *sql.DB, filters Filters, asJSON bool) error {
+	orderBy, err := slowOrderBy(filters.SlowSort)
+	if err != nil {
+		return err
+	}
+	limit := filters.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+
 	query := `SELECT
         event_id,
         timestamp_ms,
@@ -99,7 +110,8 @@ func generateSlow(conn *sql.DB, filters Filters, asJSON bool) error {
     FROM usage_events WHERE (output_tps IS NOT NULL OR ttft_ms IS NOT NULL OR total_duration_ms IS NOT NULL)`
 	args := make([]any, 0)
 	query = addFilters(query, &args, filters)
-	query += " ORDER BY output_tps IS NULL ASC, output_tps ASC, ttft_ms DESC, total_duration_ms DESC LIMIT 50"
+	query += " ORDER BY " + orderBy + " LIMIT ?"
+	args = append(args, limit)
 
 	rows, err := conn.Query(query, args...)
 	if err != nil {
@@ -107,7 +119,7 @@ func generateSlow(conn *sql.DB, filters Filters, asJSON bool) error {
 	}
 	defer rows.Close()
 
-	var results []SlowRow
+	results := make([]SlowRow, 0)
 	for rows.Next() {
 		var item SlowRow
 		var timestamp int64
@@ -147,6 +159,19 @@ func generateSlow(conn *sql.DB, filters Filters, asJSON bool) error {
 	return w.Flush()
 }
 
+func slowOrderBy(sortBy string) (string, error) {
+	switch sortBy {
+	case "", "output_tps":
+		return "output_tps IS NULL ASC, output_tps ASC, ttft_ms DESC, total_duration_ms DESC", nil
+	case "ttft_ms":
+		return "ttft_ms IS NULL ASC, ttft_ms DESC, output_tps IS NULL ASC, output_tps ASC, total_duration_ms DESC", nil
+	case "total_duration_ms":
+		return "total_duration_ms IS NULL ASC, total_duration_ms DESC, output_tps IS NULL ASC, output_tps ASC, ttft_ms DESC", nil
+	default:
+		return "", fmt.Errorf("invalid slow sort %q: expected output_tps, ttft_ms, or total_duration_ms", sortBy)
+	}
+}
+
 func executeReport(conn *sql.DB, query string, args []any, asJSON bool, labelHeader string) error {
 	rows, err := conn.Query(query, args...)
 	if err != nil {
@@ -154,7 +179,7 @@ func executeReport(conn *sql.DB, query string, args []any, asJSON bool, labelHea
 	}
 	defer rows.Close()
 
-	var results []ReportRow
+	results := make([]ReportRow, 0)
 	for rows.Next() {
 		var r ReportRow
 		var totalTokens, inputTokens, outputTokens sql.NullInt64

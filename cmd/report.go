@@ -75,6 +75,8 @@ func init() {
 		cmd.Flags().String("session", "", "Filter by session ID")
 		cmd.Flags().Bool("json", false, "Output as JSON")
 	}
+	reportSlowCmd.Flags().String("sort", "output_tps", "Sort slow report by output_tps, ttft_ms, or total_duration_ms")
+	reportSlowCmd.Flags().Int("limit", 50, "Maximum slow events to return")
 }
 
 func runReport(reportType string) func(cmd *cobra.Command, args []string) error {
@@ -97,6 +99,14 @@ func runReport(reportType string) func(cmd *cobra.Command, args []string) error 
 		modelName, _ := cmd.Flags().GetString("model")
 		session, _ := cmd.Flags().GetString("session")
 		asJSON, _ := cmd.Flags().GetBool("json")
+		sortBy := "output_tps"
+		limit := 50
+		if cmd.Flags().Lookup("sort") != nil {
+			sortBy, _ = cmd.Flags().GetString("sort")
+		}
+		if cmd.Flags().Lookup("limit") != nil {
+			limit, _ = cmd.Flags().GetInt("limit")
+		}
 
 		return report.Generate(database.Conn(), reportType, report.Filters{
 			Since:    since,
@@ -105,6 +115,8 @@ func runReport(reportType string) func(cmd *cobra.Command, args []string) error 
 			Provider: provider,
 			Model:    modelName,
 			Session:  session,
+			SlowSort: sortBy,
+			Limit:    limit,
 		}, asJSON)
 	}
 }
