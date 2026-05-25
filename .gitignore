@@ -1,0 +1,44 @@
+# Local working notes, experiments, and generated data
+/local/
+
+# Local agent entrypoint symlinks/config
+/.codex/
+/.agents/
+
+# Rust build artifacts (archived in local/rust-reference/)
+/target/
+
+# Go build artifacts
+/agent-ledger
+/AgentLedger
+/bin/
+/build/
+/dist/
+*.test
+coverage.out
+*.prof
+
+# Runtime database/export files (user data, not committed)
+*.db
+*.sqlite
+*.sqlite3
+*.aldb
+*.db-wal
+*.db-shm
+*.sqlite-wal
+*.sqlite-shm
+
+# Environment and local config
+.env
+.env.*
+!.env.example
+
+# IDE/editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
