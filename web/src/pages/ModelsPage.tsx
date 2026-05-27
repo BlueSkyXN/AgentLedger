@@ -39,10 +39,10 @@ export function ModelsPage() {
         <h2>模型明细</h2>
         <div className="table-wrap">
           <table>
-            <thead><tr><th>模型</th><th>事件</th><th>Tokens</th><th>输入</th><th>输出</th><th>推理</th><th>平均 TPS</th><th>平均 TTFT</th><th>记录成本</th></tr></thead>
+            <thead><tr><th>模型</th><th>事件</th><th>Tokens</th><th>输入</th><th>输出</th><th>缓存写入</th><th>缓存读取</th><th>推理</th><th>平均 TPS</th><th>平均 TTFT</th><th>记录成本</th></tr></thead>
             <tbody>
-              {(models ?? []).map((row) => <tr key={row.label}><td>{row.label}</td><td>{formatInt(row.events)}</td><td>{formatInt(row.total_tokens)}</td><td>{formatInt(row.input_tokens)}</td><td>{formatInt(row.output_tokens)}</td><td>{formatInt(row.reasoning_tokens)}</td><td>{formatTPS(row.avg_output_tps)}</td><td>{formatMs(row.avg_ttft_ms)}</td><td>{formatCost(row.recorded_cost_usd)}</td></tr>)}
-              {(models ?? []).length === 0 && <tr><td colSpan={9} className="empty-cell">暂无模型数据</td></tr>}
+              {(models ?? []).map((row) => <tr key={row.label}><td>{row.label}</td><td>{formatInt(row.events)}</td><td>{formatInt(row.total_tokens)}</td><td>{formatInt(row.input_tokens)}</td><td>{formatInt(row.output_tokens)}</td><td>{formatInt(row.cache_creation_tokens)}</td><td>{formatInt(row.cache_read_tokens)}</td><td>{formatInt(row.reasoning_tokens)}</td><td>{formatTPS(row.avg_output_tps)}</td><td>{formatMs(row.avg_ttft_ms)}</td><td>{formatCost(row.recorded_cost_usd)}</td></tr>)}
+              {(models ?? []).length === 0 && <tr><td colSpan={11} className="empty-cell">暂无模型数据</td></tr>}
             </tbody>
           </table>
         </div>

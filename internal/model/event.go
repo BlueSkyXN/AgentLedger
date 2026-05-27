@@ -1,5 +1,14 @@
 package model
 
+const (
+	AccClaudeUsageSum           = "claude_usage_sum"
+	AccCodexLastTokenUsage      = "codex_last_token_usage"
+	AccCodexTotalDelta          = "codex_total_delta"
+	AccCodexHeadlessUsage       = "codex_headless_usage"
+	AccCopilotOtelParts         = "copilot_otel_parts"
+	AccCopilotOtelTotalFallback = "copilot_otel_total_fallback"
+)
+
 // UsageEvent is the v2 fact-table representation for one local agent usage event.
 type UsageEvent struct {
 	EventID        string `json:"event_id" db:"event_id"`
@@ -10,6 +19,13 @@ type UsageEvent struct {
 	Provider        string `json:"provider" db:"provider"`
 	ModelRaw        string `json:"model_raw" db:"model_raw"`
 	ModelNormalized string `json:"model_normalized" db:"model_normalized"`
+
+	SourceAgent           string `json:"source_agent" db:"source_agent"`
+	SourceProduct         string `json:"source_product" db:"source_product"`
+	ObservabilityLevel    string `json:"observability_level" db:"observability_level"`
+	ModelIsFallback       bool   `json:"model_is_fallback" db:"model_is_fallback"`
+	SourceTotalTokens     *int64 `json:"source_total_tokens" db:"source_total_tokens"`
+	TokenAccountingMethod string `json:"token_accounting_method" db:"token_accounting_method"`
 
 	TimestampMs int64  `json:"timestamp_ms" db:"timestamp_ms"`
 	SessionID   string `json:"session_id" db:"session_id"`

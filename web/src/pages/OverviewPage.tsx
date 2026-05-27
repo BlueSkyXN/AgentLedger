@@ -37,6 +37,7 @@ export function OverviewPage() {
         <KpiCard label="输入 Tokens" value={formatInt(summary?.input_tokens)} />
         <KpiCard label="输出 Tokens" value={formatInt(summary?.output_tokens)} />
         <KpiCard label="推理 Tokens" value={formatInt(summary?.reasoning_tokens)} />
+        <KpiCard label="缓存写入" value={formatInt(summary?.cache_creation_tokens)} />
         <KpiCard label="缓存读取" value={formatInt(summary?.cache_read_tokens)} />
         <KpiCard label="平均耗时" value={formatMs(summary?.avg_total_duration_ms)} />
         <KpiCard label="平均 TTFT" value={formatMs(summary?.avg_ttft_ms)} />

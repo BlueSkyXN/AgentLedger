@@ -41,6 +41,13 @@ CREATE TABLE IF NOT EXISTS usage_events (
     model_raw TEXT,
     model_normalized TEXT,
 
+    source_agent TEXT,
+    source_product TEXT,
+    observability_level TEXT,
+    model_is_fallback INTEGER NOT NULL DEFAULT 0,
+    source_total_tokens INTEGER,
+    token_accounting_method TEXT,
+
     timestamp_ms INTEGER NOT NULL,
     session_id TEXT,
     project_path TEXT,
@@ -91,8 +98,10 @@ func (d *Database) initSchema() error {
 	if exists && version != SchemaVersion {
 		return fmt.Errorf("%w: database schema version %s is not compatible with AgentLedger v2; run `agent-ledger init --reset` to rebuild the local database", ErrIncompatibleSchema, version)
 	}
-	_, err = d.conn.Exec(schemaSQLite)
-	return err
+	if _, err = d.conn.Exec(schemaSQLite); err != nil {
+		return err
+	}
+	return d.ensureV2CompatibilityColumns()
 }
 
 func (d *Database) schemaVersion() (string, bool, error) {
@@ -114,4 +123,85 @@ func (d *Database) schemaVersion() (string, bool, error) {
 		return "", true, err
 	}
 	return version, true, nil
+}
+
+func (d *Database) ensureV2CompatibilityColumns() error {
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	columns := []string{
+		"source_agent TEXT",
+		"source_product TEXT",
+		"observability_level TEXT",
+		"model_is_fallback INTEGER NOT NULL DEFAULT 0",
+		"source_total_tokens INTEGER",
+		"token_accounting_method TEXT",
+	}
+	for _, columnDef := range columns {
+		name := columnName(columnDef)
+		exists, err := columnExists(tx, "usage_events", name)
+		if err != nil {
+			return err
+		}
+		if exists {
+			continue
+		}
+		if _, err = tx.Exec(fmt.Sprintf("ALTER TABLE usage_events ADD COLUMN %s", columnDef)); err != nil {
+			return err
+		}
+	}
+	if _, err = tx.Exec(`
+        UPDATE usage_events
+        SET
+            source_agent = COALESCE(NULLIF(source_agent, ''), channel),
+            observability_level = COALESCE(NULLIF(observability_level, ''), 'unknown')
+    `); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(`CREATE INDEX IF NOT EXISTS idx_usage_source_agent_time ON usage_events(source_agent, timestamp_ms)`); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func columnExists(tx *sql.Tx, table, column string) (bool, error) {
+	rows, err := tx.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name string
+		var typ string
+		var notNull int
+		var defaultValue interface{}
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+func columnName(columnDef string) string {
+	for i, r := range columnDef {
+		if r == ' ' || r == '\t' || r == '\n' {
+			return columnDef[:i]
+		}
+	}
+	return columnDef
 }

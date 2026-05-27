@@ -116,6 +116,45 @@ func getInt64(obj map[string]interface{}, key string) int64 {
 	return 0
 }
 
+func int64Field(obj map[string]interface{}, key string) (int64, bool) {
+	if obj == nil {
+		return 0, false
+	}
+	v, ok := obj[key]
+	if !ok {
+		return 0, false
+	}
+	switch n := v.(type) {
+	case float64:
+		return int64(n), true
+	case int64:
+		return n, true
+	case int:
+		return int64(n), true
+	case json.Number:
+		i, err := n.Int64()
+		if err == nil {
+			return i, true
+		}
+	case string:
+		var parsed json.Number = json.Number(strings.TrimSpace(n))
+		i, err := parsed.Int64()
+		if err == nil {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+func firstInt64Field(obj map[string]interface{}, keys ...string) (int64, bool) {
+	for _, key := range keys {
+		if value, ok := int64Field(obj, key); ok {
+			return value, true
+		}
+	}
+	return 0, false
+}
+
 func getFloat64(obj map[string]interface{}, key string) float64 {
 	if v, ok := obj[key]; ok {
 		if f, ok := v.(float64); ok {
@@ -132,6 +171,62 @@ func getMap(obj map[string]interface{}, key string) map[string]interface{} {
 		}
 	}
 	return nil
+}
+
+func getNestedString(obj map[string]interface{}, keys ...string) string {
+	current := obj
+	for i, key := range keys {
+		if i == len(keys)-1 {
+			return getString(current, key)
+		}
+		current = getMap(current, key)
+		if current == nil {
+			return ""
+		}
+	}
+	return ""
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func int64Ptr(value int64) *int64 {
+	return &value
+}
+
+func jsonStringArray(values []string) string {
+	values = uniqueStrings(values)
+	if len(values) == 0 {
+		return ""
+	}
+	data, err := json.Marshal(values)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+func uniqueStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		result = append(result, value)
+	}
+	return result
 }
 
 // NormalizeModelName standardizes model names

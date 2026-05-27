@@ -17,6 +17,26 @@ func TestComputeMessageID(t *testing.T) {
 	}
 }
 
+func TestComputeDedupeIDTakesPriorityOverMessageID(t *testing.T) {
+	rec := &ParsedRecord{
+		Agent:     "claude",
+		Provider:  "anthropic",
+		DedupeID:  "msg_123:req_1",
+		MessageID: "msg_123",
+	}
+	rec2 := *rec
+	rec2.DedupeID = "msg_123:req_2"
+
+	fp, strategy := Compute(rec)
+	fp2, strategy2 := Compute(&rec2)
+	if strategy != StrategyMessageID || strategy2 != StrategyMessageID {
+		t.Fatalf("expected message_id strategy, got %s and %s", strategy, strategy2)
+	}
+	if fp == fp2 {
+		t.Fatal("different dedupe ids should produce distinct fingerprints")
+	}
+}
+
 func TestComputeSessionToken(t *testing.T) {
 	rec := &ParsedRecord{
 		Agent:        "codex",
@@ -32,6 +52,39 @@ func TestComputeSessionToken(t *testing.T) {
 	}
 	if fp == "" {
 		t.Error("fingerprint should not be empty")
+	}
+}
+
+func TestComputeSessionTokenIncludesTokenDetails(t *testing.T) {
+	sourceTotalA := int64(300)
+	sourceTotalB := int64(400)
+	base := &ParsedRecord{
+		Agent:             "codex",
+		Provider:          "openai",
+		Model:             "gpt-5",
+		SessionID:         "sess_abc",
+		TimestampMs:       1700000000000,
+		InputTokens:       100,
+		OutputTokens:      200,
+		TotalTokens:       300,
+		SourceTotalTokens: &sourceTotalA,
+	}
+	withDifferentSourceTotal := *base
+	withDifferentSourceTotal.SourceTotalTokens = &sourceTotalB
+	withDifferentReasoning := *base
+	withDifferentReasoning.ReasoningTokens = 1
+
+	fpA, strategy := Compute(base)
+	fpB, _ := Compute(&withDifferentSourceTotal)
+	fpC, _ := Compute(&withDifferentReasoning)
+	if strategy != StrategySessionToken {
+		t.Fatalf("expected session_token strategy, got %s", strategy)
+	}
+	if fpA == fpB {
+		t.Fatal("source total changes should produce a distinct session_token fingerprint")
+	}
+	if fpA == fpC {
+		t.Fatal("reasoning token changes should produce a distinct session_token fingerprint")
 	}
 }
 

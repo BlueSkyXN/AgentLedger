@@ -115,6 +115,7 @@ func runReport(reportType string) func(cmd *cobra.Command, args []string) error 
 			Provider: provider,
 			Model:    modelName,
 			Session:  session,
+			Timezone: cfg.Reports.Timezone,
 			SlowSort: sortBy,
 			Limit:    limit,
 		}, asJSON)

@@ -30,16 +30,16 @@ older_than_days = 30
 purge_after_days = 90
 
 [reports]
-timezone = "UTC"
+timezone = "Local"
 currency = "USD"
 
 [agents.claude]
 enabled = true
-paths = ["~/.claude"]
+paths = ["~/.config/claude/projects", "~/.claude/projects"]
 
 [agents.codex]
 enabled = true
-paths = ["~/.codex"]
+paths = ["~/.codex/sessions"]
 
 [agents.gemini]
 enabled = true
@@ -58,6 +58,7 @@ paths = ["~/.qwen"]
 | `[import].gracing_minutes` | `import` 跳过最近修改文件的时间窗口。 |
 | `[agents.*].enabled` | 是否启用对应 adapter。 |
 | `[agents.*].paths` | adapter 扫描的根路径列表；支持 `~/` 展开。 |
+| `[reports].timezone` | daily / weekly / monthly 报表分桶和 `--since` / `--until` 日期过滤使用的时区。支持 `Local`、`UTC`、固定偏移如 `+08:00`，以及 Go 可加载的 IANA 时区如 `Asia/Shanghai`。 |
 
 ## 当前预留的键
 
@@ -67,7 +68,6 @@ paths = ["~/.qwen"]
 | `[privacy].redact_paths_on_export` | 预留；当前 `export` 只是复制 SQLite 数据库。 |
 | `[import].single_thread` | 预留；当前 import 是顺序遍历。 |
 | `[cleanup].*` | 预留；当前 CLI 没有 `cleanup` 命令。 |
-| `[reports].timezone` | 预留；当前报表使用 SQLite UTC date bucket。 |
 | `[reports].currency` | 预留；当前没有 currency conversion。 |
 
 ## 修改 agent 路径

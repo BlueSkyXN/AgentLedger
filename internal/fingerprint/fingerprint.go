@@ -10,31 +10,38 @@ import (
 
 // ParsedRecord contains the parsed fields from a source record
 type ParsedRecord struct {
-	Agent               string
-	Provider            string
-	Model               string
-	TimestampMs         int64
-	SessionID           string
-	ProjectPath         string
-	MessageID           string
-	RequestID           string
-	InputTokens         int64
-	OutputTokens        int64
-	CacheCreationTokens int64
-	CacheReadTokens     int64
-	ReasoningTokens     int64
-	TotalTokens         int64
-	CostUSD             *float64
-	RequestStartedAtMs  int64
-	FirstTokenAtMs      int64
-	CompletedAtMs       int64
-	TotalDurationMs     int64
-	TTFTMs              int64
-	OutputDurationMs    int64
-	RawJSON             string
-	SourceFile          string
-	LineNumber          int
-	RawSHA256           string
+	Agent                 string
+	Provider              string
+	Model                 string
+	TimestampMs           int64
+	SessionID             string
+	ProjectPath           string
+	DedupeID              string
+	MessageID             string
+	RequestID             string
+	InputTokens           int64
+	OutputTokens          int64
+	CacheCreationTokens   int64
+	CacheReadTokens       int64
+	ReasoningTokens       int64
+	TotalTokens           int64
+	CostUSD               *float64
+	SourceTotalTokens     *int64
+	ObservabilityLevel    string
+	ModelIsFallback       bool
+	TokenAccountingMethod string
+	IsSidechain           bool
+	UsageSpeed            string
+	RequestStartedAtMs    int64
+	FirstTokenAtMs        int64
+	CompletedAtMs         int64
+	TotalDurationMs       int64
+	TTFTMs                int64
+	OutputDurationMs      int64
+	RawJSON               string
+	SourceFile            string
+	LineNumber            int
+	RawSHA256             string
 }
 
 // Strategy represents the fingerprint strategy used
@@ -49,15 +56,27 @@ const (
 
 // Compute computes the event fingerprint using 4-level priority
 func Compute(rec *ParsedRecord) (fingerprint string, strategy Strategy) {
+	if rec.DedupeID != "" {
+		hash := sha256Hex(fmt.Sprintf("message_id|%s|%s|%s", rec.Agent, rec.Provider, rec.DedupeID))
+		return hash, StrategyMessageID
+	}
+
 	if rec.MessageID != "" {
 		hash := sha256Hex(fmt.Sprintf("message_id|%s|%s|%s", rec.Agent, rec.Provider, rec.MessageID))
 		return hash, StrategyMessageID
 	}
 
 	if rec.SessionID != "" && rec.TimestampMs > 0 {
-		hash := sha256Hex(fmt.Sprintf("session_token|%s|%s|%s|%d|%d|%d",
+		sourceTotal, hasSourceTotal := int64(0), false
+		if rec.SourceTotalTokens != nil {
+			sourceTotal = *rec.SourceTotalTokens
+			hasSourceTotal = true
+		}
+		hash := sha256Hex(fmt.Sprintf("session_token|%s|%s|%s|%s|%d|%d|%d|%d|%d|%d|%d|%t|%d",
 			rec.Agent, rec.Provider, rec.SessionID,
-			rec.TimestampMs, rec.InputTokens, rec.OutputTokens))
+			rec.Model, rec.TimestampMs,
+			rec.InputTokens, rec.OutputTokens, rec.CacheCreationTokens, rec.CacheReadTokens,
+			rec.ReasoningTokens, rec.TotalTokens, hasSourceTotal, sourceTotal))
 		return hash, StrategySessionToken
 	}
 

@@ -140,7 +140,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
-	filters, ok := parseFilters(w, r)
+	filters, ok := parseFilters(w, r, s.cfg.Reports.Timezone)
 	if !ok {
 		return
 	}
@@ -153,7 +153,7 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleTimeseries(w http.ResponseWriter, r *http.Request) {
-	filters, ok := parseFilters(w, r)
+	filters, ok := parseFilters(w, r, s.cfg.Reports.Timezone)
 	if !ok {
 		return
 	}
@@ -167,7 +167,7 @@ func (s *Server) handleTimeseries(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleBreakdown(w http.ResponseWriter, r *http.Request) {
-	filters, ok := parseFilters(w, r)
+	filters, ok := parseFilters(w, r, s.cfg.Reports.Timezone)
 	if !ok {
 		return
 	}
@@ -180,7 +180,7 @@ func (s *Server) handleBreakdown(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSlow(w http.ResponseWriter, r *http.Request) {
-	filters, ok := parseFilters(w, r)
+	filters, ok := parseFilters(w, r, s.cfg.Reports.Timezone)
 	if !ok {
 		return
 	}
@@ -206,7 +206,7 @@ func (s *Server) handleFilterOptions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
-	filters, ok := parseFilters(w, r)
+	filters, ok := parseFilters(w, r, s.cfg.Reports.Timezone)
 	if !ok {
 		return
 	}
@@ -236,7 +236,7 @@ func (s *Server) handleImportRuns(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
-	filters, ok := parseFilters(w, r)
+	filters, ok := parseFilters(w, r, s.cfg.Reports.Timezone)
 	if !ok {
 		return
 	}
@@ -291,7 +291,7 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, filepath.Join(root, "index.html"))
 }
 
-func parseFilters(w http.ResponseWriter, r *http.Request) (analytics.Filters, bool) {
+func parseFilters(w http.ResponseWriter, r *http.Request, timezone string) (analytics.Filters, bool) {
 	filters := analytics.Filters{
 		Since:    strings.TrimSpace(r.URL.Query().Get("since")),
 		Until:    strings.TrimSpace(r.URL.Query().Get("until")),
@@ -299,6 +299,7 @@ func parseFilters(w http.ResponseWriter, r *http.Request) (analytics.Filters, bo
 		Provider: strings.TrimSpace(r.URL.Query().Get("provider")),
 		Model:    strings.TrimSpace(r.URL.Query().Get("model")),
 		Session:  strings.TrimSpace(r.URL.Query().Get("session")),
+		Timezone: timezone,
 	}
 	if filters.Since != "" && !validDate(filters.Since) {
 		writeError(w, http.StatusBadRequest, "since must use YYYY-MM-DD")

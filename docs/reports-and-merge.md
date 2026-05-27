@@ -16,7 +16,7 @@
 --json
 ```
 
-日期过滤使用事件 `timestamp_ms`。当前 `[reports].timezone` 尚未参与计算。
+日期过滤使用事件 `timestamp_ms`，并按 `[reports].timezone` 解释 `--since` / `--until` 的本地日期边界。daily / weekly / monthly 分桶也使用同一时区配置。
 
 ## Report types
 
@@ -33,7 +33,7 @@
 聚合报表输出：
 
 ```text
-Label, Events, Tokens, Input, Output, Reasoning, Cache, Avg Duration, Avg TTFT, Avg TPS, Recorded Cost
+Label, Events, Tokens, Input, Output, Cache Create, Cache Read, Reasoning, Avg Duration, Avg TTFT, Avg TPS, Recorded Cost
 ```
 
 JSON 输出使用同一语义字段：
@@ -46,8 +46,9 @@ JSON 输出使用同一语义字段：
     "total_tokens": 12345,
     "input_tokens": 8000,
     "output_tokens": 3000,
+    "cache_creation_tokens": 200,
+    "cache_read_tokens": 145,
     "reasoning_tokens": 1000,
-    "cache_tokens": 345,
     "avg_total_duration_ms": 12000,
     "avg_ttft_ms": 900,
     "avg_output_tps": 42.5,

@@ -44,15 +44,17 @@ type ReportsConfig struct {
 }
 
 type AgentsConfig struct {
-	Claude AgentConfig `toml:"claude"`
-	Codex  AgentConfig `toml:"codex"`
-	Gemini AgentConfig `toml:"gemini"`
-	Qwen   AgentConfig `toml:"qwen"`
+	Claude  AgentConfig `toml:"claude"`
+	Codex   AgentConfig `toml:"codex"`
+	Gemini  AgentConfig `toml:"gemini"`
+	Copilot AgentConfig `toml:"copilot"`
+	Qwen    AgentConfig `toml:"qwen"`
 }
 
 type AgentConfig struct {
-	Enabled bool     `toml:"enabled"`
-	Paths   []string `toml:"paths"`
+	Enabled      bool     `toml:"enabled"`
+	Experimental bool     `toml:"experimental"`
+	Paths        []string `toml:"paths"`
 }
 
 func Default() *Config {
@@ -74,14 +76,15 @@ func Default() *Config {
 			PurgeAfterDays: 90,
 		},
 		Reports: ReportsConfig{
-			Timezone: "UTC",
+			Timezone: "Local",
 			Currency: "USD",
 		},
 		Agents: AgentsConfig{
-			Claude: AgentConfig{Enabled: true, Paths: []string{"~/.claude"}},
-			Codex:  AgentConfig{Enabled: true, Paths: []string{"~/.codex"}},
-			Gemini: AgentConfig{Enabled: true, Paths: []string{"~/.gemini"}},
-			Qwen:   AgentConfig{Enabled: true, Paths: []string{"~/.qwen"}},
+			Claude:  AgentConfig{Enabled: true, Paths: []string{"~/.config/claude/projects", "~/.claude/projects"}},
+			Codex:   AgentConfig{Enabled: true, Paths: []string{"~/.codex/sessions"}},
+			Gemini:  AgentConfig{Enabled: true, Paths: []string{"~/.gemini"}},
+			Copilot: AgentConfig{Enabled: true, Paths: []string{"~/.copilot/otel"}},
+			Qwen:    AgentConfig{Enabled: false, Experimental: true, Paths: []string{"~/.qwen"}},
 		},
 	}
 }
@@ -147,11 +150,11 @@ func Load() (*Config, error) {
 		return cfg, nil
 	}
 
-	var cfg Config
-	if _, err := toml.DecodeFile(path, &cfg); err != nil {
+	cfg := Default()
+	if _, err := toml.DecodeFile(path, cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
-	return &cfg, nil
+	return cfg, nil
 }
 
 func (c *Config) Save() error {

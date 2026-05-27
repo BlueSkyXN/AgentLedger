@@ -125,7 +125,7 @@ output_tps = output_tokens / (output_duration_ms / 1000.0)
 
 | Adapter | 默认路径 | 文件类型 | 关键解析字段 |
 |---|---|---|---|
-| Claude | `~/.claude` | `.jsonl` | assistant message, `usage` / `message.usage`, `sessionId`, `uuid`, `requestId`, project path。 |
+| Claude | `~/.config/claude/projects`, `~/.claude/projects` | `.jsonl` | assistant message, `message.usage`, `message.id`, `sessionId`, `requestId`, project path。 |
 | Codex | `~/.codex` | `.jsonl` | `usage`, `response.usage`, or `payload.info.last_token_usage`。 |
 | Gemini | `~/.gemini` | `.json`, `.jsonl` | `usageMetadata`, `promptTokenCount`, `candidatesTokenCount`, `totalTokenCount`。 |
 | Qwen | `~/.qwen` | `.jsonl` | `usage`, `message_id`, token fields。 |
@@ -146,7 +146,7 @@ output_tps = output_tokens / (output_duration_ms / 1000.0)
 
 所有 report 支持 `--since`、`--until`、`--channel`、`--provider`、`--model`、`--session`、`--json`。
 
-当前配置中的 timezone/currency 尚未参与报表计算。
+当前配置中的 timezone 已参与 daily / weekly / monthly 报表分桶和日期过滤；currency 尚未参与报表计算。
 
 ## 只读 API
 

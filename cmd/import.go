@@ -46,10 +46,11 @@ var importCmd = &cobra.Command{
 
 		allAdapters := adapters.AllAdapters()
 		agentConfigs := map[string]*config.AgentConfig{
-			"claude": &cfg.Agents.Claude,
-			"codex":  &cfg.Agents.Codex,
-			"gemini": &cfg.Agents.Gemini,
-			"qwen":   &cfg.Agents.Qwen,
+			"claude":  &cfg.Agents.Claude,
+			"codex":   &cfg.Agents.Codex,
+			"gemini":  &cfg.Agents.Gemini,
+			"copilot": &cfg.Agents.Copilot,
+			"qwen":    &cfg.Agents.Qwen,
 		}
 
 		for _, adapter := range allAdapters {
@@ -64,79 +65,34 @@ var importCmd = &cobra.Command{
 				continue
 			}
 
-			for _, filePath := range files {
-				info, err := os.Stat(filePath)
-				if err != nil {
-					continue
-				}
-				if info.ModTime().After(cutoff) {
-					continue
-				}
-
-				totalFiles++
-				records, err := adapter.ParseFile(filePath)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "Warning: failed to parse %s: %v\n", filePath, err)
-					continue
-				}
-
-				for _, rec := range records {
-					fp, strategy := fingerprint.Compute(rec)
-					nowMs := time.Now().UnixMilli()
-
-					normalized, modelProvider, _ := adapters.NormalizeModelName(rec.Model)
-					provider := rec.Provider
-					if provider == "" || provider == "unknown" {
-						provider = modelProvider
-					}
-
-					event := &model.UsageEvent{
-						EventID:             fp,
-						DedupeKey:           fp,
-						DedupeStrategy:      string(strategy),
-						Channel:             rec.Agent,
-						Provider:            provider,
-						ModelRaw:            rec.Model,
-						ModelNormalized:     normalized,
-						TimestampMs:         rec.TimestampMs,
-						SessionID:           rec.SessionID,
-						ProjectPath:         rec.ProjectPath,
-						MessageID:           rec.MessageID,
-						RequestID:           rec.RequestID,
-						SourceFile:          rec.SourceFile,
-						LineNumber:          rec.LineNumber,
-						RawSHA256:           rec.RawSHA256,
-						InputTokens:         rec.InputTokens,
-						OutputTokens:        rec.OutputTokens,
-						CacheCreationTokens: rec.CacheCreationTokens,
-						CacheReadTokens:     rec.CacheReadTokens,
-						ReasoningTokens:     rec.ReasoningTokens,
-						TotalTokens:         rec.TotalTokens,
-						RecordedCostUSD:     rec.CostUSD,
-						RawUsageJSON:        rec.RawJSON,
-						ImportedAtMs:        nowMs,
-						UpdatedAtMs:         nowMs,
-					}
-
-					if event.TotalTokens == 0 {
-						event.TotalTokens = event.TotalTokensComputed()
-					}
-					applyTimingFields(event, rec)
-
-					result, err := database.UpsertEvent(event)
-					if err != nil {
-						fmt.Fprintf(os.Stderr, "Warning: insert error: %v\n", err)
+			if postProcessor, ok := adapter.(adapters.RecordPostProcessor); ok {
+				records := make([]*fingerprint.ParsedRecord, 0)
+				for _, filePath := range files {
+					parsed, processed := parseImportFile(adapter, filePath, cutoff)
+					if !processed {
 						continue
 					}
-					switch result {
-					case "inserted":
-						totalAdded++
-					case "updated":
-						totalUpdated++
-					default:
-						totalSkipped++
-					}
+					totalFiles++
+					records = append(records, parsed...)
 				}
+				records = postProcessor.PostProcessRecords(records)
+				added, updated, skipped := importParsedRecords(database, adapter.Name(), records)
+				totalAdded += added
+				totalUpdated += updated
+				totalSkipped += skipped
+				continue
+			}
+
+			for _, filePath := range files {
+				records, processed := parseImportFile(adapter, filePath, cutoff)
+				if !processed {
+					continue
+				}
+				totalFiles++
+				added, updated, skipped := importParsedRecords(database, adapter.Name(), records)
+				totalAdded += added
+				totalUpdated += updated
+				totalSkipped += skipped
 			}
 		}
 
@@ -151,6 +107,138 @@ var importCmd = &cobra.Command{
 		fmt.Printf("  Events skipped:  %d (duplicates)\n", totalSkipped)
 		return nil
 	},
+}
+
+func parseImportFile(adapter adapters.Adapter, filePath string, cutoff time.Time) ([]*fingerprint.ParsedRecord, bool) {
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return nil, false
+	}
+	if info.ModTime().After(cutoff) {
+		return nil, false
+	}
+
+	records, err := adapter.ParseFile(filePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to parse %s: %v\n", filePath, err)
+		return nil, true
+	}
+	return records, true
+}
+
+func importParsedRecords(database *db.Database, adapterName string, records []*fingerprint.ParsedRecord) (int, int, int) {
+	added := 0
+	updated := 0
+	skipped := 0
+	for _, rec := range records {
+		fp, strategy := fingerprint.Compute(rec)
+		nowMs := time.Now().UnixMilli()
+
+		normalized, modelProvider, _ := adapters.NormalizeModelName(rec.Model)
+		provider := rec.Provider
+		if provider == "" || provider == "unknown" {
+			provider = modelProvider
+		}
+		sourceAgent := rec.Agent
+		if sourceAgent == "" {
+			sourceAgent = adapterName
+		}
+		observability := rec.ObservabilityLevel
+		if observability == "" {
+			observability = defaultObservability(sourceAgent)
+		}
+		accountingMethod := rec.TokenAccountingMethod
+		if accountingMethod == "" {
+			accountingMethod = defaultAccountingMethod(sourceAgent)
+		}
+
+		event := &model.UsageEvent{
+			EventID:               fp,
+			DedupeKey:             fp,
+			DedupeStrategy:        string(strategy),
+			Channel:               sourceAgent,
+			Provider:              provider,
+			ModelRaw:              rec.Model,
+			ModelNormalized:       normalized,
+			SourceAgent:           sourceAgent,
+			SourceProduct:         sourceProductForAgent(sourceAgent),
+			ObservabilityLevel:    observability,
+			ModelIsFallback:       rec.ModelIsFallback,
+			SourceTotalTokens:     rec.SourceTotalTokens,
+			TokenAccountingMethod: accountingMethod,
+			TimestampMs:           rec.TimestampMs,
+			SessionID:             rec.SessionID,
+			ProjectPath:           rec.ProjectPath,
+			MessageID:             rec.MessageID,
+			RequestID:             rec.RequestID,
+			SourceFile:            rec.SourceFile,
+			LineNumber:            rec.LineNumber,
+			RawSHA256:             rec.RawSHA256,
+			InputTokens:           rec.InputTokens,
+			OutputTokens:          rec.OutputTokens,
+			CacheCreationTokens:   rec.CacheCreationTokens,
+			CacheReadTokens:       rec.CacheReadTokens,
+			ReasoningTokens:       rec.ReasoningTokens,
+			TotalTokens:           rec.TotalTokens,
+			RecordedCostUSD:       rec.CostUSD,
+			RawUsageJSON:          rec.RawJSON,
+			ImportedAtMs:          nowMs,
+			UpdatedAtMs:           nowMs,
+		}
+
+		if event.TotalTokens == 0 {
+			event.TotalTokens = event.TotalTokensComputed()
+		}
+		applyTimingFields(event, rec)
+
+		result, err := database.UpsertEvent(event)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: insert error: %v\n", err)
+			continue
+		}
+		switch result {
+		case "inserted":
+			added++
+		case "updated":
+			updated++
+		default:
+			skipped++
+		}
+	}
+	return added, updated, skipped
+}
+
+func sourceProductForAgent(agent string) string {
+	switch agent {
+	case "claude":
+		return "claude-code"
+	case "codex":
+		return "codex-cli"
+	case "copilot":
+		return "copilot-otel"
+	case "qwen":
+		return "qwen-cli"
+	default:
+		return agent
+	}
+}
+
+func defaultObservability(agent string) string {
+	switch agent {
+	case "claude", "codex", "copilot":
+		return "full"
+	default:
+		return "unknown"
+	}
+}
+
+func defaultAccountingMethod(agent string) string {
+	switch agent {
+	case "claude":
+		return model.AccClaudeUsageSum
+	default:
+		return ""
+	}
 }
 
 func applyTimingFields(event *model.UsageEvent, rec *fingerprint.ParsedRecord) {

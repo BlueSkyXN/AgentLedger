@@ -219,7 +219,7 @@ session=<session-id>
 
 | Agent | 默认路径 | 解析格式 | 说明 |
 |---|---|---|---|
-| Claude Code | `~/.claude` | JSONL | 读取带有 `usage` 或 `message.usage` 的 assistant 消息。 |
+| Claude Code | `~/.config/claude/projects`, `~/.claude/projects` | JSONL | 读取带有 `message.usage` 的 assistant 消息；旧配置写 `~/.claude` 时会自动展开到 `projects`。 |
 | Codex | `~/.codex` | JSONL | 读取 token count 记录；存在 `last_token_usage` 时优先使用。 |
 | Gemini CLI | `~/.gemini` | JSON / JSONL | 读取 `usageMetadata`。 |
 | Qwen | `~/.qwen` | JSONL | 读取 `usage`。 |
@@ -248,16 +248,16 @@ older_than_days = 30
 purge_after_days = 90
 
 [reports]
-timezone = "UTC"
+timezone = "Local"
 currency = "USD"
 
 [agents.claude]
 enabled = true
-paths = ["~/.claude"]
+paths = ["~/.config/claude/projects", "~/.claude/projects"]
 
 [agents.codex]
 enabled = true
-paths = ["~/.codex"]
+paths = ["~/.codex/sessions"]
 
 [agents.gemini]
 enabled = true
@@ -279,7 +279,7 @@ paths = ["~/.qwen"]
 - Config: `<data-dir>/config.toml`
 - Database: 默认 `<data-dir>/agent-ledger.db`，也可通过 `[database].path` 修改
 
-当前 `[cleanup]`、`[reports].timezone`、`[reports].currency` 和 `[privacy].redact_paths_on_export` 仍是配置占位；现有命令尚未实现 cleanup、timezone 转换、currency 转换或 export redaction。
+当前 `[reports].timezone` 已用于 daily / weekly / monthly 报表分桶和 `--since` / `--until` 日期过滤；支持 `Local`、`UTC`、固定偏移如 `+08:00`，以及 Go 可加载的 IANA 时区如 `Asia/Shanghai`。`[cleanup]`、`[reports].currency` 和 `[privacy].redact_paths_on_export` 仍是配置占位；现有命令尚未实现 cleanup、currency 转换或 export redaction。
 
 ## 文档
 

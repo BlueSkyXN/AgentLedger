@@ -11,12 +11,19 @@ type Adapter interface {
 	ParseFile(path string) ([]*fingerprint.ParsedRecord, error)
 }
 
+// RecordPostProcessor can normalize or deduplicate records after all files for
+// an adapter have been parsed.
+type RecordPostProcessor interface {
+	PostProcessRecords(records []*fingerprint.ParsedRecord) []*fingerprint.ParsedRecord
+}
+
 // AllAdapters returns all available adapters
 func AllAdapters() []Adapter {
 	return []Adapter{
 		NewClaudeAdapter(),
 		NewCodexAdapter(),
 		NewGeminiAdapter(),
+		NewCopilotAdapter(),
 		NewQwenAdapter(),
 	}
 }

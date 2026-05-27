@@ -3,6 +3,7 @@ package analytics
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -13,6 +14,7 @@ type Filters struct {
 	Provider string
 	Model    string
 	Session  string
+	Timezone string
 }
 
 type Summary struct {
@@ -147,11 +149,11 @@ func BuildTimeseries(conn *sql.DB, bucket string, filters Filters) ([]MetricRow,
 	var labelExpr string
 	switch bucket {
 	case "daily", "":
-		labelExpr = "date(timestamp_ms/1000, 'unixepoch')"
+		labelExpr = timeLabelExpr("date", "%Y-%m-%d", filters.Timezone)
 	case "weekly":
-		labelExpr = "strftime('%Y-W%W', timestamp_ms/1000, 'unixepoch')"
+		labelExpr = timeLabelExpr("strftime", "%Y-W%W", filters.Timezone)
 	case "monthly":
-		labelExpr = "strftime('%Y-%m', timestamp_ms/1000, 'unixepoch')"
+		labelExpr = timeLabelExpr("strftime", "%Y-%m", filters.Timezone)
 	default:
 		return nil, fmt.Errorf("unsupported bucket %q", bucket)
 	}
@@ -283,11 +285,11 @@ func groupedMetricQuery(labelExpr string) string {
 func addFilters(query string, args *[]any, filters Filters, timestampExpr string) string {
 	if filters.Since != "" {
 		query += fmt.Sprintf(" AND %s >= ?", timestampExpr)
-		*args = append(*args, dateStartMillis(filters.Since))
+		*args = append(*args, dateStartMillis(filters.Since, filters.Timezone))
 	}
 	if filters.Until != "" {
 		query += fmt.Sprintf(" AND %s < ?", timestampExpr)
-		*args = append(*args, dateAfterMillis(filters.Until))
+		*args = append(*args, dateAfterMillis(filters.Until, filters.Timezone))
 	}
 	if filters.Channel != "" {
 		query += " AND channel = ?"
@@ -428,20 +430,106 @@ func distinctStrings(conn *sql.DB, expr string) ([]string, error) {
 	return values, rows.Err()
 }
 
-func dateStartMillis(value string) int64 {
+func dateStartMillis(value, timezone string) int64 {
 	parsed, err := time.Parse("2006-01-02", value)
 	if err != nil {
 		return 0
 	}
-	return parsed.UTC().UnixMilli()
+	loc := reportTimezoneLocation(timezone)
+	localDate := time.Date(parsed.Year(), parsed.Month(), parsed.Day(), 0, 0, 0, 0, loc)
+	return localDate.UTC().UnixMilli()
 }
 
-func dateAfterMillis(value string) int64 {
+func dateAfterMillis(value, timezone string) int64 {
 	parsed, err := time.Parse("2006-01-02", value)
 	if err != nil {
 		return 0
 	}
-	return parsed.AddDate(0, 0, 1).UTC().UnixMilli()
+	loc := reportTimezoneLocation(timezone)
+	localDate := time.Date(parsed.Year(), parsed.Month(), parsed.Day(), 0, 0, 0, 0, loc)
+	return localDate.AddDate(0, 0, 1).UTC().UnixMilli()
+}
+
+func timeLabelExpr(fn, format, timezone string) string {
+	modifier := sqliteTimezoneModifier(timezone)
+	if fn == "date" {
+		if modifier == "" {
+			return "date(timestamp_ms/1000, 'unixepoch')"
+		}
+		return fmt.Sprintf("date(timestamp_ms/1000, 'unixepoch', '%s')", modifier)
+	}
+	if modifier == "" {
+		return fmt.Sprintf("strftime('%s', timestamp_ms/1000, 'unixepoch')", format)
+	}
+	return fmt.Sprintf("strftime('%s', timestamp_ms/1000, 'unixepoch', '%s')", format, modifier)
+}
+
+func sqliteTimezoneModifier(timezone string) string {
+	timezone = strings.TrimSpace(timezone)
+	if timezone == "" || strings.EqualFold(timezone, "UTC") {
+		return ""
+	}
+	if strings.EqualFold(timezone, "Local") {
+		return "localtime"
+	}
+	if modifier, ok := fixedOffsetModifier(timezone); ok {
+		return modifier
+	}
+	loc := reportTimezoneLocation(timezone)
+	if loc == time.UTC {
+		return ""
+	}
+	_, offset := time.Now().In(loc).Zone()
+	return offsetModifier(offset)
+}
+
+func reportTimezoneLocation(timezone string) *time.Location {
+	timezone = strings.TrimSpace(timezone)
+	if timezone == "" || strings.EqualFold(timezone, "UTC") {
+		return time.UTC
+	}
+	if strings.EqualFold(timezone, "Local") {
+		return time.Local
+	}
+	if modifier, ok := fixedOffsetModifier(timezone); ok {
+		return time.FixedZone(timezone, modifierSeconds(modifier))
+	}
+	loc, err := time.LoadLocation(timezone)
+	if err != nil {
+		return time.UTC
+	}
+	return loc
+}
+
+func fixedOffsetModifier(value string) (string, bool) {
+	if len(value) != 6 || (value[0] != '+' && value[0] != '-') || value[3] != ':' {
+		return "", false
+	}
+	if value[1] < '0' || value[1] > '9' || value[2] < '0' || value[2] > '9' || value[4] < '0' || value[4] > '9' || value[5] < '0' || value[5] > '9' {
+		return "", false
+	}
+	return value, true
+}
+
+func modifierSeconds(modifier string) int {
+	sign := 1
+	if modifier[0] == '-' {
+		sign = -1
+	}
+	hours := int(modifier[1]-'0')*10 + int(modifier[2]-'0')
+	minutes := int(modifier[4]-'0')*10 + int(modifier[5]-'0')
+	return sign * ((hours * 3600) + (minutes * 60))
+}
+
+func offsetModifier(offsetSeconds int) string {
+	sign := "+"
+	if offsetSeconds < 0 {
+		sign = "-"
+		offsetSeconds = -offsetSeconds
+	}
+	hours := offsetSeconds / 3600
+	minutes := (offsetSeconds % 3600) / 60
+	return fmt.Sprintf("%s%02d:%02d", sign, hours, minutes)
 }
 
 func formatMillis(ms int64) string {

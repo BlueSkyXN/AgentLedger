@@ -69,6 +69,34 @@ func TestBuildTimeseriesBreakdownAndFilters(t *testing.T) {
 	}
 }
 
+func TestBuildTimeseriesUsesReportTimezone(t *testing.T) {
+	database, err := db.Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	lateUTC := time.Date(2026, 5, 1, 23, 30, 0, 0, time.UTC).UnixMilli()
+	earlyUTC := time.Date(2026, 5, 2, 0, 30, 0, 0, time.UTC).UnixMilli()
+	_, err = database.Conn().Exec(`INSERT INTO usage_events (
+		event_id, dedupe_key, dedupe_strategy, channel, provider, model_raw, model_normalized, timestamp_ms,
+		input_tokens, output_tokens, total_tokens, imported_at_ms, updated_at_ms
+	) VALUES
+		('tz-a', 'tz-a', 'message_id', 'claude', 'anthropic', 'claude-sonnet', 'claude-sonnet', ?, 10, 5, 15, 1, 1),
+		('tz-b', 'tz-b', 'message_id', 'claude', 'anthropic', 'claude-sonnet', 'claude-sonnet', ?, 20, 8, 28, 1, 1)`,
+		lateUTC, earlyUTC)
+	if err != nil {
+		t.Fatalf("insert timezone events: %v", err)
+	}
+
+	series, err := BuildTimeseries(database.Conn(), "daily", Filters{Channel: "claude", Timezone: "+08:00"})
+	if err != nil {
+		t.Fatalf("timeseries: %v", err)
+	}
+	if len(series) != 1 || series[0].Label != "2026-05-02" || series[0].TotalTokens != 43 {
+		t.Fatalf("unexpected timezone series: %+v", series)
+	}
+}
+
 func TestSessionsImportRunsEventsSlowAndOptions(t *testing.T) {
 	database := testDB(t)
 	sessions, err := BuildSessions(database.Conn(), Filters{}, 10)
