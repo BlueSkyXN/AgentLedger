@@ -70,7 +70,7 @@ agent-ledger serve
 默认地址：
 
 ```text
-http://127.0.0.1:8765
+http://127.0.0.1:54217
 ```
 
 面板提供 Overview、趋势、渠道 / provider、模型、session、慢请求、导入 / 设置等只读页面。

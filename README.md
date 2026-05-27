@@ -167,13 +167,14 @@ agent-ledger report slow --sort ttft_ms --limit 20
 
 ```bash
 agent-ledger serve
-# http://127.0.0.1:8765
+# 默认监听地址：127.0.0.1:54217
 ```
 
 默认只允许 loopback 地址。可用参数：
 
 ```bash
-agent-ledger serve --addr 127.0.0.1:8765 --static-dir web/dist
+# agent-ledger serve (默认监听 127.0.0.1:54217)
+agent-ledger serve --addr 127.0.0.1:54217 --static-dir web/dist
 ```
 
 面板 API 挂在 `/api/v1/*`，前端不直接读取 SQLite。`web/dist` 存在时会托管 React 面板；如果尚未构建，会显示内置 placeholder，并提示运行：

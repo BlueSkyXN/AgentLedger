@@ -66,7 +66,7 @@ agent-ledger vacuum
 agent-ledger serve
 ```
 
-用途：启动本机只读 Web 面板和 `/api/v1/*` JSON API。当前版本默认监听 `127.0.0.1:8765`，并且只允许 loopback host。
+用途：启动本机只读 Web 面板和 `/api/v1/*` JSON API。当前版本默认监听 `127.0.0.1:54217`（高位端口），并且只允许 loopback host。
 
 隐私边界：
 

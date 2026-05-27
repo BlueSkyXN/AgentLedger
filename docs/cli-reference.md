@@ -169,14 +169,14 @@ VACUUM;
 
 ```bash
 agent-ledger serve
-agent-ledger serve --addr 127.0.0.1:8765 --static-dir web/dist
+agent-ledger serve --addr 127.0.0.1:54217 --static-dir web/dist
 ```
 
 Flags:
 
 | Flag | 说明 |
 |---|---|
-| `--addr string` | 本地监听地址，默认 `127.0.0.1:8765`。当前版本只允许 loopback host。 |
+| `--addr string` | 本地监听地址，默认 `127.0.0.1:54217`（高位端口）。当前版本只允许 loopback host。 |
 | `--static-dir string` | React 面板构建目录，默认 `web/dist`。不存在时使用内置 placeholder。 |
 
 当前 `serve` 只提供只读能力，不暴露 import、merge、vacuum 或配置修改 API。

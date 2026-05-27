@@ -35,14 +35,20 @@ var serveCmd = &cobra.Command{
 		defer database.Close()
 
 		server := control.NewServer(cfg, database, control.Options{StaticDir: serveStaticDir})
-		fmt.Printf("AgentLedger panel: http://%s\n", serveAddr)
+		listener, err := net.Listen("tcp", serveAddr)
+		if err != nil {
+			return fmt.Errorf("failed to bind %q: %w", serveAddr, err)
+		}
+		defer listener.Close()
+
+		fmt.Printf("AgentLedger panel: http://%s\n", listener.Addr().String())
 		fmt.Printf("Panel assets: %s\n", server.AssetMode())
-		return http.ListenAndServe(serveAddr, server.Handler())
+		return http.Serve(listener, server.Handler())
 	},
 }
 
 func init() {
-	serveCmd.Flags().StringVar(&serveAddr, "addr", "127.0.0.1:8765", "Loopback address for the local web panel")
+	serveCmd.Flags().StringVar(&serveAddr, "addr", "127.0.0.1:54217", "Loopback address for the local web panel")
 	serveCmd.Flags().StringVar(&serveStaticDir, "static-dir", "web/dist", "Built web panel directory")
 }
 

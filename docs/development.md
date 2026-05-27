@@ -28,7 +28,7 @@ go vet ./...
 gofmt -l .
 go run . --help
 go run . report monthly --help
-go run . serve --addr 127.0.0.1:8765
+go run . serve
 ```
 
 构建本地二进制：
