@@ -93,16 +93,16 @@ _foreign_keys=ON
 | `model_raw` | `TEXT` | nullable | 日志中的原始模型名。 |
 | `model_normalized` | `TEXT` | nullable | 归一化后的模型名。 |
 | `source_agent` | `TEXT` | nullable | 解析来源 agent，通常与 `channel` 一致。 |
-| `source_product` | `TEXT` | nullable | 更具体的来源形态，例如 `codex-cli`、`copilot-otel`。 |
-| `observability_level` | `TEXT` | nullable | 来源完整度，例如 `full`、`aggregate`、`inferred`。 |
+| `source_product` | `TEXT` | nullable | 更具体的来源形态，例如 `codex-cli`、`copilot-otel`、`copilot-session-state`。 |
+| `observability_level` | `TEXT` | nullable | 来源完整度，例如 `full`、`session_summary`、`inferred`。 |
 | `model_is_fallback` | `INTEGER` | `NOT NULL DEFAULT 0` | 模型名是否来自 fallback。 |
 | `source_total_tokens` | `INTEGER` | nullable | 源日志中的 raw cumulative / envelope total，用于排查，不直接求和。 |
-| `raw_input_tokens` | `INTEGER` | nullable | source 原始 input token；Codex 中包含 cached input。 |
-| `token_accounting_method` | `TEXT` | nullable | token envelope 解析方法，例如 `codex_last_token_usage`。 |
-| `accounting_profile` | `TEXT` | nullable | 统计口径，例如 Codex 的 `ledger` 或 `ccusage_compatible`。 |
+| `raw_input_tokens` | `INTEGER` | nullable | source 原始 input token；Codex 和 Copilot 中可能包含 cached/cache read input。 |
+| `token_accounting_method` | `TEXT` | nullable | token envelope 解析方法，例如 `codex_last_token_usage`、`copilot_session_model_metrics`。 |
+| `accounting_profile` | `TEXT` | nullable | 统计口径，例如 Codex 的 `ledger` / `ccusage_compatible`，或 Copilot 的 `input_includes_cache_read`。 |
 | `timestamp_ms` | `INTEGER` | `NOT NULL` | 事件时间戳，毫秒。 |
 | `session_id` | `TEXT` | nullable | 会话 ID。 |
-| `session_path_id` | `TEXT` | nullable | 相对源路径的 session ID；Codex 用于对齐 ccusage 的 session 粒度。 |
+| `session_path_id` | `TEXT` | nullable | 相对源路径的 session ID；Codex 用于对齐 ccusage 的 session 粒度，Copilot session-state 使用目录 ID。 |
 | `turn_id` | `TEXT` | nullable | 明确存在时的 turn ID；Codex 目前主要来自 `task_complete`。 |
 | `project_path` | `TEXT` | nullable | adapter 能解析到的项目路径。 |
 | `message_id` | `TEXT` | nullable | 日志中的 message id。 |
@@ -123,7 +123,7 @@ _foreign_keys=ON
 | `ttft_ms` | `INTEGER` | nullable | time to first token。 |
 | `output_duration_ms` | `INTEGER` | nullable | 从首 token 到完成的输出耗时。 |
 | `output_tps` | `REAL` | nullable | 输出 TPS。 |
-| `recorded_cost_usd` | `REAL` | nullable | 日志中已有的 cost；v2 不计算价格。 |
+| `recorded_cost_usd` | `REAL` | nullable | 来源明确给出的 USD cost；v2 不计算价格，Copilot `requests.cost` 不写入此列。 |
 | `raw_usage_json` | `TEXT` | nullable | 解析到的原始 usage envelope。 |
 | `imported_at_ms` | `INTEGER` | `NOT NULL` | 首次导入时间。 |
 | `updated_at_ms` | `INTEGER` | `NOT NULL` | 最近更新时间。 |

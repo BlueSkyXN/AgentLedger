@@ -1,6 +1,7 @@
 package adapters
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -31,6 +32,12 @@ func TestCopilotCacheReadSubtractsInput(t *testing.T) {
 	}
 	if rec.TokenAccountingMethod != model.AccCopilotOtelParts || rec.ObservabilityLevel != "full" {
 		t.Fatalf("unexpected method=%s observability=%s", rec.TokenAccountingMethod, rec.ObservabilityLevel)
+	}
+	if rec.SourceProduct != "copilot-otel" || rec.AccountingProfile != "input_includes_cache_read" {
+		t.Fatalf("unexpected source_product=%s accounting_profile=%s", rec.SourceProduct, rec.AccountingProfile)
+	}
+	if rec.RawInputTokens == nil || *rec.RawInputTokens != 19452 {
+		t.Fatalf("expected raw input 19452, got %v", rec.RawInputTokens)
 	}
 	if rec.SourceTotalTokens == nil || *rec.SourceTotalTokens != 20652 {
 		t.Fatalf("expected source total 20652, got %v", rec.SourceTotalTokens)
@@ -105,24 +112,47 @@ func TestCopilotSessionShutdownModelMetrics(t *testing.T) {
 		if rec.SessionID != "session-123" || rec.SourceProduct != "copilot-session-state" {
 			t.Fatalf("unexpected session/source model=%s session=%s product=%s", rec.Model, rec.SessionID, rec.SourceProduct)
 		}
-		if rec.TokenAccountingMethod != model.AccCopilotSessionMetrics || rec.ObservabilityLevel != "aggregate" {
+		if rec.TokenAccountingMethod != model.AccCopilotSessionMetrics || rec.ObservabilityLevel != "session_summary" {
 			t.Fatalf("unexpected method=%s observability=%s", rec.TokenAccountingMethod, rec.ObservabilityLevel)
+		}
+		if rec.AccountingProfile != "input_includes_cache_read" || rec.SessionPathID != "session-123" {
+			t.Fatalf("unexpected accounting_profile=%s session_path_id=%s", rec.AccountingProfile, rec.SessionPathID)
 		}
 		if rec.DedupeID == "" || rec.MessageID == "" || rec.RequestID == "" {
 			t.Fatalf("expected stable identity for model=%s", rec.Model)
 		}
-		if rec.SourceTotalTokens == nil || *rec.SourceTotalTokens != rec.TotalTokens {
-			t.Fatalf("expected source total to match total for model=%s", rec.Model)
+		if rec.SourceTotalTokens != nil {
+			t.Fatalf("session metric has no source total; got %v", rec.SourceTotalTokens)
 		}
 		if rec.RawJSON == "" {
 			t.Fatalf("expected raw usage envelope for model=%s", rec.Model)
 		}
+		if rec.CostUSD != nil {
+			t.Fatalf("requests.cost is not USD and should not be recorded as CostUSD: %v", rec.CostUSD)
+		}
+		var raw map[string]interface{}
+		if err := json.Unmarshal([]byte(rec.RawJSON), &raw); err != nil {
+			t.Fatalf("raw json should be valid for model=%s: %v", rec.Model, err)
+		}
+		shutdownID, _ := raw["shutdown_id"].(string)
+		sessionPathID, _ := raw["session_path_id"].(string)
+		if shutdownID == "" || sessionPathID != "session-123" {
+			t.Fatalf("raw envelope missing shutdown/session ids: %v", raw)
+		}
+		if requests, ok := raw["requests"].(map[string]interface{}); !ok || requests["cost"] == nil {
+			t.Fatalf("requests.cost should remain available in raw envelope: %v", raw)
+		}
 		if rec.Model == "gpt-5.4" {
-			if rec.InputTokens != 1000 || rec.OutputTokens != 200 || rec.CacheReadTokens != 300 || rec.CacheCreationTokens != 40 || rec.ReasoningTokens != 50 || rec.TotalTokens != 1590 {
+			if rec.InputTokens != 700 || rec.OutputTokens != 200 || rec.CacheReadTokens != 300 || rec.CacheCreationTokens != 40 || rec.ReasoningTokens != 50 || rec.TotalTokens != 1290 {
 				t.Fatalf("unexpected gpt tokens input=%d output=%d cacheRead=%d cacheWrite=%d reasoning=%d total=%d", rec.InputTokens, rec.OutputTokens, rec.CacheReadTokens, rec.CacheCreationTokens, rec.ReasoningTokens, rec.TotalTokens)
 			}
-			if rec.CostUSD == nil || *rec.CostUSD != 0.0123 {
-				t.Fatalf("unexpected cost: %v", rec.CostUSD)
+			if rec.RawInputTokens == nil || *rec.RawInputTokens != 1000 {
+				t.Fatalf("expected raw gpt input 1000, got %v", rec.RawInputTokens)
+			}
+		}
+		if rec.Model == "claude-opus-4.6" {
+			if rec.InputTokens != 7 || rec.OutputTokens != 2 || rec.CacheReadTokens != 3 || rec.CacheCreationTokens != 4 || rec.ReasoningTokens != 0 || rec.TotalTokens != 16 {
+				t.Fatalf("unexpected claude tokens input=%d output=%d cacheRead=%d cacheWrite=%d reasoning=%d total=%d", rec.InputTokens, rec.OutputTokens, rec.CacheReadTokens, rec.CacheCreationTokens, rec.ReasoningTokens, rec.TotalTokens)
 			}
 		}
 	}
@@ -151,6 +181,95 @@ func TestCopilotSessionShutdownFallsBackToDirectorySessionID(t *testing.T) {
 	}
 	if records[0].SessionID != "session-from-dir" {
 		t.Fatalf("expected directory session id, got %q", records[0].SessionID)
+	}
+}
+
+func TestCopilotSessionShutdownKeepsMultipleShutdownSegments(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "session-state", "session-123")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir fixture: %v", err)
+	}
+	path := filepath.Join(dir, "events.jsonl")
+	data := "" +
+		`{"type":"session.shutdown","id":"shutdown-1","timestamp":"2026-01-01T00:00:00Z","data":{"sessionId":"session-123","modelMetrics":{"gpt-5.4":{"usage":{"inputTokens":10,"outputTokens":2,"cacheReadTokens":3,"cacheWriteTokens":4,"reasoningTokens":5},"requests":{"count":1}}}}}` + "\n" +
+		`{"type":"session.resume","timestamp":"2026-01-01T00:01:00Z","data":{"sessionId":"session-123"}}` + "\n" +
+		`{"type":"session.shutdown","id":"shutdown-2","timestamp":"2026-01-01T00:02:00Z","data":{"sessionId":"session-123","modelMetrics":{"gpt-5.4":{"usage":{"inputTokens":20,"outputTokens":3,"cacheReadTokens":4,"cacheWriteTokens":5,"reasoningTokens":6},"requests":{"count":1}}}}}` + "\n"
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	records, err := NewCopilotAdapter().ParseFile(path)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("expected 2 shutdown segment records, got %d", len(records))
+	}
+	if records[0].DedupeID == records[1].DedupeID {
+		t.Fatalf("multiple shutdown segments for the same model must not collapse: %s", records[0].DedupeID)
+	}
+	var total int64
+	for _, rec := range records {
+		total += rec.TotalTokens
+	}
+	if total != 55 {
+		t.Fatalf("unexpected segment total sum: %d", total)
+	}
+}
+
+func TestCopilotSessionContextCapturesProjectPath(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "session-state", "session-from-dir")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir fixture: %v", err)
+	}
+	path := filepath.Join(dir, "events.jsonl")
+	data := "" +
+		`{"type":"session.start","timestamp":"2026-01-01T00:00:00Z","data":{"sessionId":"session-real","context":{"gitRoot":"/repo/from/start","cwd":"/repo/cwd"}}}` + "\n" +
+		`{"type":"session.context_changed","timestamp":"2026-01-01T00:01:00Z","data":{"gitRoot":"/repo/from/context-change"}}` + "\n" +
+		`{"type":"session.shutdown","id":"shutdown-1","timestamp":"2026-01-01T00:02:00Z","data":{"modelMetrics":{"gpt-5.4":{"usage":{"inputTokens":10,"outputTokens":2,"cacheReadTokens":3,"cacheWriteTokens":4,"reasoningTokens":5},"requests":{"count":1}}}}}` + "\n"
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	records, err := NewCopilotAdapter().ParseFile(path)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(records))
+	}
+	if records[0].SessionID != "session-real" || records[0].SessionPathID != "session-from-dir" {
+		t.Fatalf("unexpected session ids session=%s path=%s", records[0].SessionID, records[0].SessionPathID)
+	}
+	if records[0].ProjectPath != "/repo/from/context-change" {
+		t.Fatalf("expected latest project context, got %q", records[0].ProjectPath)
+	}
+}
+
+func TestCopilotSessionCacheReadClampsToRawInput(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "session-state", "session-123")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir fixture: %v", err)
+	}
+	path := filepath.Join(dir, "events.jsonl")
+	line := `{"type":"session.shutdown","id":"shutdown-1","timestamp":"2026-01-01T00:00:00Z","data":{"modelMetrics":{"gpt-5.4":{"usage":{"inputTokens":10,"outputTokens":2,"cacheReadTokens":50,"cacheWriteTokens":4,"reasoningTokens":5},"requests":{"count":1}}}}}`
+	if err := os.WriteFile(path, []byte(line), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	records, err := NewCopilotAdapter().ParseFile(path)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(records))
+	}
+	rec := records[0]
+	if rec.InputTokens != 0 || rec.CacheReadTokens != 10 || rec.TotalTokens != 21 {
+		t.Fatalf("unexpected clamp result input=%d cacheRead=%d total=%d", rec.InputTokens, rec.CacheReadTokens, rec.TotalTokens)
+	}
+	if rec.RawInputTokens == nil || *rec.RawInputTokens != 10 {
+		t.Fatalf("expected raw input 10, got %v", rec.RawInputTokens)
 	}
 }
 

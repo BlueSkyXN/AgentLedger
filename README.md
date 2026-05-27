@@ -229,7 +229,7 @@ session=<session-id>
 |---|---|---|---|
 | Claude Code | `~/.config/claude/projects`, `~/.claude/projects` | JSONL | 读取带有 `message.usage` 的 assistant 消息；旧配置写 `~/.claude` 时会自动展开到 `projects`。 |
 | Codex | `~/.codex/sessions` | JSONL | 读取 token count 记录；存在 `last_token_usage` 时优先使用；配置写 `~/.codex` 时会自动收敛到 `sessions`。 |
-| GitHub Copilot | `~/.copilot/otel`, `~/.copilot/session-state` | JSONL | 优先读取 OTel `gen_ai.usage.*`；没有 OTel 文件时回退到 `session.shutdown.data.modelMetrics` 的 session+model 汇总。 |
+| GitHub Copilot | `~/.copilot/otel`, `~/.copilot/session-state` | JSONL | 优先读取 OTel `gen_ai.usage.*`；没有 OTel 文件时回退到每条非空 `session.shutdown.data.modelMetrics` 的 segment+model 汇总。Copilot input 会拆成 `raw_input_tokens`、非缓存 `input_tokens` 和 `cache_read_tokens`。 |
 | Gemini CLI | `~/.gemini` | JSON / JSONL | 读取 `usageMetadata`。 |
 | Qwen | `~/.qwen` | JSONL | 读取 `usage`。 |
 

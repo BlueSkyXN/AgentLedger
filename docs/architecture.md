@@ -129,7 +129,7 @@ output_tps = output_tokens / (output_duration_ms / 1000.0)
 |---|---|---|---|
 | Claude | `~/.config/claude/projects`, `~/.claude/projects` | `.jsonl` | assistant message, `message.usage`, `message.id`, `sessionId`, `requestId`, project path。 |
 | Codex | `~/.codex/sessions` | `.jsonl` | `usage`, `response.usage`, `payload.info.last_token_usage`, `payload.info.total_token_usage`。 |
-| GitHub Copilot | `~/.copilot/otel`, `~/.copilot/session-state` | `.jsonl` | 优先 OTel `gen_ai.usage.*`；没有 OTel 文件时回退到 `session.shutdown.data.modelMetrics` session+model 汇总。 |
+| GitHub Copilot | `~/.copilot/otel`, `~/.copilot/session-state` | `.jsonl` | 优先 OTel `gen_ai.usage.*`；没有 OTel 文件时回退到每条非空 `session.shutdown.data.modelMetrics` segment+model 汇总，并把包含 cache read 的 source input 拆成 `raw_input_tokens`、非缓存 `input_tokens` 和 `cache_read_tokens`。 |
 | Gemini | `~/.gemini` | `.json`, `.jsonl` | `usageMetadata`, `promptTokenCount`, `candidatesTokenCount`, `totalTokenCount`。 |
 | Qwen | `~/.qwen` | `.jsonl` | `usage`, `message_id`, token fields。 |
 
