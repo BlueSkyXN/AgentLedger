@@ -139,6 +139,43 @@ func appendUniquePath(paths []string, path string) []string {
 	return append(paths, path)
 }
 
+type copilotSessionContext struct {
+	SessionID     string
+	SessionPathID string
+	ProjectPath   string
+}
+
+func (ctx *copilotSessionContext) observe(obj map[string]interface{}, path string) {
+	if ctx.SessionPathID == "" {
+		ctx.SessionPathID = copilotSessionIDFromPath(path)
+	}
+	data := getMap(obj, "data")
+	if data == nil {
+		return
+	}
+	switch getString(obj, "type") {
+	case "session.start", "session.resume":
+		if sessionID := getString(data, "sessionId"); sessionID != "" {
+			ctx.SessionID = sessionID
+		}
+		ctx.observeContext(getMap(data, "context"))
+	case "session.context_changed":
+		ctx.observeContext(data)
+	}
+	if ctx.SessionID == "" {
+		ctx.SessionID = ctx.SessionPathID
+	}
+}
+
+func (ctx *copilotSessionContext) observeContext(context map[string]interface{}) {
+	if context == nil {
+		return
+	}
+	if projectPath := firstNonEmpty(getString(context, "gitRoot"), getString(context, "cwd")); projectPath != "" {
+		ctx.ProjectPath = projectPath
+	}
+}
+
 func (a *CopilotAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -147,6 +184,7 @@ func (a *CopilotAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, er
 	defer f.Close()
 
 	var candidates []copilotCandidate
+	sessionContext := copilotSessionContext{SessionPathID: copilotSessionIDFromPath(path)}
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 10*1024*1024), 10*1024*1024)
 	lineNum := 0
@@ -162,11 +200,13 @@ func (a *CopilotAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, er
 		}
 		rawJSON, _ := json.Marshal(obj)
 		rawHash := sha256Hex(rawJSON)
-		if sessionCandidates := copilotSessionMetricCandidatesFromObject(obj, path, lineNum); len(sessionCandidates) > 0 {
+		if sessionCandidates := copilotSessionMetricCandidatesFromObject(obj, path, lineNum, sessionContext); len(sessionCandidates) > 0 {
 			candidates = append(candidates, sessionCandidates...)
+			sessionContext.observe(obj, path)
 			continue
 		}
 		candidates = append(candidates, copilotCandidatesFromObject(obj, string(rawJSON), rawHash, path, lineNum)...)
+		sessionContext.observe(obj, path)
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err
@@ -188,7 +228,7 @@ type copilotCandidate struct {
 	key       string
 }
 
-func copilotSessionMetricCandidatesFromObject(obj map[string]interface{}, path string, lineNum int) []copilotCandidate {
+func copilotSessionMetricCandidatesFromObject(obj map[string]interface{}, path string, lineNum int, context copilotSessionContext) []copilotCandidate {
 	if getString(obj, "type") != "session.shutdown" {
 		return nil
 	}
@@ -201,7 +241,9 @@ func copilotSessionMetricCandidatesFromObject(obj map[string]interface{}, path s
 		return nil
 	}
 
-	sessionID := firstNonEmpty(getString(data, "sessionId"), copilotSessionIDFromPath(path))
+	sessionPathID := firstNonEmpty(context.SessionPathID, copilotSessionIDFromPath(path))
+	sessionID := firstNonEmpty(getString(data, "sessionId"), context.SessionID, sessionPathID)
+	shutdownID := firstNonEmpty(getString(obj, "id"), fmt.Sprintf("%s:%d", path, lineNum))
 	timestampMs := parseTimestamp(obj["timestamp"])
 	if timestampMs == 0 {
 		timestampMs = parseTimestamp(data["sessionStartTime"])
@@ -217,33 +259,34 @@ func copilotSessionMetricCandidatesFromObject(obj map[string]interface{}, path s
 		if usage == nil {
 			continue
 		}
-		input, _ := firstInt64Field(usage, "inputTokens", "input_tokens")
+		rawInput, hasInput := firstInt64Field(usage, "inputTokens", "input_tokens")
 		output, _ := firstInt64Field(usage, "outputTokens", "output_tokens")
-		cacheRead, _ := firstInt64Field(usage, "cacheReadTokens", "cache_read_tokens")
+		cacheRead, hasCacheRead := firstInt64Field(usage, "cacheReadTokens", "cache_read_tokens")
 		cacheWrite, _ := firstInt64Field(usage, "cacheWriteTokens", "cache_write_tokens", "cacheCreationTokens")
 		reasoning, _ := firstInt64Field(usage, "reasoningTokens", "reasoning_tokens")
+		input := rawInput
+		if hasInput && hasCacheRead {
+			cacheRead = minInt64(rawInput, cacheRead)
+			input = saturatingSub(rawInput, cacheRead)
+		}
 		total := input + output + cacheRead + cacheWrite + reasoning
 		if total == 0 {
 			continue
 		}
 
 		requests := getMap(metric, "requests")
-		var cost *float64
-		if requests != nil {
-			if value, ok := scalarFloat64(requests["cost"]); ok {
-				cost = &value
-			}
-		}
-		rawUsageJSON := copilotSessionMetricRawJSON(sessionID, modelName, usage, requests)
+		rawUsageJSON := copilotSessionMetricRawJSON(sessionID, sessionPathID, shutdownID, getString(obj, "timestamp"), modelName, usage, requests, data)
 		rawHash := sha256Hex([]byte(rawUsageJSON))
-		dedupeScope := firstNonEmpty(sessionID, getString(obj, "id"), fmt.Sprintf("%s:%d", path, lineNum))
-		dedupeID := fmt.Sprintf("copilot-session-state|%s|%s", dedupeScope, modelName)
+		dedupeScope := firstNonEmpty(sessionID, sessionPathID, path)
+		dedupeID := fmt.Sprintf("copilot-session-state|%s|%s|%s", dedupeScope, shutdownID, modelName)
 		record := &fingerprint.ParsedRecord{
 			Agent:                 "copilot",
 			Provider:              "github",
 			Model:                 modelName,
 			TimestampMs:           timestampMs,
 			SessionID:             sessionID,
+			SessionPathID:         sessionPathID,
+			ProjectPath:           context.ProjectPath,
 			DedupeID:              dedupeID,
 			MessageID:             dedupeID,
 			RequestID:             dedupeID,
@@ -253,15 +296,17 @@ func copilotSessionMetricCandidatesFromObject(obj map[string]interface{}, path s
 			CacheReadTokens:       cacheRead,
 			ReasoningTokens:       reasoning,
 			TotalTokens:           total,
-			CostUSD:               cost,
-			SourceTotalTokens:     int64Ptr(total),
 			SourceProduct:         "copilot-session-state",
-			ObservabilityLevel:    "aggregate",
+			ObservabilityLevel:    "session_summary",
 			TokenAccountingMethod: ledgermodel.AccCopilotSessionMetrics,
+			AccountingProfile:     "input_includes_cache_read",
 			RawJSON:               rawUsageJSON,
 			SourceFile:            path,
 			LineNumber:            lineNum,
 			RawSHA256:             rawHash,
+		}
+		if hasInput {
+			record.RawInputTokens = int64Ptr(rawInput)
 		}
 		candidates = append(candidates, copilotCandidate{
 			record:    record,
@@ -312,12 +357,9 @@ func copilotCandidateFromAttrs(obj, attrs map[string]interface{}, rawJSON, rawHa
 	}
 
 	normalizedInput := rawInput
-	if cacheRead > 0 {
-		if cacheRead > rawInput {
-			normalizedInput = 0
-		} else {
-			normalizedInput = rawInput - cacheRead
-		}
+	if hasInput && hasCacheRead {
+		cacheRead = minInt64(rawInput, cacheRead)
+		normalizedInput = saturatingSub(rawInput, cacheRead)
 	}
 	computedTotal := normalizedInput + output + cacheRead + cacheCreation + reasoning
 	if computedTotal == 0 && hasSourceTotal {
@@ -368,8 +410,10 @@ func copilotCandidateFromAttrs(obj, attrs map[string]interface{}, rawJSON, rawHa
 		CacheReadTokens:       cacheRead,
 		ReasoningTokens:       reasoning,
 		TotalTokens:           computedTotal,
+		SourceProduct:         "copilot-otel",
 		ObservabilityLevel:    observability,
 		TokenAccountingMethod: accountingMethod,
+		AccountingProfile:     "input_includes_cache_read",
 		RawJSON:               rawJSON,
 		SourceFile:            path,
 		LineNumber:            lineNum,
@@ -377,6 +421,9 @@ func copilotCandidateFromAttrs(obj, attrs map[string]interface{}, rawJSON, rawHa
 	}
 	if hasSourceTotal {
 		record.SourceTotalTokens = int64Ptr(sourceTotal)
+	}
+	if hasInput {
+		record.RawInputTokens = int64Ptr(rawInput)
 	}
 	return copilotCandidate{
 		record:    record,
@@ -447,15 +494,23 @@ func copilotSessionIDFromPath(path string) string {
 	return ""
 }
 
-func copilotSessionMetricRawJSON(sessionID, modelName string, usage, requests map[string]interface{}) string {
+func copilotSessionMetricRawJSON(sessionID, sessionPathID, shutdownID, shutdownTimestamp, modelName string, usage, requests, shutdownData map[string]interface{}) string {
 	envelope := map[string]interface{}{
-		"source":     "session.shutdown.modelMetrics",
-		"session_id": sessionID,
-		"model":      modelName,
-		"usage":      usage,
+		"source":             "session.shutdown.modelMetrics",
+		"session_id":         sessionID,
+		"session_path_id":    sessionPathID,
+		"shutdown_id":        shutdownID,
+		"shutdown_timestamp": shutdownTimestamp,
+		"model":              modelName,
+		"usage":              usage,
 	}
 	if requests != nil {
 		envelope["requests"] = requests
+	}
+	for _, key := range []string{"totalPremiumRequests", "totalNanoAiu", "totalApiDurationMs", "sessionStartTime", "shutdownType"} {
+		if value, ok := shutdownData[key]; ok {
+			envelope[key] = value
+		}
 	}
 	data, err := json.Marshal(envelope)
 	if err != nil {
