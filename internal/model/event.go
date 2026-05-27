@@ -7,6 +7,7 @@ const (
 	AccCodexHeadlessUsage       = "codex_headless_usage"
 	AccCopilotOtelParts         = "copilot_otel_parts"
 	AccCopilotOtelTotalFallback = "copilot_otel_total_fallback"
+	AccCopilotSessionMetrics    = "copilot_session_model_metrics"
 )
 
 // UsageEvent is the v2 fact-table representation for one local agent usage event.
@@ -25,16 +26,20 @@ type UsageEvent struct {
 	ObservabilityLevel    string `json:"observability_level" db:"observability_level"`
 	ModelIsFallback       bool   `json:"model_is_fallback" db:"model_is_fallback"`
 	SourceTotalTokens     *int64 `json:"source_total_tokens" db:"source_total_tokens"`
+	RawInputTokens        *int64 `json:"raw_input_tokens" db:"raw_input_tokens"`
 	TokenAccountingMethod string `json:"token_accounting_method" db:"token_accounting_method"`
+	AccountingProfile     string `json:"accounting_profile" db:"accounting_profile"`
 
-	TimestampMs int64  `json:"timestamp_ms" db:"timestamp_ms"`
-	SessionID   string `json:"session_id" db:"session_id"`
-	ProjectPath string `json:"project_path" db:"project_path"`
-	MessageID   string `json:"message_id" db:"message_id"`
-	RequestID   string `json:"request_id" db:"request_id"`
-	SourceFile  string `json:"source_file" db:"source_file"`
-	LineNumber  int    `json:"line_number" db:"line_number"`
-	RawSHA256   string `json:"raw_sha256" db:"raw_sha256"`
+	TimestampMs   int64  `json:"timestamp_ms" db:"timestamp_ms"`
+	SessionID     string `json:"session_id" db:"session_id"`
+	SessionPathID string `json:"session_path_id" db:"session_path_id"`
+	TurnID        string `json:"turn_id" db:"turn_id"`
+	ProjectPath   string `json:"project_path" db:"project_path"`
+	MessageID     string `json:"message_id" db:"message_id"`
+	RequestID     string `json:"request_id" db:"request_id"`
+	SourceFile    string `json:"source_file" db:"source_file"`
+	LineNumber    int    `json:"line_number" db:"line_number"`
+	RawSHA256     string `json:"raw_sha256" db:"raw_sha256"`
 
 	InputTokens         int64 `json:"input_tokens" db:"input_tokens"`
 	OutputTokens        int64 `json:"output_tokens" db:"output_tokens"`

@@ -22,16 +22,121 @@ func (a *CopilotAdapter) Name() string { return "copilot" }
 
 func (a *CopilotAdapter) Discover(paths []string) ([]string, error) {
 	if len(paths) == 0 {
-		paths = []string{"~/.copilot/otel"}
+		paths = []string{"~/.copilot/otel", "~/.copilot/session-state"}
 	}
-	files, err := DiscoverFiles(paths, []string{".jsonl"})
+	groups := normalizeCopilotDiscoverPaths(paths)
+	if explicit := strings.TrimSpace(os.Getenv("COPILOT_OTEL_FILE_EXPORTER_PATH")); explicit != "" {
+		groups.otel = appendUniquePath(groups.otel, expandHome(explicit))
+	}
+
+	otelFiles, err := DiscoverFiles(groups.otel, []string{".jsonl"})
 	if err != nil {
 		return nil, err
 	}
-	if explicit := strings.TrimSpace(os.Getenv("COPILOT_OTEL_FILE_EXPORTER_PATH")); explicit != "" {
-		files = append(files, expandHome(explicit))
+	otherFiles, err := DiscoverFiles(groups.other, []string{".jsonl"})
+	if err != nil {
+		return nil, err
 	}
-	return uniqueExistingFiles(files), nil
+	if len(otelFiles) > 0 && len(groups.sessionState) > 0 {
+		files := append(otelFiles, otherFiles...)
+		return uniqueExistingFiles(filterCopilotDiscoverFiles(files)), nil
+	}
+
+	sessionFiles, err := DiscoverFiles(groups.sessionState, []string{".jsonl"})
+	if err != nil {
+		return nil, err
+	}
+	files := append(append(otelFiles, sessionFiles...), otherFiles...)
+	return uniqueExistingFiles(filterCopilotDiscoverFiles(files)), nil
+}
+
+type copilotDiscoverPaths struct {
+	otel         []string
+	sessionState []string
+	other        []string
+}
+
+func normalizeCopilotDiscoverPaths(paths []string) copilotDiscoverPaths {
+	var normalized copilotDiscoverPaths
+	for _, raw := range paths {
+		path := expandHome(raw)
+		cleaned := filepath.Clean(path)
+		switch {
+		case filepath.Base(cleaned) == ".copilot" || copilotHomeLikeDir(cleaned):
+			normalized.otel = appendUniquePath(normalized.otel, filepath.Join(cleaned, "otel"))
+			normalized.sessionState = appendUniquePath(normalized.sessionState, filepath.Join(cleaned, "session-state"))
+		case isCopilotSessionStatePath(cleaned):
+			normalized.sessionState = appendUniquePath(normalized.sessionState, cleaned)
+		case isCopilotOtelPath(cleaned):
+			normalized.otel = appendUniquePath(normalized.otel, cleaned)
+		default:
+			normalized.other = appendUniquePath(normalized.other, cleaned)
+		}
+	}
+	return normalized
+}
+
+func copilotHomeLikeDir(path string) bool {
+	if info, err := os.Stat(filepath.Join(path, "otel")); err == nil && info.IsDir() {
+		if info, err := os.Stat(filepath.Join(path, "session-state")); err == nil && info.IsDir() {
+			return true
+		}
+	}
+	return false
+}
+
+func filterCopilotDiscoverFiles(files []string) []string {
+	filtered := make([]string, 0, len(files))
+	for _, file := range files {
+		if isInsideCopilotSessionState(file) && !isCopilotSessionEventsFile(file) {
+			continue
+		}
+		filtered = append(filtered, file)
+	}
+	return filtered
+}
+
+func isInsideCopilotSessionState(path string) bool {
+	for dir := filepath.Dir(filepath.Clean(path)); dir != "." && dir != string(filepath.Separator); dir = filepath.Dir(dir) {
+		if filepath.Base(dir) == "session-state" {
+			return true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+	}
+	return false
+}
+
+func isCopilotSessionEventsFile(path string) bool {
+	cleaned := filepath.Clean(path)
+	if filepath.Base(cleaned) != "events.jsonl" {
+		return false
+	}
+	sessionDir := filepath.Dir(cleaned)
+	return filepath.Base(filepath.Dir(sessionDir)) == "session-state"
+}
+
+func isCopilotOtelPath(path string) bool {
+	return filepath.Base(path) == "otel" || filepath.Base(filepath.Dir(path)) == "otel"
+}
+
+func isCopilotSessionStatePath(path string) bool {
+	if filepath.Base(path) == "session-state" || filepath.Base(filepath.Dir(path)) == "session-state" {
+		return true
+	}
+	return isCopilotSessionEventsFile(path)
+}
+
+func appendUniquePath(paths []string, path string) []string {
+	path = filepath.Clean(path)
+	for _, existing := range paths {
+		if filepath.Clean(existing) == path {
+			return paths
+		}
+	}
+	return append(paths, path)
 }
 
 func (a *CopilotAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, error) {
@@ -57,6 +162,10 @@ func (a *CopilotAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, er
 		}
 		rawJSON, _ := json.Marshal(obj)
 		rawHash := sha256Hex(rawJSON)
+		if sessionCandidates := copilotSessionMetricCandidatesFromObject(obj, path, lineNum); len(sessionCandidates) > 0 {
+			candidates = append(candidates, sessionCandidates...)
+			continue
+		}
 		candidates = append(candidates, copilotCandidatesFromObject(obj, string(rawJSON), rawHash, path, lineNum)...)
 	}
 	if err := scanner.Err(); err != nil {
@@ -77,6 +186,92 @@ type copilotCandidate struct {
 	priority  int
 	score     int64
 	key       string
+}
+
+func copilotSessionMetricCandidatesFromObject(obj map[string]interface{}, path string, lineNum int) []copilotCandidate {
+	if getString(obj, "type") != "session.shutdown" {
+		return nil
+	}
+	data := getMap(obj, "data")
+	if data == nil {
+		return nil
+	}
+	metrics := getMap(data, "modelMetrics")
+	if metrics == nil {
+		return nil
+	}
+
+	sessionID := firstNonEmpty(getString(data, "sessionId"), copilotSessionIDFromPath(path))
+	timestampMs := parseTimestamp(obj["timestamp"])
+	if timestampMs == 0 {
+		timestampMs = parseTimestamp(data["sessionStartTime"])
+	}
+
+	var candidates []copilotCandidate
+	for modelName, value := range metrics {
+		metric, ok := value.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		usage := getMap(metric, "usage")
+		if usage == nil {
+			continue
+		}
+		input, _ := firstInt64Field(usage, "inputTokens", "input_tokens")
+		output, _ := firstInt64Field(usage, "outputTokens", "output_tokens")
+		cacheRead, _ := firstInt64Field(usage, "cacheReadTokens", "cache_read_tokens")
+		cacheWrite, _ := firstInt64Field(usage, "cacheWriteTokens", "cache_write_tokens", "cacheCreationTokens")
+		reasoning, _ := firstInt64Field(usage, "reasoningTokens", "reasoning_tokens")
+		total := input + output + cacheRead + cacheWrite + reasoning
+		if total == 0 {
+			continue
+		}
+
+		requests := getMap(metric, "requests")
+		var cost *float64
+		if requests != nil {
+			if value, ok := scalarFloat64(requests["cost"]); ok {
+				cost = &value
+			}
+		}
+		rawUsageJSON := copilotSessionMetricRawJSON(sessionID, modelName, usage, requests)
+		rawHash := sha256Hex([]byte(rawUsageJSON))
+		dedupeScope := firstNonEmpty(sessionID, getString(obj, "id"), fmt.Sprintf("%s:%d", path, lineNum))
+		dedupeID := fmt.Sprintf("copilot-session-state|%s|%s", dedupeScope, modelName)
+		record := &fingerprint.ParsedRecord{
+			Agent:                 "copilot",
+			Provider:              "github",
+			Model:                 modelName,
+			TimestampMs:           timestampMs,
+			SessionID:             sessionID,
+			DedupeID:              dedupeID,
+			MessageID:             dedupeID,
+			RequestID:             dedupeID,
+			InputTokens:           input,
+			OutputTokens:          output,
+			CacheCreationTokens:   cacheWrite,
+			CacheReadTokens:       cacheRead,
+			ReasoningTokens:       reasoning,
+			TotalTokens:           total,
+			CostUSD:               cost,
+			SourceTotalTokens:     int64Ptr(total),
+			SourceProduct:         "copilot-session-state",
+			ObservabilityLevel:    "aggregate",
+			TokenAccountingMethod: ledgermodel.AccCopilotSessionMetrics,
+			RawJSON:               rawUsageJSON,
+			SourceFile:            path,
+			LineNumber:            lineNum,
+			RawSHA256:             rawHash,
+		}
+		candidates = append(candidates, copilotCandidate{
+			record:    record,
+			eventType: "copilot_session_metrics",
+			priority:  copilotEventPriority("copilot_session_metrics"),
+			key:       dedupeID,
+			score:     copilotCandidateScore(record),
+		})
+	}
+	return candidates
 }
 
 func copilotCandidatesFromObject(obj map[string]interface{}, rawJSON, rawHash, path string, lineNum int) []copilotCandidate {
@@ -230,6 +425,8 @@ func betterCopilotCandidate(candidate, existing copilotCandidate) bool {
 
 func copilotEventPriority(eventType string) int {
 	switch eventType {
+	case "copilot_session_metrics":
+		return 5
 	case "copilot_chat_span":
 		return 4
 	case "copilot_inference_log":
@@ -241,6 +438,30 @@ func copilotEventPriority(eventType string) int {
 	default:
 		return 0
 	}
+}
+
+func copilotSessionIDFromPath(path string) string {
+	if filepath.Base(path) == "events.jsonl" {
+		return filepath.Base(filepath.Dir(path))
+	}
+	return ""
+}
+
+func copilotSessionMetricRawJSON(sessionID, modelName string, usage, requests map[string]interface{}) string {
+	envelope := map[string]interface{}{
+		"source":     "session.shutdown.modelMetrics",
+		"session_id": sessionID,
+		"model":      modelName,
+		"usage":      usage,
+	}
+	if requests != nil {
+		envelope["requests"] = requests
+	}
+	data, err := json.Marshal(envelope)
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }
 
 func copilotCandidateScore(record *fingerprint.ParsedRecord) int64 {
@@ -344,6 +565,28 @@ func scalarInt64(value interface{}) (int64, bool) {
 	case string:
 		var number json.Number = json.Number(strings.TrimSpace(typed))
 		parsed, err := number.Int64()
+		return parsed, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func scalarFloat64(value interface{}) (float64, bool) {
+	switch typed := value.(type) {
+	case float64:
+		return typed, true
+	case float32:
+		return float64(typed), true
+	case int:
+		return float64(typed), true
+	case int64:
+		return float64(typed), true
+	case json.Number:
+		parsed, err := typed.Float64()
+		return parsed, err == nil
+	case string:
+		var number json.Number = json.Number(strings.TrimSpace(typed))
+		parsed, err := number.Float64()
 		return parsed, err == nil
 	default:
 		return 0, false

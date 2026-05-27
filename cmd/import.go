@@ -58,6 +58,7 @@ var importCmd = &cobra.Command{
 			if !ok || !agentCfg.Enabled {
 				continue
 			}
+			adapter = configureImportAdapter(adapter, agentCfg)
 
 			files, err := adapter.Discover(agentCfg.Paths)
 			if err != nil {
@@ -151,6 +152,10 @@ func importParsedRecords(database *db.Database, adapterName string, records []*f
 		if accountingMethod == "" {
 			accountingMethod = defaultAccountingMethod(sourceAgent)
 		}
+		sourceProduct := rec.SourceProduct
+		if sourceProduct == "" {
+			sourceProduct = sourceProductForAgent(sourceAgent)
+		}
 
 		event := &model.UsageEvent{
 			EventID:               fp,
@@ -161,13 +166,17 @@ func importParsedRecords(database *db.Database, adapterName string, records []*f
 			ModelRaw:              rec.Model,
 			ModelNormalized:       normalized,
 			SourceAgent:           sourceAgent,
-			SourceProduct:         sourceProductForAgent(sourceAgent),
+			SourceProduct:         sourceProduct,
 			ObservabilityLevel:    observability,
 			ModelIsFallback:       rec.ModelIsFallback,
 			SourceTotalTokens:     rec.SourceTotalTokens,
+			RawInputTokens:        rec.RawInputTokens,
 			TokenAccountingMethod: accountingMethod,
+			AccountingProfile:     rec.AccountingProfile,
 			TimestampMs:           rec.TimestampMs,
 			SessionID:             rec.SessionID,
+			SessionPathID:         rec.SessionPathID,
+			TurnID:                rec.TurnID,
 			ProjectPath:           rec.ProjectPath,
 			MessageID:             rec.MessageID,
 			RequestID:             rec.RequestID,
@@ -206,6 +215,15 @@ func importParsedRecords(database *db.Database, adapterName string, records []*f
 		}
 	}
 	return added, updated, skipped
+}
+
+func configureImportAdapter(adapter adapters.Adapter, agentCfg *config.AgentConfig) adapters.Adapter {
+	if adapter.Name() == "codex" {
+		return adapters.NewCodexAdapterWithOptions(adapters.CodexOptions{
+			DuplicatePolicy: agentCfg.DuplicatePolicy,
+		})
+	}
+	return adapter
 }
 
 func sourceProductForAgent(agent string) string {
@@ -262,6 +280,31 @@ func applyTimingFields(event *model.UsageEvent, rec *fingerprint.ParsedRecord) {
 	if event.TotalDurationMs == nil && event.RequestStartedAtMs != nil && event.CompletedAtMs != nil {
 		if value := *event.CompletedAtMs - *event.RequestStartedAtMs; value >= 0 {
 			event.TotalDurationMs = &value
+		}
+	}
+	if event.RequestStartedAtMs == nil && event.CompletedAtMs != nil && event.TotalDurationMs != nil {
+		if value := *event.CompletedAtMs - *event.TotalDurationMs; value > 0 {
+			event.RequestStartedAtMs = &value
+		}
+	}
+	if event.FirstTokenAtMs == nil && event.RequestStartedAtMs != nil && event.TTFTMs != nil {
+		if value := *event.RequestStartedAtMs + *event.TTFTMs; value > 0 {
+			event.FirstTokenAtMs = &value
+		}
+	}
+	if event.CompletedAtMs == nil && event.RequestStartedAtMs != nil && event.TotalDurationMs != nil {
+		if value := *event.RequestStartedAtMs + *event.TotalDurationMs; value > 0 {
+			event.CompletedAtMs = &value
+		}
+	}
+	if event.OutputDurationMs == nil && event.TotalDurationMs != nil && event.TTFTMs != nil {
+		if value := *event.TotalDurationMs - *event.TTFTMs; value > 0 {
+			event.OutputDurationMs = &value
+		}
+	}
+	if event.OutputDurationMs == nil && event.FirstTokenAtMs != nil && event.CompletedAtMs != nil {
+		if value := *event.CompletedAtMs - *event.FirstTokenAtMs; value > 0 {
+			event.OutputDurationMs = &value
 		}
 	}
 	if event.OutputTPS == nil && event.OutputDurationMs != nil && *event.OutputDurationMs > 0 && event.OutputTokens > 0 {

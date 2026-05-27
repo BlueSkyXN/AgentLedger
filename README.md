@@ -99,6 +99,7 @@ agent-ledger merge usage.aldb
 agent-ledger verify
 agent-ledger vacuum
 agent-ledger doctor
+agent-ledger doctor codex
 
 # 本地只读 Web 面板
 agent-ledger serve
@@ -120,7 +121,7 @@ agent-ledger serve
 | `report sessions` | 按 session 拆分用量。 |
 | `report slow` | 慢请求列表，支持按低输出 TPS、高 TTFT 或高总耗时排序。 |
 | `status` | 显示数据库统计信息。 |
-| `doctor` | 显示配置、数据库路径和 agent 日志发现诊断。 |
+| `doctor` | 显示配置、数据库路径和 agent 日志发现诊断；`doctor codex` 输出 Codex token/timing/口径覆盖诊断。 |
 | `verify` | 运行 SQLite `PRAGMA integrity_check`。 |
 | `vacuum` | 运行 SQLite `VACUUM`。 |
 | `serve` | 启动本机只读 Web 面板和 `/api/v1/*` JSON API。 |
@@ -140,6 +141,12 @@ agent-ledger serve
 --json
 ```
 
+`report daily`、`report weekly`、`report monthly` 额外支持：
+
+```bash
+--by channel|model|provider|session
+```
+
 `report slow` 额外支持：
 
 ```bash
@@ -151,6 +158,7 @@ agent-ledger serve
 
 ```bash
 agent-ledger report daily --since 2026-05-01
+agent-ledger report daily --by model --channel codex
 agent-ledger report weekly --channel codex
 agent-ledger report monthly --provider anthropic
 agent-ledger report models --model gpt-5.5 --json
@@ -197,7 +205,7 @@ npm run build
 | `GET` | `/api/v1/status` | schema version、事件数、导入次数、token 和 recorded cost 汇总。 |
 | `GET` | `/api/v1/config` | 脱敏配置快照。 |
 | `GET` | `/api/v1/analytics/summary` | 总览 KPI，支持统一 filters。 |
-| `GET` | `/api/v1/analytics/timeseries?bucket=daily\|weekly\|monthly` | 时间趋势。 |
+| `GET` | `/api/v1/analytics/timeseries?bucket=daily\|weekly\|monthly` | 时间趋势；可加 `by=channel\|model\|provider\|session` 返回时间 + 维度拆分。 |
 | `GET` | `/api/v1/analytics/breakdown?by=channel\|model\|provider\|session` | 维度排行。 |
 | `GET` | `/api/v1/analytics/slow?sort=output_tps\|ttft_ms\|total_duration_ms&limit=50` | 慢请求列表。 |
 | `GET` | `/api/v1/filter-options` | 当前库中存在的 channel、provider、model、session 选项。 |
@@ -220,11 +228,12 @@ session=<session-id>
 | Agent | 默认路径 | 解析格式 | 说明 |
 |---|---|---|---|
 | Claude Code | `~/.config/claude/projects`, `~/.claude/projects` | JSONL | 读取带有 `message.usage` 的 assistant 消息；旧配置写 `~/.claude` 时会自动展开到 `projects`。 |
-| Codex | `~/.codex` | JSONL | 读取 token count 记录；存在 `last_token_usage` 时优先使用。 |
+| Codex | `~/.codex/sessions` | JSONL | 读取 token count 记录；存在 `last_token_usage` 时优先使用；配置写 `~/.codex` 时会自动收敛到 `sessions`。 |
+| GitHub Copilot | `~/.copilot/otel`, `~/.copilot/session-state` | JSONL | 优先读取 OTel `gen_ai.usage.*`；没有 OTel 文件时回退到 `session.shutdown.data.modelMetrics` 的 session+model 汇总。 |
 | Gemini CLI | `~/.gemini` | JSON / JSONL | 读取 `usageMetadata`。 |
 | Qwen | `~/.qwen` | JSONL | 读取 `usage`。 |
 
-`channel` 固定表示 agent 来源，例如 `claude`、`codex`、`gemini`、`qwen`。
+`channel` 固定表示 agent 来源，例如 `claude`、`codex`、`copilot`、`gemini`、`qwen`。
 
 ## 配置
 
@@ -258,6 +267,7 @@ paths = ["~/.config/claude/projects", "~/.claude/projects"]
 [agents.codex]
 enabled = true
 paths = ["~/.codex/sessions"]
+duplicate_policy = "ledger"
 
 [agents.gemini]
 enabled = true

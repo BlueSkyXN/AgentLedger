@@ -118,6 +118,12 @@ Report types:
 | `--session string` | 过滤 session id。 |
 | `--json` | 输出 JSON。 |
 
+`report daily`、`report weekly`、`report monthly` 额外支持：
+
+| Flag | 说明 |
+|---|---|
+| `--by string` | 在时间桶内继续按 `channel`、`model`、`provider` 或 `session` 拆分。 |
+
 `report slow` 额外支持：
 
 | Flag | 说明 |
@@ -140,6 +146,12 @@ agent-ledger doctor
 ```
 
 输出配置路径、数据库路径、数据库是否存在，以及每个启用 adapter 发现的源文件数量。该命令会读取配置并扫描 configured paths。
+
+```bash
+agent-ledger doctor codex
+```
+
+输出 Codex 本地日志诊断：raw `token_count` / `task_complete` 覆盖、当前 `duplicate_policy`、ledger 与 `ccusage_compatible` 两种口径的事件数和 token 差异，以及模型分布。
 
 ## `verify`
 
@@ -189,7 +201,7 @@ Flags:
 | `GET` | `/api/v1/status` | 数据库统计。 |
 | `GET` | `/api/v1/config` | 脱敏配置快照。 |
 | `GET` | `/api/v1/analytics/summary` | 总览统计，支持统一 filters。 |
-| `GET` | `/api/v1/analytics/timeseries` | 趋势数据，`bucket=daily|weekly|monthly`。 |
+| `GET` | `/api/v1/analytics/timeseries` | 趋势数据，`bucket=daily|weekly|monthly`；可选 `by=channel|model|provider|session`。 |
 | `GET` | `/api/v1/analytics/breakdown` | 维度排行，`by=channel|model|provider|session`。 |
 | `GET` | `/api/v1/analytics/slow` | 慢请求列表，`sort=output_tps|ttft_ms|total_duration_ms`。 |
 | `GET` | `/api/v1/filter-options` | 当前库中存在的 channel/provider/model/session 选项。 |

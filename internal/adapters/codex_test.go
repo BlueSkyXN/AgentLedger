@@ -24,11 +24,17 @@ func TestCodexLastTokenUsageDirectCounts(t *testing.T) {
 		t.Fatalf("expected 1 record, got %d", len(records))
 	}
 	rec := records[0]
-	if rec.InputTokens != 100 || rec.CacheReadTokens != 25 || rec.OutputTokens != 50 || rec.ReasoningTokens != 10 || rec.TotalTokens != 160 {
+	if rec.InputTokens != 75 || rec.CacheReadTokens != 25 || rec.OutputTokens != 50 || rec.ReasoningTokens != 10 || rec.TotalTokens != 160 {
 		t.Fatalf("unexpected tokens: input=%d cache=%d output=%d reasoning=%d total=%d", rec.InputTokens, rec.CacheReadTokens, rec.OutputTokens, rec.ReasoningTokens, rec.TotalTokens)
 	}
 	if rec.TokenAccountingMethod != model.AccCodexLastTokenUsage || rec.SourceTotalTokens == nil || *rec.SourceTotalTokens != 160 {
 		t.Fatalf("unexpected accounting method=%s source_total=%v", rec.TokenAccountingMethod, rec.SourceTotalTokens)
+	}
+	if rec.RawInputTokens == nil || *rec.RawInputTokens != 100 {
+		t.Fatalf("expected raw input tokens 100, got %v", rec.RawInputTokens)
+	}
+	if rec.AccountingProfile != CodexDuplicatePolicyLedger {
+		t.Fatalf("unexpected accounting profile=%s", rec.AccountingProfile)
 	}
 	if rec.Model != "gpt-5-codex" || rec.ModelIsFallback {
 		t.Fatalf("unexpected model=%s fallback=%v", rec.Model, rec.ModelIsFallback)
@@ -97,6 +103,30 @@ func TestCodexSkipsDuplicateLastTokenUsageSnapshots(t *testing.T) {
 	}
 }
 
+func TestCodexCCUsageCompatiblePolicyKeepsTimestampDistinctSnapshots(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "codex.jsonl")
+	data := strings.Join([]string{
+		`{"type":"event_msg","timestamp":"2026-01-01T00:01:00Z","session_id":"A","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":80,"cached_input_tokens":10,"output_tokens":20,"reasoning_output_tokens":0,"total_tokens":100},"last_token_usage":{"input_tokens":80,"cached_input_tokens":10,"output_tokens":20,"reasoning_output_tokens":0,"total_tokens":100}}}}`,
+		`{"type":"event_msg","timestamp":"2026-01-01T00:01:03Z","session_id":"A","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":80,"cached_input_tokens":10,"output_tokens":20,"reasoning_output_tokens":0,"total_tokens":100},"last_token_usage":{"input_tokens":80,"cached_input_tokens":10,"output_tokens":20,"reasoning_output_tokens":0,"total_tokens":100}},"rate_limits":{"primary":{"used_percent":10}}}}`,
+	}, "\n")
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	records, err := NewCodexAdapterWithOptions(CodexOptions{DuplicatePolicy: CodexDuplicatePolicyCCUsageCompatible}).ParseFile(path)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("expected timestamp-distinct duplicate snapshots to be kept, got %d records", len(records))
+	}
+	for _, rec := range records {
+		if rec.AccountingProfile != CodexDuplicatePolicyCCUsageCompatible {
+			t.Fatalf("unexpected accounting profile=%s", rec.AccountingProfile)
+		}
+	}
+}
+
 func TestCodexCountsSameLastUsageWhenCumulativeTotalChanges(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "codex.jsonl")
 	data := strings.Join([]string{
@@ -141,11 +171,101 @@ func TestCodexCachedInputClampReasoningFallbackAndTurnContextModel(t *testing.T)
 	if fallback.Model != "gpt-5" || !fallback.ModelIsFallback {
 		t.Fatalf("expected gpt-5 fallback, model=%s fallback=%v", fallback.Model, fallback.ModelIsFallback)
 	}
-	if fallback.CacheReadTokens != 100 || fallback.TotalTokens != 260 {
-		t.Fatalf("expected cached clamp and computed total, cache=%d total=%d", fallback.CacheReadTokens, fallback.TotalTokens)
+	if fallback.InputTokens != 0 || fallback.CacheReadTokens != 100 || fallback.TotalTokens != 150 {
+		t.Fatalf("expected cached clamp and computed total, input=%d cache=%d total=%d", fallback.InputTokens, fallback.CacheReadTokens, fallback.TotalTokens)
 	}
 	if records[1].Model != "gpt-5-codex" || records[1].ModelIsFallback {
 		t.Fatalf("expected turn_context model, model=%s fallback=%v", records[1].Model, records[1].ModelIsFallback)
+	}
+}
+
+func TestCodexTaskCompleteTimingAttachesToPreviousUsage(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "codex.jsonl")
+	data := strings.Join([]string{
+		`{"type":"event_msg","timestamp":"2026-01-01T00:00:10Z","session_id":"A","payload":{"type":"token_count","model":"gpt-5-codex","info":{"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":40,"reasoning_output_tokens":5,"total_tokens":145}}}}`,
+		`{"type":"event_msg","timestamp":"2026-01-01T00:00:12Z","session_id":"A","payload":{"type":"task_complete","turn_id":"turn-a","duration_ms":12000,"time_to_first_token_ms":1500,"completed_at":1767225612}}`,
+	}, "\n")
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	records, err := NewCodexAdapter().ParseFile(path)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(records))
+	}
+	rec := records[0]
+	if rec.TotalDurationMs != 12000 || rec.TTFTMs != 1500 {
+		t.Fatalf("expected timing duration=12000 ttft=1500, got duration=%d ttft=%d", rec.TotalDurationMs, rec.TTFTMs)
+	}
+	if rec.CompletedAtMs != 1767225612000 || rec.RequestStartedAtMs != 1767225600000 || rec.FirstTokenAtMs != 1767225601500 {
+		t.Fatalf("unexpected timing anchors completed=%d started=%d first=%d", rec.CompletedAtMs, rec.RequestStartedAtMs, rec.FirstTokenAtMs)
+	}
+	if rec.TurnID != "turn-a" {
+		t.Fatalf("expected turn id turn-a, got %q", rec.TurnID)
+	}
+}
+
+func TestCodexSessionPathIDFromNestedSessionsPath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".codex", "sessions", "2026", "05", "27", "rollout-abc.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir fixture: %v", err)
+	}
+	data := `{"type":"event_msg","timestamp":"2026-01-01T00:00:00Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}}}`
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	records, err := NewCodexAdapter().ParseFile(path)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(records))
+	}
+	if records[0].SessionPathID != "2026/05/27/rollout-abc" {
+		t.Fatalf("unexpected session path id=%q", records[0].SessionPathID)
+	}
+}
+
+func TestCodexSkipsSessionTokenCountWithOnlyTotal(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "codex.jsonl")
+	data := `{"type":"event_msg","timestamp":"2026-01-01T00:00:00Z","session_id":"A","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":0,"cached_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0,"total_tokens":20757}}}}`
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	records, err := NewCodexAdapter().ParseFile(path)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("expected total-only session token_count to be skipped, got %d records", len(records))
+	}
+}
+
+func TestCodexDiscoverNormalizesHomeRootToSessions(t *testing.T) {
+	root := t.TempDir()
+	sessions := filepath.Join(root, "sessions")
+	archived := filepath.Join(root, "archived_sessions")
+	if err := os.MkdirAll(sessions, 0o755); err != nil {
+		t.Fatalf("mkdir sessions: %v", err)
+	}
+	if err := os.MkdirAll(archived, 0o755); err != nil {
+		t.Fatalf("mkdir archived: %v", err)
+	}
+
+	paths := normalizeCodexDiscoverPaths([]string{root, sessions, archived})
+	expected := []string{sessions, archived}
+	if len(paths) != len(expected) {
+		t.Fatalf("expected paths %v, got %v", expected, paths)
+	}
+	for i := range expected {
+		if filepath.Clean(paths[i]) != filepath.Clean(expected[i]) {
+			t.Fatalf("path %d expected %s got %s", i, expected[i], paths[i])
+		}
 	}
 }
 

@@ -46,10 +46,14 @@ CREATE TABLE IF NOT EXISTS usage_events (
     observability_level TEXT,
     model_is_fallback INTEGER NOT NULL DEFAULT 0,
     source_total_tokens INTEGER,
+    raw_input_tokens INTEGER,
     token_accounting_method TEXT,
+    accounting_profile TEXT,
 
     timestamp_ms INTEGER NOT NULL,
     session_id TEXT,
+    session_path_id TEXT,
+    turn_id TEXT,
     project_path TEXT,
     message_id TEXT,
     request_id TEXT,
@@ -142,7 +146,11 @@ func (d *Database) ensureV2CompatibilityColumns() error {
 		"observability_level TEXT",
 		"model_is_fallback INTEGER NOT NULL DEFAULT 0",
 		"source_total_tokens INTEGER",
+		"raw_input_tokens INTEGER",
 		"token_accounting_method TEXT",
+		"accounting_profile TEXT",
+		"session_path_id TEXT",
+		"turn_id TEXT",
 	}
 	for _, columnDef := range columns {
 		name := columnName(columnDef)
@@ -166,6 +174,9 @@ func (d *Database) ensureV2CompatibilityColumns() error {
 		return err
 	}
 	if _, err = tx.Exec(`CREATE INDEX IF NOT EXISTS idx_usage_source_agent_time ON usage_events(source_agent, timestamp_ms)`); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(`CREATE INDEX IF NOT EXISTS idx_usage_session_path ON usage_events(session_path_id)`); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {

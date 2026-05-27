@@ -46,6 +46,9 @@ func TestBuildSummary(t *testing.T) {
 	if summary.TotalEvents != 2 || summary.TotalTokens != 465 || summary.ImportRuns != 1 {
 		t.Fatalf("unexpected summary: %+v", summary)
 	}
+	if summary.InputTokens != 300 {
+		t.Fatalf("expected stored input tokens to be used without report-time cache subtraction, got %d", summary.InputTokens)
+	}
 	if summary.AvgOutputTPS == nil || *summary.AvgOutputTPS != 20 {
 		t.Fatalf("expected avg tps from timed rows, got %+v", summary.AvgOutputTPS)
 	}
@@ -66,6 +69,13 @@ func TestBuildTimeseriesBreakdownAndFilters(t *testing.T) {
 	}
 	if len(models) != 1 || models[0].Label != "claude-sonnet" || models[0].TotalTokens != 280 {
 		t.Fatalf("unexpected model breakdown: %+v", models)
+	}
+	timeByModel, err := BuildTimeseriesBreakdown(database.Conn(), "daily", "model", Filters{})
+	if err != nil {
+		t.Fatalf("timeseries breakdown: %v", err)
+	}
+	if len(timeByModel) != 2 || timeByModel[0].Bucket != "2026-05-01" || timeByModel[0].Label != "gpt-5" || timeByModel[0].InputTokens != 100 {
+		t.Fatalf("unexpected time model breakdown: %+v", timeByModel)
 	}
 }
 
@@ -120,6 +130,9 @@ func TestSessionsImportRunsEventsSlowAndOptions(t *testing.T) {
 	if len(events) != 2 || events[0].EventID != "fp2" {
 		t.Fatalf("unexpected events: %+v", events)
 	}
+	if events[1].EventID != "fp1" || events[1].InputTokens != 100 {
+		t.Fatalf("expected Codex event input to use stored non-cache input tokens, got %+v", events[1])
+	}
 	slow, err := BuildSlow(database.Conn(), "output_tps", Filters{}, 10)
 	if err != nil {
 		t.Fatalf("slow: %v", err)
@@ -143,6 +156,9 @@ func TestInvalidAnalyticsOptions(t *testing.T) {
 	}
 	if _, err := BuildBreakdown(database.Conn(), "raw", Filters{}); err == nil {
 		t.Fatal("expected invalid breakdown error")
+	}
+	if _, err := BuildTimeseriesBreakdown(database.Conn(), "daily", "raw", Filters{}); err == nil {
+		t.Fatal("expected invalid time breakdown error")
 	}
 	if _, err := BuildSlow(database.Conn(), "raw", Filters{}, 10); err == nil {
 		t.Fatal("expected invalid slow sort error")
