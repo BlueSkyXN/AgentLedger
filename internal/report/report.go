@@ -18,6 +18,7 @@ type Filters struct {
 	Model    string
 	Session  string
 	Timezone string
+	By       string
 	SlowSort string
 	Limit    int
 }
@@ -51,24 +52,141 @@ type SlowRow struct {
 	OutputTPS        *float64 `json:"output_tps"`
 }
 
+type TimeBreakdownRow struct {
+	Bucket              string   `json:"bucket"`
+	Label               string   `json:"label"`
+	Events              int64    `json:"events"`
+	TotalTokens         int64    `json:"total_tokens"`
+	InputTokens         int64    `json:"input_tokens"`
+	OutputTokens        int64    `json:"output_tokens"`
+	CacheCreationTokens int64    `json:"cache_creation_tokens"`
+	CacheReadTokens     int64    `json:"cache_read_tokens"`
+	ReasoningTokens     int64    `json:"reasoning_tokens"`
+	AvgTotalDurationMs  *float64 `json:"avg_total_duration_ms"`
+	AvgTTFTMs           *float64 `json:"avg_ttft_ms"`
+	AvgOutputTPS        *float64 `json:"avg_output_tps"`
+	RecordedCostUSD     float64  `json:"recorded_cost_usd"`
+}
+
 func Generate(conn *sql.DB, reportType string, filters Filters, asJSON bool) error {
 	switch reportType {
 	case "daily":
+		if filters.By != "" {
+			return generateTimeBreakdown(conn, timeLabelExpr("date", "%Y-%m-%d", filters.Timezone), filters, asJSON)
+		}
 		return generateGrouped(conn, timeLabelExpr("date", "%Y-%m-%d", filters.Timezone), filters, asJSON, "Date", "label DESC")
 	case "weekly":
+		if filters.By != "" {
+			return generateTimeBreakdown(conn, timeLabelExpr("strftime", "%Y-W%W", filters.Timezone), filters, asJSON)
+		}
 		return generateGrouped(conn, timeLabelExpr("strftime", "%Y-W%W", filters.Timezone), filters, asJSON, "Week", "label DESC")
 	case "monthly":
+		if filters.By != "" {
+			return generateTimeBreakdown(conn, timeLabelExpr("strftime", "%Y-%m", filters.Timezone), filters, asJSON)
+		}
 		return generateGrouped(conn, timeLabelExpr("strftime", "%Y-%m", filters.Timezone), filters, asJSON, "Month", "label DESC")
 	case "models":
 		return generateGrouped(conn, "COALESCE(model_normalized, model_raw, 'unknown')", filters, asJSON, "Model", "total_tokens DESC")
 	case "channels":
 		return generateGrouped(conn, "COALESCE(channel, 'unknown')", filters, asJSON, "Channel", "total_tokens DESC")
 	case "sessions":
-		return generateGrouped(conn, "COALESCE(session_id, 'no-session')", filters, asJSON, "Session", "total_tokens DESC LIMIT 50")
+		return generateGrouped(conn, "COALESCE(session_path_id, session_id, 'no-session')", filters, asJSON, "Session", "total_tokens DESC LIMIT 50")
 	case "slow":
 		return generateSlow(conn, filters, asJSON)
 	default:
 		return fmt.Errorf("unknown report type: %s", reportType)
+	}
+}
+
+func generateTimeBreakdown(conn *sql.DB, bucketExpr string, filters Filters, asJSON bool) error {
+	labelExpr, labelHeader, err := reportBreakdownLabelExpr(filters.By)
+	if err != nil {
+		return err
+	}
+	query := fmt.Sprintf(`SELECT
+        %s AS bucket,
+        %s AS label,
+        COUNT(*) AS events,
+        COALESCE(SUM(total_tokens), 0) AS total_tokens,
+        COALESCE(SUM(`+effectiveInputTokensExpr()+`), 0) AS input_tokens,
+        COALESCE(SUM(output_tokens), 0) AS output_tokens,
+        COALESCE(SUM(cache_creation_tokens), 0) AS cache_creation_tokens,
+        COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
+        COALESCE(SUM(reasoning_tokens), 0) AS reasoning_tokens,
+        AVG(total_duration_ms) AS avg_total_duration_ms,
+        AVG(ttft_ms) AS avg_ttft_ms,
+        AVG(output_tps) AS avg_output_tps,
+        COALESCE(SUM(recorded_cost_usd), 0) AS recorded_cost_usd
+    FROM usage_events WHERE 1=1`, bucketExpr, labelExpr)
+	args := make([]any, 0)
+	query = addFilters(query, &args, filters)
+	query += " GROUP BY bucket, label ORDER BY bucket DESC, total_tokens DESC, label ASC"
+
+	rows, err := conn.Query(query, args...)
+	if err != nil {
+		return fmt.Errorf("query failed: %w", err)
+	}
+	defer rows.Close()
+
+	results := make([]TimeBreakdownRow, 0)
+	for rows.Next() {
+		var r TimeBreakdownRow
+		var totalTokens, inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens, reasoningTokens sql.NullInt64
+		var avgDuration, avgTTFT, avgTPS, recordedCost sql.NullFloat64
+		if err := rows.Scan(&r.Bucket, &r.Label, &r.Events, &totalTokens, &inputTokens, &outputTokens, &cacheCreationTokens, &cacheReadTokens, &reasoningTokens, &avgDuration, &avgTTFT, &avgTPS, &recordedCost); err != nil {
+			return err
+		}
+		r.TotalTokens = nullInt64Value(totalTokens)
+		r.InputTokens = nullInt64Value(inputTokens)
+		r.OutputTokens = nullInt64Value(outputTokens)
+		r.CacheCreationTokens = nullInt64Value(cacheCreationTokens)
+		r.CacheReadTokens = nullInt64Value(cacheReadTokens)
+		r.ReasoningTokens = nullInt64Value(reasoningTokens)
+		r.AvgTotalDurationMs = nullFloat64(avgDuration)
+		r.AvgTTFTMs = nullFloat64(avgTTFT)
+		r.AvgOutputTPS = nullFloat64(avgTPS)
+		if recordedCost.Valid {
+			r.RecordedCostUSD = recordedCost.Float64
+		}
+		results = append(results, r)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	if asJSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(results)
+	}
+	if len(results) == 0 {
+		fmt.Println("No data found for the specified filters.")
+		return nil
+	}
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintf(w, "Bucket\t%s\tEvents\tTokens\tInput\tOutput\tCache Create\tCache Read\tReasoning\tAvg TPS\tAvg TTFT(ms)\tCost(USD)\n", labelHeader)
+	fmt.Fprintf(w, "---\t---\t---\t---\t---\t---\t---\t---\t---\t---\t---\t---\n")
+	for _, r := range results {
+		fmt.Fprintf(w, "%s\t%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%s\t%s\t$%.4f\n",
+			r.Bucket, truncate(r.Label, 40), r.Events, r.TotalTokens, r.InputTokens, r.OutputTokens,
+			r.CacheCreationTokens, r.CacheReadTokens, r.ReasoningTokens,
+			formatFloatPtr(r.AvgOutputTPS), formatFloatPtr(r.AvgTTFTMs), r.RecordedCostUSD)
+	}
+	return w.Flush()
+}
+
+func reportBreakdownLabelExpr(by string) (expr, header string, err error) {
+	switch by {
+	case "channel":
+		return "COALESCE(channel, 'unknown')", "Channel", nil
+	case "model":
+		return "COALESCE(model_normalized, model_raw, 'unknown')", "Model", nil
+	case "provider":
+		return "COALESCE(provider, 'unknown')", "Provider", nil
+	case "session":
+		return "COALESCE(session_path_id, session_id, 'no-session')", "Session", nil
+	default:
+		return "", "", fmt.Errorf("invalid time breakdown %q: expected channel, model, provider, or session", by)
 	}
 }
 
@@ -77,7 +195,7 @@ func generateGrouped(conn *sql.DB, labelExpr string, filters Filters, asJSON boo
         %s AS label,
         COUNT(*) AS events,
         COALESCE(SUM(total_tokens), 0) AS total_tokens,
-        COALESCE(SUM(input_tokens), 0) AS input_tokens,
+        COALESCE(SUM(`+effectiveInputTokensExpr()+`), 0) AS input_tokens,
         COALESCE(SUM(output_tokens), 0) AS output_tokens,
         COALESCE(SUM(cache_creation_tokens), 0) AS cache_creation_tokens,
         COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
@@ -108,7 +226,7 @@ func generateSlow(conn *sql.DB, filters Filters, asJSON bool) error {
         timestamp_ms,
         channel,
         COALESCE(model_normalized, model_raw, 'unknown') AS model,
-        COALESCE(session_id, '') AS session_id,
+        COALESCE(session_path_id, session_id, '') AS session_id,
         total_tokens,
         output_tokens,
         total_duration_ms,
@@ -165,6 +283,10 @@ func generateSlow(conn *sql.DB, filters Filters, asJSON bool) error {
 			formatFloatPtr(row.OutputTPS), formatIntPtr(row.TTFTMs), formatIntPtr(row.TotalDurationMs))
 	}
 	return w.Flush()
+}
+
+func effectiveInputTokensExpr() string {
+	return `COALESCE(input_tokens, 0)`
 }
 
 func slowOrderBy(sortBy string) (string, error) {
@@ -266,8 +388,8 @@ func addFilters(query string, args *[]any, filters Filters) string {
 		*args = append(*args, filters.Model, filters.Model)
 	}
 	if filters.Session != "" {
-		query += " AND session_id = ?"
-		*args = append(*args, filters.Session)
+		query += " AND (session_id = ? OR session_path_id = ?)"
+		*args = append(*args, filters.Session, filters.Session)
 	}
 	return query
 }

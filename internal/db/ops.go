@@ -103,14 +103,15 @@ func selectEventForComparison(tx *sql.Tx, eventID string) (*model.UsageEvent, er
             total_duration_ms, ttft_ms, output_duration_ms, output_tps,
             recorded_cost_usd, imported_at_ms,
             source_agent, source_product, observability_level, model_is_fallback,
-            source_total_tokens, token_accounting_method
+            source_total_tokens, raw_input_tokens, token_accounting_method,
+            accounting_profile, session_path_id, turn_id
         FROM usage_events WHERE event_id = ?
     `, eventID)
 	var ev model.UsageEvent
 	var requestStarted, firstToken, completed, totalDuration, ttft, outputDuration sql.NullInt64
-	var sourceTotal sql.NullInt64
+	var sourceTotal, rawInput sql.NullInt64
 	var outputTPS, recordedCost sql.NullFloat64
-	var sourceAgent, sourceProduct, observabilityLevel, accountingMethod sql.NullString
+	var sourceAgent, sourceProduct, observabilityLevel, accountingMethod, accountingProfile, sessionPathID, turnID sql.NullString
 	var modelIsFallback int
 	if err := row.Scan(
 		&ev.EventID,
@@ -131,7 +132,11 @@ func selectEventForComparison(tx *sql.Tx, eventID string) (*model.UsageEvent, er
 		&observabilityLevel,
 		&modelIsFallback,
 		&sourceTotal,
+		&rawInput,
 		&accountingMethod,
+		&accountingProfile,
+		&sessionPathID,
+		&turnID,
 	); err != nil {
 		return nil, err
 	}
@@ -148,7 +153,11 @@ func selectEventForComparison(tx *sql.Tx, eventID string) (*model.UsageEvent, er
 	ev.ObservabilityLevel = nullStringValue(observabilityLevel)
 	ev.ModelIsFallback = modelIsFallback != 0
 	ev.SourceTotalTokens = nullInt64Ptr(sourceTotal)
+	ev.RawInputTokens = nullInt64Ptr(rawInput)
 	ev.TokenAccountingMethod = nullStringValue(accountingMethod)
+	ev.AccountingProfile = nullStringValue(accountingProfile)
+	ev.SessionPathID = nullStringValue(sessionPathID)
+	ev.TurnID = nullStringValue(turnID)
 	return &ev, nil
 }
 
@@ -188,8 +197,8 @@ func insertEvent(exec interface {
         INSERT INTO usage_events (
             event_id, dedupe_key, dedupe_strategy,
             channel, provider, model_raw, model_normalized,
-            source_agent, source_product, observability_level, model_is_fallback, source_total_tokens, token_accounting_method,
-            timestamp_ms, session_id, project_path, message_id, request_id, source_file, line_number, raw_sha256,
+            source_agent, source_product, observability_level, model_is_fallback, source_total_tokens, raw_input_tokens, token_accounting_method, accounting_profile,
+            timestamp_ms, session_id, session_path_id, turn_id, project_path, message_id, request_id, source_file, line_number, raw_sha256,
             input_tokens, output_tokens, reasoning_tokens, cache_creation_tokens, cache_read_tokens, total_tokens,
             request_started_at_ms, first_token_at_ms, completed_at_ms, total_duration_ms, ttft_ms, output_duration_ms, output_tps,
             recorded_cost_usd, raw_usage_json,
@@ -197,8 +206,8 @@ func insertEvent(exec interface {
         ) VALUES (
             ?, ?, ?,
             ?, ?, ?, ?,
-            ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?, ?,
             ?, ?,
@@ -212,8 +221,8 @@ func updateEvent(tx *sql.Tx, ev *model.UsageEvent) error {
 	args := []any{
 		ev.DedupeKey, ev.DedupeStrategy,
 		ev.Channel, ev.Provider, ev.ModelRaw, ev.ModelNormalized,
-		nullIfEmpty(ev.SourceAgent), nullIfEmpty(ev.SourceProduct), nullIfEmpty(ev.ObservabilityLevel), boolToInt(ev.ModelIsFallback), nullableInt64(ev.SourceTotalTokens), nullIfEmpty(ev.TokenAccountingMethod),
-		ev.TimestampMs, ev.SessionID, ev.ProjectPath, ev.MessageID, ev.RequestID, ev.SourceFile, ev.LineNumber, ev.RawSHA256,
+		nullIfEmpty(ev.SourceAgent), nullIfEmpty(ev.SourceProduct), nullIfEmpty(ev.ObservabilityLevel), boolToInt(ev.ModelIsFallback), nullableInt64(ev.SourceTotalTokens), nullableInt64(ev.RawInputTokens), nullIfEmpty(ev.TokenAccountingMethod), nullIfEmpty(ev.AccountingProfile),
+		ev.TimestampMs, ev.SessionID, ev.SessionPathID, ev.TurnID, ev.ProjectPath, ev.MessageID, ev.RequestID, ev.SourceFile, ev.LineNumber, ev.RawSHA256,
 		ev.InputTokens, ev.OutputTokens, ev.ReasoningTokens, ev.CacheCreationTokens, ev.CacheReadTokens, ev.TotalTokens,
 		ev.RequestStartedAtMs, ev.FirstTokenAtMs, ev.CompletedAtMs, ev.TotalDurationMs, ev.TTFTMs, ev.OutputDurationMs, ev.OutputTPS,
 		ev.RecordedCostUSD, ev.RawUsageJSON,
@@ -224,8 +233,8 @@ func updateEvent(tx *sql.Tx, ev *model.UsageEvent) error {
         UPDATE usage_events SET
             dedupe_key = ?, dedupe_strategy = ?,
             channel = ?, provider = ?, model_raw = ?, model_normalized = ?,
-            source_agent = ?, source_product = ?, observability_level = ?, model_is_fallback = ?, source_total_tokens = ?, token_accounting_method = ?,
-            timestamp_ms = ?, session_id = ?, project_path = ?, message_id = ?, request_id = ?, source_file = ?, line_number = ?, raw_sha256 = ?,
+            source_agent = ?, source_product = ?, observability_level = ?, model_is_fallback = ?, source_total_tokens = ?, raw_input_tokens = ?, token_accounting_method = ?, accounting_profile = ?,
+            timestamp_ms = ?, session_id = ?, session_path_id = ?, turn_id = ?, project_path = ?, message_id = ?, request_id = ?, source_file = ?, line_number = ?, raw_sha256 = ?,
             input_tokens = ?, output_tokens = ?, reasoning_tokens = ?, cache_creation_tokens = ?, cache_read_tokens = ?, total_tokens = ?,
             request_started_at_ms = ?, first_token_at_ms = ?, completed_at_ms = ?, total_duration_ms = ?, ttft_ms = ?, output_duration_ms = ?, output_tps = ?,
             recorded_cost_usd = ?, raw_usage_json = ?,
@@ -243,7 +252,11 @@ func updateEventMetadata(tx *sql.Tx, ev *model.UsageEvent) error {
             observability_level = ?,
             model_is_fallback = ?,
             source_total_tokens = ?,
+            raw_input_tokens = ?,
             token_accounting_method = ?,
+            accounting_profile = ?,
+            session_path_id = ?,
+            turn_id = ?,
             updated_at_ms = ?
         WHERE event_id = ?
     `,
@@ -252,7 +265,11 @@ func updateEventMetadata(tx *sql.Tx, ev *model.UsageEvent) error {
 		nullIfEmpty(ev.ObservabilityLevel),
 		boolToInt(ev.ModelIsFallback),
 		nullableInt64(ev.SourceTotalTokens),
+		nullableInt64(ev.RawInputTokens),
 		nullIfEmpty(ev.TokenAccountingMethod),
+		nullIfEmpty(ev.AccountingProfile),
+		nullIfEmpty(ev.SessionPathID),
+		nullIfEmpty(ev.TurnID),
 		ev.UpdatedAtMs,
 		ev.EventID,
 	)
@@ -263,8 +280,8 @@ func eventArgs(ev *model.UsageEvent) []any {
 	return []any{
 		ev.EventID, ev.DedupeKey, ev.DedupeStrategy,
 		ev.Channel, ev.Provider, ev.ModelRaw, ev.ModelNormalized,
-		nullIfEmpty(ev.SourceAgent), nullIfEmpty(ev.SourceProduct), nullIfEmpty(ev.ObservabilityLevel), boolToInt(ev.ModelIsFallback), nullableInt64(ev.SourceTotalTokens), nullIfEmpty(ev.TokenAccountingMethod),
-		ev.TimestampMs, ev.SessionID, ev.ProjectPath, ev.MessageID, ev.RequestID, ev.SourceFile, ev.LineNumber, ev.RawSHA256,
+		nullIfEmpty(ev.SourceAgent), nullIfEmpty(ev.SourceProduct), nullIfEmpty(ev.ObservabilityLevel), boolToInt(ev.ModelIsFallback), nullableInt64(ev.SourceTotalTokens), nullableInt64(ev.RawInputTokens), nullIfEmpty(ev.TokenAccountingMethod), nullIfEmpty(ev.AccountingProfile),
+		ev.TimestampMs, ev.SessionID, ev.SessionPathID, ev.TurnID, ev.ProjectPath, ev.MessageID, ev.RequestID, ev.SourceFile, ev.LineNumber, ev.RawSHA256,
 		ev.InputTokens, ev.OutputTokens, ev.ReasoningTokens, ev.CacheCreationTokens, ev.CacheReadTokens, ev.TotalTokens,
 		ev.RequestStartedAtMs, ev.FirstTokenAtMs, ev.CompletedAtMs, ev.TotalDurationMs, ev.TTFTMs, ev.OutputDurationMs, ev.OutputTPS,
 		ev.RecordedCostUSD, ev.RawUsageJSON,
@@ -326,8 +343,8 @@ func (d *Database) MergeFrom(incomingPath string) (inserted int64, skipped int64
         INSERT OR IGNORE INTO usage_events (
             event_id, dedupe_key, dedupe_strategy,
             channel, provider, model_raw, model_normalized,
-            source_agent, source_product, observability_level, model_is_fallback, source_total_tokens, token_accounting_method,
-            timestamp_ms, session_id, project_path, message_id, request_id, source_file, line_number, raw_sha256,
+            source_agent, source_product, observability_level, model_is_fallback, source_total_tokens, raw_input_tokens, token_accounting_method, accounting_profile,
+            timestamp_ms, session_id, session_path_id, turn_id, project_path, message_id, request_id, source_file, line_number, raw_sha256,
             input_tokens, output_tokens, reasoning_tokens, cache_creation_tokens, cache_read_tokens, total_tokens,
             request_started_at_ms, first_token_at_ms, completed_at_ms, total_duration_ms, ttft_ms, output_duration_ms, output_tps,
             recorded_cost_usd, raw_usage_json,
@@ -336,14 +353,14 @@ func (d *Database) MergeFrom(incomingPath string) (inserted int64, skipped int64
         SELECT
             event_id, dedupe_key, dedupe_strategy,
             channel, provider, model_raw, model_normalized,
-            %s, %s, %s, %s, %s, %s,
-            timestamp_ms, session_id, project_path, message_id, request_id, source_file, line_number, raw_sha256,
+            %s, %s, %s, %s, %s, %s, %s, %s,
+            timestamp_ms, session_id, %s, %s, project_path, message_id, request_id, source_file, line_number, raw_sha256,
             input_tokens, output_tokens, reasoning_tokens, cache_creation_tokens, cache_read_tokens, total_tokens,
             request_started_at_ms, first_token_at_ms, completed_at_ms, total_duration_ms, ttft_ms, output_duration_ms, output_tps,
             recorded_cost_usd, raw_usage_json,
             imported_at_ms, updated_at_ms
         FROM incoming.usage_events
-    `, selects.sourceAgent, selects.sourceProduct, selects.observabilityLevel, selects.modelIsFallback, selects.sourceTotalTokens, selects.tokenAccountingMethod)
+    `, selects.sourceAgent, selects.sourceProduct, selects.observabilityLevel, selects.modelIsFallback, selects.sourceTotalTokens, selects.rawInputTokens, selects.tokenAccountingMethod, selects.accountingProfile, selects.sessionPathID, selects.turnID)
 	result, err := d.conn.Exec(query)
 	if err != nil {
 		return 0, 0, fmt.Errorf("failed to merge events: %w", err)
@@ -359,7 +376,11 @@ type incomingSelects struct {
 	observabilityLevel    string
 	modelIsFallback       string
 	sourceTotalTokens     string
+	rawInputTokens        string
 	tokenAccountingMethod string
+	accountingProfile     string
+	sessionPathID         string
+	turnID                string
 }
 
 func incomingCompatibilitySelects(conn *sql.DB) (incomingSelects, error) {
@@ -372,7 +393,11 @@ func incomingCompatibilitySelects(conn *sql.DB) (incomingSelects, error) {
 		observabilityLevel:    "'unknown'",
 		modelIsFallback:       "0",
 		sourceTotalTokens:     "NULL",
+		rawInputTokens:        "NULL",
 		tokenAccountingMethod: "NULL",
+		accountingProfile:     "NULL",
+		sessionPathID:         "NULL",
+		turnID:                "NULL",
 	}
 	checks := []struct {
 		column string
@@ -383,7 +408,11 @@ func incomingCompatibilitySelects(conn *sql.DB) (incomingSelects, error) {
 		{"observability_level", func() { selects.observabilityLevel = "COALESCE(NULLIF(observability_level, ''), 'unknown')" }},
 		{"model_is_fallback", func() { selects.modelIsFallback = "model_is_fallback" }},
 		{"source_total_tokens", func() { selects.sourceTotalTokens = "source_total_tokens" }},
+		{"raw_input_tokens", func() { selects.rawInputTokens = "raw_input_tokens" }},
 		{"token_accounting_method", func() { selects.tokenAccountingMethod = "token_accounting_method" }},
+		{"accounting_profile", func() { selects.accountingProfile = "accounting_profile" }},
+		{"session_path_id", func() { selects.sessionPathID = "session_path_id" }},
+		{"turn_id", func() { selects.turnID = "turn_id" }},
 	}
 	for _, check := range checks {
 		exists, err := has(check.column)
@@ -477,8 +506,24 @@ func mergeMissingMetadata(target, candidate *model.UsageEvent) bool {
 		target.SourceTotalTokens = candidate.SourceTotalTokens
 		changed = true
 	}
+	if target.RawInputTokens == nil && candidate.RawInputTokens != nil {
+		target.RawInputTokens = candidate.RawInputTokens
+		changed = true
+	}
 	if target.TokenAccountingMethod == "" && candidate.TokenAccountingMethod != "" {
 		target.TokenAccountingMethod = candidate.TokenAccountingMethod
+		changed = true
+	}
+	if target.AccountingProfile == "" && candidate.AccountingProfile != "" {
+		target.AccountingProfile = candidate.AccountingProfile
+		changed = true
+	}
+	if target.SessionPathID == "" && candidate.SessionPathID != "" {
+		target.SessionPathID = candidate.SessionPathID
+		changed = true
+	}
+	if target.TurnID == "" && candidate.TurnID != "" {
+		target.TurnID = candidate.TurnID
 		changed = true
 	}
 	if changed && candidate.UpdatedAtMs > 0 {
@@ -502,8 +547,20 @@ func preserveExistingMetadata(target, existing *model.UsageEvent) {
 	if existing.SourceTotalTokens != nil {
 		target.SourceTotalTokens = existing.SourceTotalTokens
 	}
+	if existing.RawInputTokens != nil {
+		target.RawInputTokens = existing.RawInputTokens
+	}
 	if existing.TokenAccountingMethod != "" {
 		target.TokenAccountingMethod = existing.TokenAccountingMethod
+	}
+	if existing.AccountingProfile != "" {
+		target.AccountingProfile = existing.AccountingProfile
+	}
+	if existing.SessionPathID != "" {
+		target.SessionPathID = existing.SessionPathID
+	}
+	if existing.TurnID != "" {
+		target.TurnID = existing.TurnID
 	}
 	target.ModelIsFallback = target.ModelIsFallback || existing.ModelIsFallback
 }

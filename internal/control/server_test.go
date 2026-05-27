@@ -56,6 +56,7 @@ func TestAPIValidation(t *testing.T) {
 	server := testServer(t)
 	cases := []string{
 		"/api/v1/analytics/timeseries?bucket=hourly",
+		"/api/v1/analytics/timeseries?by=raw",
 		"/api/v1/analytics/breakdown?by=raw",
 		"/api/v1/analytics/slow?sort=raw",
 		"/api/v1/events?limit=0",
@@ -91,5 +92,15 @@ func TestEventsConfigAndFilters(t *testing.T) {
 	}
 	if !strings.Contains(recorder.Body.String(), "codex") {
 		t.Fatalf("filter options missing channel: %s", recorder.Body.String())
+	}
+
+	recorder = httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodGet, "/api/v1/analytics/timeseries?bucket=daily&by=model", nil)
+	server.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("timeseries breakdown status = %d body = %s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), `"bucket"`) || !strings.Contains(recorder.Body.String(), "gpt-5") {
+		t.Fatalf("timeseries breakdown missing bucket/model: %s", recorder.Body.String())
 	}
 }

@@ -49,6 +49,22 @@ type MetricRow struct {
 	AvgOutputTPS        *float64 `json:"avg_output_tps"`
 }
 
+type TimeBreakdownRow struct {
+	Bucket              string   `json:"bucket"`
+	Label               string   `json:"label"`
+	Events              int64    `json:"events"`
+	TotalTokens         int64    `json:"total_tokens"`
+	InputTokens         int64    `json:"input_tokens"`
+	OutputTokens        int64    `json:"output_tokens"`
+	CacheCreationTokens int64    `json:"cache_creation_tokens"`
+	CacheReadTokens     int64    `json:"cache_read_tokens"`
+	ReasoningTokens     int64    `json:"reasoning_tokens"`
+	RecordedCostUSD     float64  `json:"recorded_cost_usd"`
+	AvgTotalDurationMs  *float64 `json:"avg_total_duration_ms"`
+	AvgTTFTMs           *float64 `json:"avg_ttft_ms"`
+	AvgOutputTPS        *float64 `json:"avg_output_tps"`
+}
+
 type ImportRun struct {
 	ID            string  `json:"id"`
 	StartedAt     *string `json:"started_at"`
@@ -70,6 +86,8 @@ type Event struct {
 	ModelNormalized     *string  `json:"model_normalized"`
 	Timestamp           *string  `json:"timestamp"`
 	SessionID           *string  `json:"session_id"`
+	SessionPathID       *string  `json:"session_path_id"`
+	TurnID              *string  `json:"turn_id"`
 	ProjectPath         *string  `json:"project_path"`
 	MessageID           *string  `json:"message_id"`
 	RequestID           *string  `json:"request_id"`
@@ -97,7 +115,7 @@ func BuildSummary(conn *sql.DB, filters Filters) (*Summary, error) {
 	query := `SELECT
 		COUNT(*),
 		COALESCE(SUM(total_tokens), 0),
-		COALESCE(SUM(input_tokens), 0),
+		COALESCE(SUM(` + effectiveInputTokensExpr() + `), 0),
 		COALESCE(SUM(output_tokens), 0),
 		COALESCE(SUM(cache_creation_tokens), 0),
 		COALESCE(SUM(cache_read_tokens), 0),
@@ -146,16 +164,9 @@ func BuildSummary(conn *sql.DB, filters Filters) (*Summary, error) {
 }
 
 func BuildTimeseries(conn *sql.DB, bucket string, filters Filters) ([]MetricRow, error) {
-	var labelExpr string
-	switch bucket {
-	case "daily", "":
-		labelExpr = timeLabelExpr("date", "%Y-%m-%d", filters.Timezone)
-	case "weekly":
-		labelExpr = timeLabelExpr("strftime", "%Y-W%W", filters.Timezone)
-	case "monthly":
-		labelExpr = timeLabelExpr("strftime", "%Y-%m", filters.Timezone)
-	default:
-		return nil, fmt.Errorf("unsupported bucket %q", bucket)
+	labelExpr, err := timeBucketExpr(bucket, filters.Timezone)
+	if err != nil {
+		return nil, err
 	}
 	query := groupedMetricQuery(labelExpr)
 	var args []any
@@ -164,19 +175,53 @@ func BuildTimeseries(conn *sql.DB, bucket string, filters Filters) ([]MetricRow,
 	return scanMetricRows(conn, query, args...)
 }
 
-func BuildBreakdown(conn *sql.DB, by string, filters Filters) ([]MetricRow, error) {
-	var labelExpr string
-	switch by {
-	case "channel", "":
-		labelExpr = "COALESCE(channel, 'unknown')"
-	case "model":
-		labelExpr = "COALESCE(model_normalized, model_raw, 'unknown')"
-	case "provider":
-		labelExpr = "COALESCE(provider, 'unknown')"
-	case "session":
-		labelExpr = "COALESCE(session_id, 'no-session')"
+func BuildTimeseriesBreakdown(conn *sql.DB, bucket, by string, filters Filters) ([]TimeBreakdownRow, error) {
+	bucketExpr, err := timeBucketExpr(bucket, filters.Timezone)
+	if err != nil {
+		return nil, err
+	}
+	labelExpr, err := breakdownLabelExpr(by)
+	if err != nil {
+		return nil, err
+	}
+	query := fmt.Sprintf(`SELECT
+		%s AS bucket,
+		%s AS label,
+		COUNT(*),
+		COALESCE(SUM(total_tokens), 0),
+		COALESCE(SUM(`+effectiveInputTokensExpr()+`), 0),
+		COALESCE(SUM(output_tokens), 0),
+		COALESCE(SUM(cache_creation_tokens), 0),
+		COALESCE(SUM(cache_read_tokens), 0),
+		COALESCE(SUM(reasoning_tokens), 0),
+		COALESCE(SUM(recorded_cost_usd), 0),
+		AVG(total_duration_ms),
+		AVG(ttft_ms),
+		AVG(output_tps)
+	FROM usage_events WHERE 1=1`, bucketExpr, labelExpr)
+	var args []any
+	query = addFilters(query, &args, filters, "timestamp_ms")
+	query += " GROUP BY bucket, label ORDER BY bucket ASC, COALESCE(SUM(total_tokens), 0) DESC, label ASC"
+	return scanTimeBreakdownRows(conn, query, args...)
+}
+
+func timeBucketExpr(bucket, timezone string) (string, error) {
+	switch bucket {
+	case "daily", "":
+		return timeLabelExpr("date", "%Y-%m-%d", timezone), nil
+	case "weekly":
+		return timeLabelExpr("strftime", "%Y-W%W", timezone), nil
+	case "monthly":
+		return timeLabelExpr("strftime", "%Y-%m", timezone), nil
 	default:
-		return nil, fmt.Errorf("unsupported breakdown %q", by)
+		return "", fmt.Errorf("unsupported bucket %q", bucket)
+	}
+}
+
+func BuildBreakdown(conn *sql.DB, by string, filters Filters) ([]MetricRow, error) {
+	labelExpr, err := breakdownLabelExpr(by)
+	if err != nil {
+		return nil, err
 	}
 	query := groupedMetricQuery(labelExpr)
 	var args []any
@@ -185,8 +230,23 @@ func BuildBreakdown(conn *sql.DB, by string, filters Filters) ([]MetricRow, erro
 	return scanMetricRows(conn, query, args...)
 }
 
+func breakdownLabelExpr(by string) (string, error) {
+	switch by {
+	case "channel", "":
+		return "COALESCE(channel, 'unknown')", nil
+	case "model":
+		return "COALESCE(model_normalized, model_raw, 'unknown')", nil
+	case "provider":
+		return "COALESCE(provider, 'unknown')", nil
+	case "session":
+		return "COALESCE(session_path_id, session_id, 'no-session')", nil
+	default:
+		return "", fmt.Errorf("unsupported breakdown %q", by)
+	}
+}
+
 func BuildSessions(conn *sql.DB, filters Filters, limit int) ([]MetricRow, error) {
-	query := groupedMetricQuery("COALESCE(session_id, 'no-session')")
+	query := groupedMetricQuery("COALESCE(session_path_id, session_id, 'no-session')")
 	var args []any
 	query = addFilters(query, &args, filters, "timestamp_ms")
 	query += " GROUP BY label ORDER BY COALESCE(SUM(total_tokens), 0) DESC, label ASC LIMIT ?"
@@ -258,7 +318,7 @@ func BuildFilterOptions(conn *sql.DB) (*FilterOptions, error) {
 	if err != nil {
 		return nil, err
 	}
-	sessions, err := distinctStrings(conn, "session_id")
+	sessions, err := distinctStrings(conn, "COALESCE(session_path_id, session_id)")
 	if err != nil {
 		return nil, err
 	}
@@ -270,7 +330,7 @@ func groupedMetricQuery(labelExpr string) string {
 		%s AS label,
 		COUNT(*),
 		COALESCE(SUM(total_tokens), 0),
-		COALESCE(SUM(input_tokens), 0),
+		COALESCE(SUM(`+effectiveInputTokensExpr()+`), 0),
 		COALESCE(SUM(output_tokens), 0),
 		COALESCE(SUM(cache_creation_tokens), 0),
 		COALESCE(SUM(cache_read_tokens), 0),
@@ -304,18 +364,22 @@ func addFilters(query string, args *[]any, filters Filters, timestampExpr string
 		*args = append(*args, filters.Model, filters.Model)
 	}
 	if filters.Session != "" {
-		query += " AND session_id = ?"
-		*args = append(*args, filters.Session)
+		query += " AND (session_id = ? OR session_path_id = ?)"
+		*args = append(*args, filters.Session, filters.Session)
 	}
 	return query
 }
 
 func eventSelect() string {
 	return `SELECT event_id, dedupe_strategy, channel, provider, model_raw, model_normalized,
-		timestamp_ms, session_id, project_path, message_id, request_id,
-		COALESCE(input_tokens, 0), COALESCE(output_tokens, 0),
+		timestamp_ms, session_id, session_path_id, turn_id, project_path, message_id, request_id,
+		` + effectiveInputTokensExpr() + `, COALESCE(output_tokens, 0),
 		COALESCE(cache_creation_tokens, 0), COALESCE(cache_read_tokens, 0), COALESCE(reasoning_tokens, 0),
 		COALESCE(total_tokens, 0), total_duration_ms, ttft_ms, output_duration_ms, output_tps, recorded_cost_usd`
+}
+
+func effectiveInputTokensExpr() string {
+	return `COALESCE(input_tokens, 0)`
 }
 
 func scanEvents(conn *sql.DB, query string, args ...any) ([]Event, error) {
@@ -328,7 +392,7 @@ func scanEvents(conn *sql.DB, query string, args ...any) ([]Event, error) {
 	var results []Event
 	for rows.Next() {
 		var item Event
-		var provider, modelRaw, modelNormalized, sessionID, projectPath, messageID, requestID sql.NullString
+		var provider, modelRaw, modelNormalized, sessionID, sessionPathID, turnID, projectPath, messageID, requestID sql.NullString
 		var ts sql.NullInt64
 		var totalDuration, ttft, outputDuration sql.NullInt64
 		var outputTPS, recordedCost sql.NullFloat64
@@ -341,6 +405,8 @@ func scanEvents(conn *sql.DB, query string, args ...any) ([]Event, error) {
 			&modelNormalized,
 			&ts,
 			&sessionID,
+			&sessionPathID,
+			&turnID,
 			&projectPath,
 			&messageID,
 			&requestID,
@@ -362,6 +428,8 @@ func scanEvents(conn *sql.DB, query string, args ...any) ([]Event, error) {
 		item.ModelRaw = nullableString(modelRaw)
 		item.ModelNormalized = nullableString(modelNormalized)
 		item.SessionID = nullableString(sessionID)
+		item.SessionPathID = nullableString(sessionPathID)
+		item.TurnID = nullableString(turnID)
 		item.ProjectPath = nullableString(projectPath)
 		item.MessageID = nullableString(messageID)
 		item.RequestID = nullableString(requestID)
@@ -390,6 +458,28 @@ func scanMetricRows(conn *sql.DB, query string, args ...any) ([]MetricRow, error
 		var item MetricRow
 		var avgDuration, avgTTFT, avgTPS sql.NullFloat64
 		if err := rows.Scan(&item.Label, &item.Events, &item.TotalTokens, &item.InputTokens, &item.OutputTokens, &item.CacheCreationTokens, &item.CacheReadTokens, &item.ReasoningTokens, &item.RecordedCostUSD, &avgDuration, &avgTTFT, &avgTPS); err != nil {
+			return nil, err
+		}
+		item.AvgTotalDurationMs = nullableFloat(avgDuration)
+		item.AvgTTFTMs = nullableFloat(avgTTFT)
+		item.AvgOutputTPS = nullableFloat(avgTPS)
+		results = append(results, item)
+	}
+	return results, rows.Err()
+}
+
+func scanTimeBreakdownRows(conn *sql.DB, query string, args ...any) ([]TimeBreakdownRow, error) {
+	rows, err := conn.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []TimeBreakdownRow
+	for rows.Next() {
+		var item TimeBreakdownRow
+		var avgDuration, avgTTFT, avgTPS sql.NullFloat64
+		if err := rows.Scan(&item.Bucket, &item.Label, &item.Events, &item.TotalTokens, &item.InputTokens, &item.OutputTokens, &item.CacheCreationTokens, &item.CacheReadTokens, &item.ReasoningTokens, &item.RecordedCostUSD, &avgDuration, &avgTTFT, &avgTPS); err != nil {
 			return nil, err
 		}
 		item.AvgTotalDurationMs = nullableFloat(avgDuration)

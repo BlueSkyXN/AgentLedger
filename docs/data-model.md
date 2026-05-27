@@ -92,15 +92,25 @@ _foreign_keys=ON
 | `provider` | `TEXT` | nullable | 模型或日志 provider，例如 `anthropic`、`openai`、`google`。 |
 | `model_raw` | `TEXT` | nullable | 日志中的原始模型名。 |
 | `model_normalized` | `TEXT` | nullable | 归一化后的模型名。 |
+| `source_agent` | `TEXT` | nullable | 解析来源 agent，通常与 `channel` 一致。 |
+| `source_product` | `TEXT` | nullable | 更具体的来源形态，例如 `codex-cli`、`copilot-otel`。 |
+| `observability_level` | `TEXT` | nullable | 来源完整度，例如 `full`、`aggregate`、`inferred`。 |
+| `model_is_fallback` | `INTEGER` | `NOT NULL DEFAULT 0` | 模型名是否来自 fallback。 |
+| `source_total_tokens` | `INTEGER` | nullable | 源日志中的 raw cumulative / envelope total，用于排查，不直接求和。 |
+| `raw_input_tokens` | `INTEGER` | nullable | source 原始 input token；Codex 中包含 cached input。 |
+| `token_accounting_method` | `TEXT` | nullable | token envelope 解析方法，例如 `codex_last_token_usage`。 |
+| `accounting_profile` | `TEXT` | nullable | 统计口径，例如 Codex 的 `ledger` 或 `ccusage_compatible`。 |
 | `timestamp_ms` | `INTEGER` | `NOT NULL` | 事件时间戳，毫秒。 |
 | `session_id` | `TEXT` | nullable | 会话 ID。 |
+| `session_path_id` | `TEXT` | nullable | 相对源路径的 session ID；Codex 用于对齐 ccusage 的 session 粒度。 |
+| `turn_id` | `TEXT` | nullable | 明确存在时的 turn ID；Codex 目前主要来自 `task_complete`。 |
 | `project_path` | `TEXT` | nullable | adapter 能解析到的项目路径。 |
 | `message_id` | `TEXT` | nullable | 日志中的 message id。 |
 | `request_id` | `TEXT` | nullable | 日志中的 request id。 |
 | `source_file` | `TEXT` | nullable | 来源文件路径。 |
 | `line_number` | `INTEGER` | nullable | JSONL 行号。 |
 | `raw_sha256` | `TEXT` | nullable | 原始 usage envelope hash。 |
-| `input_tokens` | `INTEGER` | `NOT NULL DEFAULT 0` | 输入 token。 |
+| `input_tokens` | `INTEGER` | `NOT NULL DEFAULT 0` | 非缓存输入 token；source 把 cached input 包含在 input 内时，adapter 入库前会拆分。 |
 | `output_tokens` | `INTEGER` | `NOT NULL DEFAULT 0` | 输出 token。 |
 | `reasoning_tokens` | `INTEGER` | `NOT NULL DEFAULT 0` | reasoning token。 |
 | `cache_creation_tokens` | `INTEGER` | `NOT NULL DEFAULT 0` | cache creation token。 |
@@ -125,7 +135,7 @@ v2 不从文本长度、相邻 timestamp 或文件顺序推断 token / 耗时。
 固定派生规则：
 
 ```text
-total_tokens = input + output + reasoning + cache_creation + cache_read
+total_tokens = adapter-specific fallback from explicit token parts
 ttft_ms = first_token_at_ms - request_started_at_ms
 output_duration_ms = completed_at_ms - first_token_at_ms
 total_duration_ms = completed_at_ms - request_started_at_ms
@@ -134,7 +144,7 @@ output_tps = output_tokens / (output_duration_ms / 1000.0)
 
 边界：
 
-- `total_tokens` 仅当 source 没给 `total_tokens` 时由分项计算。
+- `total_tokens` 仅当 source 没给 `total_tokens` 时由分项计算；Codex 的 reasoning token 是 output token 的子项，fallback 不会把 reasoning 再额外加一次。
 - timing 计算要求参与字段存在。
 - `output_tps` 要求 `output_duration_ms > 0`。
 - 缺失 timing 时对应列保持 `NULL`。
@@ -163,6 +173,7 @@ output_tps = output_tokens / (output_duration_ms / 1000.0)
 | `idx_usage_events_provider` | `provider` |
 | `idx_usage_events_model` | `model_normalized` |
 | `idx_usage_events_session` | `session_id` |
+| `idx_usage_session_path` | `session_path_id` |
 | `idx_usage_events_output_tps` | `output_tps` |
 | `idx_usage_events_total_duration` | `total_duration_ms` |
 | `idx_usage_events_channel_time` | `channel, timestamp_ms` |
@@ -179,6 +190,6 @@ output_tps = output_tokens / (output_duration_ms / 1000.0)
 | `status` | 无 | `meta`、`usage_events`、`import_runs` | 输出 v2 统计。 |
 | `report *` | 无 | `usage_events` | 使用 SQLite 聚合输出 text 或 JSON。 |
 | `serve` | 无 | `meta`、`import_runs`、`usage_events` | 只读 API 和 Web 面板。 |
-| `doctor` | 无 | config 与 source paths | 扫描 configured paths 统计源文件数量。 |
+| `doctor` | 无 | config 与 source paths | 扫描 configured paths 统计源文件数量；`doctor codex` 会额外输出 Codex token/timing/口径覆盖诊断。 |
 | `verify` | 无 | 当前 SQLite 数据库 | 执行 `PRAGMA integrity_check`。 |
 | `vacuum` | SQLite 内部重写 | 当前 SQLite 数据库 | 执行 `VACUUM`。 |

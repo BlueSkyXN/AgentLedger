@@ -75,6 +75,9 @@ func init() {
 		cmd.Flags().String("session", "", "Filter by session ID")
 		cmd.Flags().Bool("json", false, "Output as JSON")
 	}
+	for _, cmd := range []*cobra.Command{reportDailyCmd, reportWeeklyCmd, reportMonthlyCmd} {
+		cmd.Flags().String("by", "", "Break down time buckets by channel, model, provider, or session")
+	}
 	reportSlowCmd.Flags().String("sort", "output_tps", "Sort slow report by output_tps, ttft_ms, or total_duration_ms")
 	reportSlowCmd.Flags().Int("limit", 50, "Maximum slow events to return")
 }
@@ -99,6 +102,10 @@ func runReport(reportType string) func(cmd *cobra.Command, args []string) error 
 		modelName, _ := cmd.Flags().GetString("model")
 		session, _ := cmd.Flags().GetString("session")
 		asJSON, _ := cmd.Flags().GetBool("json")
+		by := ""
+		if cmd.Flags().Lookup("by") != nil {
+			by, _ = cmd.Flags().GetString("by")
+		}
 		sortBy := "output_tps"
 		limit := 50
 		if cmd.Flags().Lookup("sort") != nil {
@@ -116,6 +123,7 @@ func runReport(reportType string) func(cmd *cobra.Command, args []string) error 
 			Model:    modelName,
 			Session:  session,
 			Timezone: cfg.Reports.Timezone,
+			By:       by,
 			SlowSort: sortBy,
 			Limit:    limit,
 		}, asJSON)

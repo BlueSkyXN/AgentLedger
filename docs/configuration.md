@@ -40,6 +40,7 @@ paths = ["~/.config/claude/projects", "~/.claude/projects"]
 [agents.codex]
 enabled = true
 paths = ["~/.codex/sessions"]
+duplicate_policy = "ledger"
 
 [agents.gemini]
 enabled = true
@@ -78,6 +79,15 @@ paths = ["~/.qwen"]
 [agents.codex]
 enabled = true
 paths = ["~/custom-codex-logs"]
+```
+
+Codex 的 `duplicate_policy` 默认为 `ledger`，会跳过同一 session 内重复写出的 `last_token_usage + total_token_usage` 快照。需要和 `ccusage codex` 的重复快照口径对账时，可在独立数据库或重建后设置：
+
+```toml
+[agents.codex]
+enabled = true
+paths = ["~/.codex/sessions"]
+duplicate_policy = "ccusage_compatible"
 ```
 
 如果暂时不导入某个 agent：

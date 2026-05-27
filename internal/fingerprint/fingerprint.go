@@ -27,9 +27,14 @@ type ParsedRecord struct {
 	TotalTokens           int64
 	CostUSD               *float64
 	SourceTotalTokens     *int64
+	RawInputTokens        *int64
+	SourceProduct         string
 	ObservabilityLevel    string
 	ModelIsFallback       bool
 	TokenAccountingMethod string
+	AccountingProfile     string
+	SessionPathID         string
+	TurnID                string
 	IsSidechain           bool
 	UsageSpeed            string
 	RequestStartedAtMs    int64

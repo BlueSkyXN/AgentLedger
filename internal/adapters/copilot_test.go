@@ -81,6 +81,102 @@ func TestCopilotDedupesByCandidatePriorityBeforeEmit(t *testing.T) {
 	}
 }
 
+func TestCopilotSessionShutdownModelMetrics(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "session-state", "session-123")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir fixture: %v", err)
+	}
+	path := filepath.Join(dir, "events.jsonl")
+	line := `{"type":"session.shutdown","timestamp":"2026-01-01T00:00:00Z","data":{"sessionId":"session-123","modelMetrics":{"gpt-5.4":{"usage":{"inputTokens":1000,"outputTokens":200,"cacheReadTokens":300,"cacheWriteTokens":40,"reasoningTokens":50},"requests":{"count":3,"cost":0.0123}},"claude-opus-4.6":{"usage":{"inputTokens":10,"outputTokens":2,"cacheReadTokens":3,"cacheWriteTokens":4,"reasoningTokens":0},"requests":{"count":1,"cost":0.004}}}}}`
+	if err := os.WriteFile(path, []byte(line), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	records, err := NewCopilotAdapter().ParseFile(path)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("expected 2 model metric records, got %d", len(records))
+	}
+	byModel := map[string]bool{}
+	for _, rec := range records {
+		byModel[rec.Model] = true
+		if rec.SessionID != "session-123" || rec.SourceProduct != "copilot-session-state" {
+			t.Fatalf("unexpected session/source model=%s session=%s product=%s", rec.Model, rec.SessionID, rec.SourceProduct)
+		}
+		if rec.TokenAccountingMethod != model.AccCopilotSessionMetrics || rec.ObservabilityLevel != "aggregate" {
+			t.Fatalf("unexpected method=%s observability=%s", rec.TokenAccountingMethod, rec.ObservabilityLevel)
+		}
+		if rec.DedupeID == "" || rec.MessageID == "" || rec.RequestID == "" {
+			t.Fatalf("expected stable identity for model=%s", rec.Model)
+		}
+		if rec.SourceTotalTokens == nil || *rec.SourceTotalTokens != rec.TotalTokens {
+			t.Fatalf("expected source total to match total for model=%s", rec.Model)
+		}
+		if rec.RawJSON == "" {
+			t.Fatalf("expected raw usage envelope for model=%s", rec.Model)
+		}
+		if rec.Model == "gpt-5.4" {
+			if rec.InputTokens != 1000 || rec.OutputTokens != 200 || rec.CacheReadTokens != 300 || rec.CacheCreationTokens != 40 || rec.ReasoningTokens != 50 || rec.TotalTokens != 1590 {
+				t.Fatalf("unexpected gpt tokens input=%d output=%d cacheRead=%d cacheWrite=%d reasoning=%d total=%d", rec.InputTokens, rec.OutputTokens, rec.CacheReadTokens, rec.CacheCreationTokens, rec.ReasoningTokens, rec.TotalTokens)
+			}
+			if rec.CostUSD == nil || *rec.CostUSD != 0.0123 {
+				t.Fatalf("unexpected cost: %v", rec.CostUSD)
+			}
+		}
+	}
+	if !byModel["gpt-5.4"] || !byModel["claude-opus-4.6"] {
+		t.Fatalf("missing model records: %v", byModel)
+	}
+}
+
+func TestCopilotSessionShutdownFallsBackToDirectorySessionID(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "session-state", "session-from-dir")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir fixture: %v", err)
+	}
+	path := filepath.Join(dir, "events.jsonl")
+	line := `{"type":"session.shutdown","timestamp":"2026-01-01T00:00:00Z","data":{"modelMetrics":{"gpt-5.4":{"usage":{"inputTokens":1,"outputTokens":2,"cacheReadTokens":3,"cacheWriteTokens":4,"reasoningTokens":5},"requests":{"count":1}}}}}`
+	if err := os.WriteFile(path, []byte(line), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	records, err := NewCopilotAdapter().ParseFile(path)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(records))
+	}
+	if records[0].SessionID != "session-from-dir" {
+		t.Fatalf("expected directory session id, got %q", records[0].SessionID)
+	}
+}
+
+func TestCopilotDiscoverNormalizesHomeRootToKnownUsageDirs(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "otel"), 0o755); err != nil {
+		t.Fatalf("mkdir otel: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "session-state"), 0o755); err != nil {
+		t.Fatalf("mkdir session-state: %v", err)
+	}
+
+	paths := normalizeCopilotDiscoverPaths([]string{root, filepath.Join(root, "otel")})
+	expectedOtel := filepath.Join(root, "otel")
+	expectedSession := filepath.Join(root, "session-state")
+	if len(paths.otel) != 1 || len(paths.sessionState) != 1 || len(paths.other) != 0 {
+		t.Fatalf("expected one otel and one session-state path, got otel=%v session-state=%v other=%v", paths.otel, paths.sessionState, paths.other)
+	}
+	if filepath.Clean(paths.otel[0]) != filepath.Clean(expectedOtel) {
+		t.Fatalf("expected otel path %s got %s", expectedOtel, paths.otel[0])
+	}
+	if filepath.Clean(paths.sessionState[0]) != filepath.Clean(expectedSession) {
+		t.Fatalf("expected session-state path %s got %s", expectedSession, paths.sessionState[0])
+	}
+}
+
 func TestCopilotDiscoverNoOtelFilesIsSilent(t *testing.T) {
 	t.Setenv("COPILOT_OTEL_FILE_EXPORTER_PATH", "")
 	files, err := NewCopilotAdapter().Discover([]string{filepath.Join(t.TempDir(), "missing")})
@@ -89,5 +185,69 @@ func TestCopilotDiscoverNoOtelFilesIsSilent(t *testing.T) {
 	}
 	if len(files) != 0 {
 		t.Fatalf("expected no files, got %v", files)
+	}
+}
+
+func TestCopilotDiscoverPrefersOtelOverSessionStateWhenBothExist(t *testing.T) {
+	root := filepath.Join(t.TempDir(), ".copilot")
+	sessionDir := filepath.Join(root, "session-state", "session-1")
+	if err := os.MkdirAll(filepath.Join(root, "otel"), 0o755); err != nil {
+		t.Fatalf("mkdir otel: %v", err)
+	}
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatalf("mkdir session: %v", err)
+	}
+	sessionEvents := filepath.Join(sessionDir, "events.jsonl")
+	otelFile := filepath.Join(root, "otel", "telemetry.jsonl")
+	for _, path := range []string{sessionEvents, otelFile} {
+		if err := os.WriteFile(path, []byte("{}\n"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+
+	files, err := NewCopilotAdapter().Discover([]string{root})
+	if err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+	got := map[string]bool{}
+	for _, file := range files {
+		got[file] = true
+	}
+	if !got[otelFile] || got[sessionEvents] {
+		t.Fatalf("expected otel files to suppress session-state fallback, got %v", files)
+	}
+}
+
+func TestCopilotDiscoverFallsBackToFilteredSessionStateEvents(t *testing.T) {
+	root := filepath.Join(t.TempDir(), ".copilot")
+	sessionDir := filepath.Join(root, "session-state", "session-1")
+	nestedDir := filepath.Join(sessionDir, "files", "snapshot", "logs")
+	if err := os.MkdirAll(filepath.Join(root, "otel"), 0o755); err != nil {
+		t.Fatalf("mkdir otel: %v", err)
+	}
+	if err := os.MkdirAll(nestedDir, 0o755); err != nil {
+		t.Fatalf("mkdir nested: %v", err)
+	}
+	sessionEvents := filepath.Join(sessionDir, "events.jsonl")
+	nestedJSONL := filepath.Join(nestedDir, "config-audit.jsonl")
+	for _, path := range []string{sessionEvents, nestedJSONL} {
+		if err := os.WriteFile(path, []byte("{}\n"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+
+	files, err := NewCopilotAdapter().Discover([]string{root})
+	if err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+	got := map[string]bool{}
+	for _, file := range files {
+		got[file] = true
+	}
+	if !got[sessionEvents] {
+		t.Fatalf("expected session-state events fallback, got %v", files)
+	}
+	if got[nestedJSONL] {
+		t.Fatalf("nested session snapshot JSONL should not be discovered: %v", files)
 	}
 }

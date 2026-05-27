@@ -31,7 +31,8 @@ go build -o bin/agent-ledger .
 默认读取配置中启用的 agent 路径：
 
 - Claude Code: `~/.config/claude/projects`, `~/.claude/projects`
-- Codex: `~/.codex`
+- Codex: `~/.codex/sessions`
+- GitHub Copilot: `~/.copilot/otel`, `~/.copilot/session-state`
 - Gemini CLI: `~/.gemini`
 - Qwen: `~/.qwen`
 

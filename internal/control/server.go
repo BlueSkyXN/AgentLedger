@@ -158,6 +158,16 @@ func (s *Server) handleTimeseries(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	bucket := r.URL.Query().Get("bucket")
+	by := strings.TrimSpace(r.URL.Query().Get("by"))
+	if by != "" {
+		rows, err := analytics.BuildTimeseriesBreakdown(s.database.Conn(), bucket, by, filters)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, rows)
+		return
+	}
 	rows, err := analytics.BuildTimeseries(s.database.Conn(), bucket, filters)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())

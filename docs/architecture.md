@@ -104,11 +104,13 @@ _foreign_keys=ON
 
 ## Token 和 timing
 
-Token 字段直接来自日志。只有 source 没给 `total_tokens` 时，才按分项计算：
+Token 字段来自日志的 explicit usage envelope；当 source 把 cached input 包在 raw input 里时，adapter 入库前拆成非缓存输入和 cache read。只有 source 没给 `total_tokens` 时，才使用 adapter-specific fallback：
 
 ```text
-total_tokens = input + output + reasoning + cache_creation + cache_read
+total_tokens = fallback(input/output/cache/reasoning parts)
 ```
+
+Codex 的 `reasoning_output_tokens` 是 `output_tokens` 的子项；Codex fallback 不会把 reasoning 再额外加进 total。
 
 Timing 字段只在日志明确提供时记录或派生：
 
@@ -119,14 +121,15 @@ total_duration_ms = completed_at_ms - request_started_at_ms
 output_tps = output_tokens / (output_duration_ms / 1000.0)
 ```
 
-不从文本长度、相邻 timestamp 或文件顺序推断耗时。缺失 timing 时保持 `NULL`。
+不从文本长度、相邻普通 timestamp 或文件顺序推断耗时。Codex 仅在 `task_complete` 明确提供 turn timing 时关联到同 session 内上一条 usage，并保留 `turn_id`；缺失 timing 时保持 `NULL`。
 
 ## Adapter 边界
 
 | Adapter | 默认路径 | 文件类型 | 关键解析字段 |
 |---|---|---|---|
 | Claude | `~/.config/claude/projects`, `~/.claude/projects` | `.jsonl` | assistant message, `message.usage`, `message.id`, `sessionId`, `requestId`, project path。 |
-| Codex | `~/.codex` | `.jsonl` | `usage`, `response.usage`, or `payload.info.last_token_usage`。 |
+| Codex | `~/.codex/sessions` | `.jsonl` | `usage`, `response.usage`, `payload.info.last_token_usage`, `payload.info.total_token_usage`。 |
+| GitHub Copilot | `~/.copilot/otel`, `~/.copilot/session-state` | `.jsonl` | 优先 OTel `gen_ai.usage.*`；没有 OTel 文件时回退到 `session.shutdown.data.modelMetrics` session+model 汇总。 |
 | Gemini | `~/.gemini` | `.json`, `.jsonl` | `usageMetadata`, `promptTokenCount`, `candidatesTokenCount`, `totalTokenCount`。 |
 | Qwen | `~/.qwen` | `.jsonl` | `usage`, `message_id`, token fields。 |
 
@@ -144,7 +147,7 @@ output_tps = output_tokens / (output_duration_ms / 1000.0)
 - `sessions`: 按 session id。
 - `slow`: 按低输出 TPS、高 TTFT 或高总耗时列出事件。
 
-所有 report 支持 `--since`、`--until`、`--channel`、`--provider`、`--model`、`--session`、`--json`。
+所有 report 支持 `--since`、`--until`、`--channel`、`--provider`、`--model`、`--session`、`--json`。`daily`、`weekly`、`monthly` 额外支持 `--by channel|model|provider|session`，用于时间桶内维度拆分。
 
 当前配置中的 timezone 已参与 daily / weekly / monthly 报表分桶和日期过滤；currency 尚未参与报表计算。
 
@@ -153,7 +156,7 @@ output_tps = output_tokens / (output_duration_ms / 1000.0)
 `internal/control` 暴露：
 
 - `/api/v1/analytics/summary`
-- `/api/v1/analytics/timeseries?bucket=daily|weekly|monthly`
+- `/api/v1/analytics/timeseries?bucket=daily|weekly|monthly[&by=channel|model|provider|session]`
 - `/api/v1/analytics/breakdown?by=channel|model|provider|session`
 - `/api/v1/analytics/slow?sort=output_tps|ttft_ms|total_duration_ms&limit=50`
 - `/api/v1/filter-options`

@@ -52,9 +52,10 @@ type AgentsConfig struct {
 }
 
 type AgentConfig struct {
-	Enabled      bool     `toml:"enabled"`
-	Experimental bool     `toml:"experimental"`
-	Paths        []string `toml:"paths"`
+	Enabled         bool     `toml:"enabled"`
+	Experimental    bool     `toml:"experimental"`
+	Paths           []string `toml:"paths"`
+	DuplicatePolicy string   `toml:"duplicate_policy"`
 }
 
 func Default() *Config {
@@ -81,9 +82,9 @@ func Default() *Config {
 		},
 		Agents: AgentsConfig{
 			Claude:  AgentConfig{Enabled: true, Paths: []string{"~/.config/claude/projects", "~/.claude/projects"}},
-			Codex:   AgentConfig{Enabled: true, Paths: []string{"~/.codex/sessions"}},
+			Codex:   AgentConfig{Enabled: true, Paths: []string{"~/.codex/sessions"}, DuplicatePolicy: "ledger"},
 			Gemini:  AgentConfig{Enabled: true, Paths: []string{"~/.gemini"}},
-			Copilot: AgentConfig{Enabled: true, Paths: []string{"~/.copilot/otel"}},
+			Copilot: AgentConfig{Enabled: true, Paths: []string{"~/.copilot/otel", "~/.copilot/session-state"}},
 			Qwen:    AgentConfig{Enabled: false, Experimental: true, Paths: []string{"~/.qwen"}},
 		},
 	}

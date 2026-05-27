@@ -135,7 +135,7 @@ func TestFreshDBCreatesSchemaV2WithSourceColumns(t *testing.T) {
 	if !exists || version != "2" {
 		t.Fatalf("expected schema version 2, exists=%v version=%q", exists, version)
 	}
-	for _, column := range []string{"source_agent", "source_product", "observability_level", "model_is_fallback", "source_total_tokens", "token_accounting_method"} {
+	for _, column := range []string{"source_agent", "source_product", "observability_level", "model_is_fallback", "source_total_tokens", "raw_input_tokens", "token_accounting_method", "accounting_profile", "session_path_id", "turn_id"} {
 		if ok, err := dbColumnExists(database.Conn(), "usage_events", column); err != nil || !ok {
 			t.Fatalf("expected %s column ok=%v err=%v", column, ok, err)
 		}
@@ -230,13 +230,18 @@ func TestUpsertFillsSourceMetadataOnce(t *testing.T) {
 	}
 
 	sourceTotal := int64(15)
+	rawInput := int64(20)
 	withMetadata := *base
 	withMetadata.SourceAgent = "codex"
 	withMetadata.SourceProduct = "codex-cli"
 	withMetadata.ObservabilityLevel = "full"
 	withMetadata.ModelIsFallback = true
 	withMetadata.SourceTotalTokens = &sourceTotal
+	withMetadata.RawInputTokens = &rawInput
 	withMetadata.TokenAccountingMethod = model.AccCodexLastTokenUsage
+	withMetadata.AccountingProfile = "ledger"
+	withMetadata.SessionPathID = "2026/05/27/rollout-a"
+	withMetadata.TurnID = "turn-a"
 	withMetadata.UpdatedAtMs = 2
 	status, err = database.UpsertEvent(&withMetadata)
 	if err != nil || status != "updated" {
@@ -247,7 +252,11 @@ func TestUpsertFillsSourceMetadataOnce(t *testing.T) {
 	changed.SourceProduct = "other-product"
 	changed.ObservabilityLevel = "inferred"
 	changed.SourceTotalTokens = int64PtrForTest(99)
+	changed.RawInputTokens = int64PtrForTest(100)
 	changed.TokenAccountingMethod = model.AccCodexTotalDelta
+	changed.AccountingProfile = "ccusage_compatible"
+	changed.SessionPathID = "2026/05/27/rollout-b"
+	changed.TurnID = "turn-b"
 	changed.ModelIsFallback = false
 	changed.UpdatedAtMs = 3
 	status, err = database.UpsertEvent(&changed)
@@ -255,14 +264,14 @@ func TestUpsertFillsSourceMetadataOnce(t *testing.T) {
 		t.Fatalf("metadata churn status=%s err=%v", status, err)
 	}
 
-	var sourceAgent, sourceProduct, observability, accounting string
+	var sourceAgent, sourceProduct, observability, accounting, accountingProfile, sessionPathID, turnID string
 	var fallback int
-	var storedSourceTotal int64
-	if err := database.Conn().QueryRow(`SELECT source_agent, source_product, observability_level, model_is_fallback, source_total_tokens, token_accounting_method FROM usage_events WHERE event_id='event-meta'`).Scan(&sourceAgent, &sourceProduct, &observability, &fallback, &storedSourceTotal, &accounting); err != nil {
+	var storedSourceTotal, storedRawInput int64
+	if err := database.Conn().QueryRow(`SELECT source_agent, source_product, observability_level, model_is_fallback, source_total_tokens, raw_input_tokens, token_accounting_method, accounting_profile, session_path_id, turn_id FROM usage_events WHERE event_id='event-meta'`).Scan(&sourceAgent, &sourceProduct, &observability, &fallback, &storedSourceTotal, &storedRawInput, &accounting, &accountingProfile, &sessionPathID, &turnID); err != nil {
 		t.Fatalf("select metadata: %v", err)
 	}
-	if sourceAgent != "codex" || sourceProduct != "codex-cli" || observability != "full" || fallback != 1 || storedSourceTotal != 15 || accounting != model.AccCodexLastTokenUsage {
-		t.Fatalf("metadata was not stable: source=%s product=%s obs=%s fallback=%d source_total=%d accounting=%s", sourceAgent, sourceProduct, observability, fallback, storedSourceTotal, accounting)
+	if sourceAgent != "codex" || sourceProduct != "codex-cli" || observability != "full" || fallback != 1 || storedSourceTotal != 15 || storedRawInput != 20 || accounting != model.AccCodexLastTokenUsage || accountingProfile != "ledger" || sessionPathID != "2026/05/27/rollout-a" || turnID != "turn-a" {
+		t.Fatalf("metadata was not stable: source=%s product=%s obs=%s fallback=%d source_total=%d raw_input=%d accounting=%s profile=%s session_path=%s turn=%s", sourceAgent, sourceProduct, observability, fallback, storedSourceTotal, storedRawInput, accounting, accountingProfile, sessionPathID, turnID)
 	}
 }
 

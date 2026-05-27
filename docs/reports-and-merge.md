@@ -30,6 +30,8 @@
 | `report sessions` | `session_id` | total tokens desc |
 | `report slow` | 单个 timed event | sort flag 决定 |
 
+`report daily`、`report weekly`、`report monthly` 可加 `--by channel|model|provider|session`，在每个时间桶内继续拆分 token 分项，适合做按时间的模型/渠道用量趋势。
+
 聚合报表输出：
 
 ```text

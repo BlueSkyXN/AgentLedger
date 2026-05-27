@@ -63,6 +63,31 @@ func TestGenerateGroupedTableShowsCacheColumns(t *testing.T) {
 	}
 }
 
+func TestGenerateTimeBreakdownJSON(t *testing.T) {
+	database := reportTestDB(t)
+	output := captureReportOutput(t, func() error {
+		return Generate(database.Conn(), "daily", Filters{By: "model"}, true)
+	})
+	var rows []TimeBreakdownRow
+	if err := json.Unmarshal([]byte(output), &rows); err != nil {
+		t.Fatalf("json: %v\n%s", err, output)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(rows))
+	}
+	row := rows[0]
+	if row.Bucket != "1970-01-01" || row.Label != "claude-sonnet" || row.TotalTokens != 66 || row.CacheReadTokens != 16 {
+		t.Fatalf("unexpected time breakdown: %+v", row)
+	}
+}
+
+func TestGenerateTimeBreakdownRejectsRawDimension(t *testing.T) {
+	database := reportTestDB(t)
+	if err := Generate(database.Conn(), "daily", Filters{By: "raw"}, true); err == nil {
+		t.Fatal("expected invalid time breakdown")
+	}
+}
+
 func captureReportOutput(t *testing.T, run func() error) string {
 	t.Helper()
 	oldStdout := os.Stdout
