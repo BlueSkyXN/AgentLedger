@@ -3,7 +3,6 @@ package adapters
 import (
 	"bufio"
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,7 +12,11 @@ import (
 )
 
 const (
-	CodexDuplicatePolicyLedger            = "ledger"
+	// CodexDuplicatePolicyLedger 是默认、最准确的口径：对累计值 total_token_usage 做
+	// per-session 望远镜 delta，跳过冗余重发（delta=0）并整段计入 counter reset。
+	CodexDuplicatePolicyLedger = "ledger"
+	// CodexDuplicatePolicyCCUsageCompatible 复刻 ccusage 口径：直接用 last_token_usage，
+	// 靠含时间戳的 fingerprint 去重，便于与 `ccusage codex` 逐数字交叉核对（会继承其高估）。
 	CodexDuplicatePolicyCCUsageCompatible = "ccusage_compatible"
 )
 
@@ -102,7 +105,6 @@ func (a *CodexAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, erro
 	currentModel := ""
 	currentModelIsFallback := false
 	previousTotals := map[string]codexUsageSnapshot{}
-	seenLastUsageSnapshots := map[string]map[string]bool{}
 	lastUsageRecords := map[string]*fingerprint.ParsedRecord{}
 
 	for scanner.Scan() {
@@ -129,26 +131,27 @@ func (a *CodexAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, erro
 			continue
 		}
 
-		usage, method, sourceUsage, ok := extractCodexUsage(obj, entryType)
+		usage, method, sourceUsage, ok, sourceCumulative := extractCodexUsage(obj, entryType)
 		if !ok {
 			continue
 		}
 
 		sessionID := extractCodexSessionID(obj, defaultSessionID)
-		if method == model.AccCodexLastTokenUsage && a.duplicatePolicy == CodexDuplicatePolicyLedger {
-			if seenCodexLastUsageSnapshot(seenLastUsageSnapshots, sessionID, usage, sourceUsage) {
-				if sourceUsage.HasTotal {
-					previousTotals[sessionID] = sourceUsage
-				}
-				continue
-			}
-			if sourceUsage.HasTotal {
+		// codex 每次真实调用后会冗余重发一条相同的 token_count（累计 total 不变），
+		// 且 last_token_usage 仅记最后一次调用、会漏掉同一区间内的多次调用。
+		// 默认据此基于权威累计值 total_token_usage 做 per-session 望远镜 delta：
+		// 累计不变 → delta=0 自动跳过冗余；累计回落（compact 重置）→ 整段计入避免丢量。
+		// ccusage_compatible 保留 ccusage 口径：直接用 last_token_usage，靠含时间戳的
+		// fingerprint 去重（会继承 ccusage 对冗余重发的重复计算与对多次调用的漏计）。
+		if sourceCumulative {
+			if a.duplicatePolicy == CodexDuplicatePolicyCCUsageCompatible {
+				method = model.AccCodexLastTokenUsage
+				previousTotals[sessionID] = sourceUsage
+			} else {
+				usage = sourceUsage.telescopingDelta(previousTotals[sessionID])
+				method = model.AccCodexTotalDelta
 				previousTotals[sessionID] = sourceUsage
 			}
-		} else if method == model.AccCodexTotalDelta {
-			previous := previousTotals[sessionID]
-			usage = sourceUsage.delta(previous)
-			previousTotals[sessionID] = sourceUsage
 		}
 		rawInputTokens := usage.inputPtr()
 		storedUsage := usage.storageUsage()
@@ -210,33 +213,38 @@ func (a *CodexAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, erro
 	return records, scanner.Err()
 }
 
-func extractCodexUsage(obj map[string]interface{}, entryType string) (codexUsageSnapshot, string, codexUsageSnapshot, bool) {
+// extractCodexUsage 返回 (usage, method, source, ok, sourceCumulative)。
+// sourceCumulative 为 true 表示 source 来自累计字段 total_token_usage，
+// 调用方据此做望远镜 delta；为 false 表示只有单次样本（last_token_usage 或 headless usage）。
+func extractCodexUsage(obj map[string]interface{}, entryType string) (codexUsageSnapshot, string, codexUsageSnapshot, bool, bool) {
 	if entryType == "event_msg" {
 		payload := getMap(obj, "payload")
 		if payload == nil || getString(payload, "type") != "token_count" {
-			return codexUsageSnapshot{}, "", codexUsageSnapshot{}, false
+			return codexUsageSnapshot{}, "", codexUsageSnapshot{}, false, false
 		}
 		info := getMap(payload, "info")
 		if info == nil {
-			return codexUsageSnapshot{}, "", codexUsageSnapshot{}, false
+			return codexUsageSnapshot{}, "", codexUsageSnapshot{}, false, false
 		}
-		if usage := getMap(info, "last_token_usage"); usage != nil {
-			snapshot := codexUsageFromMap(usage)
-			sourceSnapshot := snapshot
-			if totalUsage := getMap(info, "total_token_usage"); totalUsage != nil {
-				sourceSnapshot = codexUsageFromMap(totalUsage)
+		// 优先使用累计值 total_token_usage（权威、可做 per-session 望远镜 delta）。
+		if totalUsage := getMap(info, "total_token_usage"); totalUsage != nil {
+			cumulative := codexUsageFromMap(totalUsage)
+			last := cumulative
+			if lastUsage := getMap(info, "last_token_usage"); lastUsage != nil {
+				last = codexUsageFromMap(lastUsage)
 			}
-			return snapshot, model.AccCodexLastTokenUsage, sourceSnapshot, true
+			return last, model.AccCodexLastTokenUsage, cumulative, true, true
 		}
-		if usage := getMap(info, "total_token_usage"); usage != nil {
-			snapshot := codexUsageFromMap(usage)
-			return snapshot, model.AccCodexTotalDelta, snapshot, true
+		// 仅有单次 last_token_usage（无累计）：作为非累计样本直接使用。
+		if lastUsage := getMap(info, "last_token_usage"); lastUsage != nil {
+			snapshot := codexUsageFromMap(lastUsage)
+			return snapshot, model.AccCodexLastTokenUsage, snapshot, true, false
 		}
-		return codexUsageSnapshot{}, "", codexUsageSnapshot{}, false
+		return codexUsageSnapshot{}, "", codexUsageSnapshot{}, false, false
 	}
 
 	if entryType != "" && !hasHeadlessCodexUsage(obj) {
-		return codexUsageSnapshot{}, "", codexUsageSnapshot{}, false
+		return codexUsageSnapshot{}, "", codexUsageSnapshot{}, false, false
 	}
 	for _, container := range []map[string]interface{}{obj, getMap(obj, "data"), getMap(obj, "result"), getMap(obj, "response")} {
 		if container == nil {
@@ -244,10 +252,10 @@ func extractCodexUsage(obj map[string]interface{}, entryType string) (codexUsage
 		}
 		if usage := getMap(container, "usage"); usage != nil {
 			snapshot := codexUsageFromMap(usage)
-			return snapshot, model.AccCodexHeadlessUsage, snapshot, true
+			return snapshot, model.AccCodexHeadlessUsage, snapshot, true, false
 		}
 	}
-	return codexUsageSnapshot{}, "", codexUsageSnapshot{}, false
+	return codexUsageSnapshot{}, "", codexUsageSnapshot{}, false, false
 }
 
 func hasHeadlessCodexUsage(obj map[string]interface{}) bool {
@@ -289,6 +297,16 @@ func (u codexUsageSnapshot) delta(previous codexUsageSnapshot) codexUsageSnapsho
 	}
 }
 
+// telescopingDelta 用累计值还原单步真实增量。previous 为空（本段首条）时直接取
+// current；current.Total < previous.Total 视为累计计数器重置（如 compact 压缩上下文），
+// 整段计入以避免丢量；其余情况按分量做饱和差。
+func (current codexUsageSnapshot) telescopingDelta(previous codexUsageSnapshot) codexUsageSnapshot {
+	if !previous.HasTotal || current.Total >= previous.Total {
+		return current.delta(previous)
+	}
+	return current
+}
+
 func (u codexUsageSnapshot) isZero() bool {
 	return u.Input == 0 && u.CachedInput == 0 && u.Output == 0 && u.Reasoning == 0
 }
@@ -319,26 +337,6 @@ func (u codexUsageSnapshot) inputPtr() *int64 {
 		return nil
 	}
 	return int64Ptr(u.Input)
-}
-
-func seenCodexLastUsageSnapshot(seen map[string]map[string]bool, sessionID string, usage, source codexUsageSnapshot) bool {
-	key := usage.snapshotKey() + "|" + source.snapshotKey()
-	sessionSeen := seen[sessionID]
-	if sessionSeen == nil {
-		sessionSeen = map[string]bool{}
-		seen[sessionID] = sessionSeen
-	}
-	if sessionSeen[key] {
-		return true
-	}
-	sessionSeen[key] = true
-	return false
-}
-
-func (u codexUsageSnapshot) snapshotKey() string {
-	return fmt.Sprintf("%d/%d/%d/%d/%d/%t/%t/%t/%t/%t",
-		u.Input, u.CachedInput, u.Output, u.Reasoning, u.Total,
-		u.HasInput, u.HasCachedInput, u.HasOutput, u.HasReasoning, u.HasTotal)
 }
 
 func extractCodexModel(obj map[string]interface{}) string {

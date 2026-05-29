@@ -26,15 +26,19 @@ Claude Code 日志会把同一次 assistant message 以多条流式行写出。A
 
 Codex 默认只扫描 `~/.codex/sessions/**/*.jsonl`，与 ccusage 的默认范围保持一致；当配置路径写成 Codex home 根目录（例如 `~/.codex`）时，adapter 会优先收敛到其 `sessions` 子目录，避免把 history、临时文件或其他 JSONL 混入 usage。`~/.codex/archived_sessions` 不会自动导入。需要统计归档历史时，可以在 config 的 `agents.codex.paths` 中显式加入归档目录，或用符号链接把归档文件纳入扫描路径。
 
-Codex 的 `total_token_usage` 是 cumulative counter。AgentLedger 优先使用 `last_token_usage` 作为单次用量；默认 `duplicate_policy = "ledger"` 会用 `last_token_usage + total_token_usage` 快照过滤同一 session 内重复写出的 token count 行，避免 rate-limit 刷新或重复事件被累计多次。这个去重口径会使 AgentLedger 低于 `ccusage codex`：ccusage 的 Codex 报表按 timestamp + model + token tuple 去重，同一快照只要 timestamp 不同仍会计入。需要对齐 ccusage 时，可在 `[agents.codex]` 下设置 `duplicate_policy = "ccusage_compatible"` 后重建或重新导入独立数据库。`last_token_usage` 缺失时，按同一 session 的 `current_total - previous_total` 逐字段计算，并使用 saturating subtraction，counter reset 不会产生负数，也不会把当前 cumulative 值当成新的单次用量。
+Codex 的 `total_token_usage` 是 session 级 cumulative counter，是最权威的用量来源。两个观测事实决定了计量口径：(1) 每次真实调用后，日志通常会**冗余重发**一条内容相同的 `token_count`（累计 total 不变）；(2) `last_token_usage` 只记录最后一次 API 调用，当同一区间内发生多次调用时会**漏记**中间的量。
+
+默认 `duplicate_policy = "ledger"` 据此采用最准口径：以 `total_token_usage` 做 per-session **望远镜 delta**——累计不变时 delta 为 0、自动跳过冗余重发；累计回落（compact 压缩上下文导致 counter reset）时整段计入、不丢量；`last_token_usage` 缺失（无累计）的旧记录才回退为单条直接计入。本机 1151 个 session 实测，该口径与「逐 session 累计值金标准」一致到 99.96%。
+
+作为对照，`ccusage codex` 用 `last_token_usage` 按 timestamp + model + token tuple 去重：既把冗余重发重复计入、又漏掉部分多调用，对本机数据净 **高估约 34%**；而早期纯 `last_token_usage` 快照去重口径会因漏多调用 **低估约 19%**。需要逐数字对齐 ccusage（含其高估）以便交叉核对时，可在 `[agents.codex]` 下设置 `duplicate_policy = "ccusage_compatible"` 后重建或重新导入独立数据库。delta 各字段使用 saturating subtraction，counter reset 不会产生负数。
 
 Codex 日志里的 `input_tokens` 包含 cached input。入库时 AgentLedger 会拆成 `input_tokens = raw_input_tokens - cached_input_tokens` 和 `cache_read_tokens = cached_input_tokens`，使表内 token 分项和 Claude/ccusage 报表的非缓存输入口径一致；`raw_input_tokens` 保存源日志原始 input，`source_total_tokens` 仍保留源日志 raw cumulative total。
 
-当 Codex 事件来自 `total_token_usage` delta 路径时，`usage_events.total_tokens` 是本次增量，`usage_events.source_total_tokens` 保留源日志里的 raw cumulative total，仅用于排查和交叉验证，不应对该列做 `SUM()` 作为用量报表。
+默认口径下 `usage_events.total_tokens` 是望远镜 delta 还原出的单次增量，`usage_events.source_total_tokens` 保留源日志里的 raw cumulative total，仅用于排查和交叉验证，不应对该列做 `SUM()` 作为用量报表。
 
 Codex 的 `task_complete.duration_ms`、`task_complete.time_to_first_token_ms` 和 `turn_id` 会按同一 session 内紧邻的上一条 usage 记录落为 turn 级 timing。这个值包含 Codex turn 的端到端耗时边界，不等同于严格的单次模型 API latency。`session_path_id` 保存相对 `sessions` 的路径 ID，例如 `2026/05/27/rollout-...`，用于和 ccusage 的 session 粒度对齐。
 
-`agent-ledger doctor codex` 会扫描 configured paths，输出 raw `token_count` 覆盖、`task_complete` timing 覆盖、默认 ledger 口径与 `ccusage_compatible` 口径的事件数/token 差异，以及模型分布。
+`agent-ledger doctor codex` 会扫描 configured paths，输出 raw `token_count` 覆盖、`task_complete` timing 覆盖、默认（准确）口径与 `ccusage_compatible` 口径的事件数/token 差异，以及模型分布。
 
 ### GitHub Copilot
 
