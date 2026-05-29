@@ -69,6 +69,9 @@ type TimeBreakdownRow struct {
 }
 
 func Generate(conn *sql.DB, reportType string, filters Filters, asJSON bool) error {
+	if err := validateDateFilters(filters); err != nil {
+		return err
+	}
 	switch reportType {
 	case "daily":
 		if filters.By != "" {
@@ -96,6 +99,27 @@ func Generate(conn *sql.DB, reportType string, filters Filters, asJSON bool) err
 	default:
 		return fmt.Errorf("unknown report type: %s", reportType)
 	}
+}
+
+func validateDateFilters(filters Filters) error {
+	if filters.Since != "" {
+		if err := validateDate("since", filters.Since); err != nil {
+			return err
+		}
+	}
+	if filters.Until != "" {
+		if err := validateDate("until", filters.Until); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateDate(name, value string) error {
+	if _, err := time.Parse("2006-01-02", value); err != nil {
+		return fmt.Errorf("%s must use YYYY-MM-DD", name)
+	}
+	return nil
 }
 
 func generateTimeBreakdown(conn *sql.DB, bucketExpr string, filters Filters, asJSON bool) error {

@@ -247,9 +247,6 @@ func NormalizeModelName(raw string) (normalized, provider, family string) {
 	case strings.Contains(lower, "gemini"):
 		provider = "google"
 		family = "gemini"
-	case strings.Contains(lower, "qwen"):
-		provider = "alibaba"
-		family = "qwen"
 	case strings.Contains(lower, "codex"):
 		provider = "openai"
 		family = "codex"

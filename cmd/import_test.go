@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/BlueSkyXN/AgentLedger/internal/adapters"
 	"github.com/BlueSkyXN/AgentLedger/internal/config"
@@ -54,4 +55,41 @@ func TestConfigureImportAdapterAppliesCodexDuplicatePolicy(t *testing.T) {
 	if len(records) != 2 {
 		t.Fatalf("expected ccusage policy to keep both records, got %d", len(records))
 	}
+}
+
+func TestSummarizeImportWarnings(t *testing.T) {
+	summary := summarizeImportWarnings([]string{"first", "second", "third", "fourth", "fifth", "sixth"})
+	for _, want := range []string{"6 warning(s)", "first", "fifth", "1 more"} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary missing %q: %s", want, summary)
+		}
+	}
+	if strings.Contains(summary, "sixth") {
+		t.Fatalf("summary should truncate detailed warnings: %s", summary)
+	}
+}
+
+func TestParseImportFileProcessesStableRecentFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "recent.jsonl")
+	if err := os.WriteFile(path, []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	records, processed, warning := parseImportFile(fakeImportAdapter{}, path, time.Now().Add(-time.Hour))
+	if warning != "" {
+		t.Fatalf("unexpected warning: %s", warning)
+	}
+	if !processed || len(records) != 1 {
+		t.Fatalf("expected stable recent file to be processed, processed=%v records=%d", processed, len(records))
+	}
+}
+
+type fakeImportAdapter struct{}
+
+func (fakeImportAdapter) Name() string { return "fake" }
+
+func (fakeImportAdapter) Discover(paths []string) ([]string, error) { return nil, nil }
+
+func (fakeImportAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, error) {
+	return []*fingerprint.ParsedRecord{{Agent: "fake", TimestampMs: 1, TotalTokens: 1}}, nil
 }

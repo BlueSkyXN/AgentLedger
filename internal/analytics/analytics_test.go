@@ -163,4 +163,13 @@ func TestInvalidAnalyticsOptions(t *testing.T) {
 	if _, err := BuildSlow(database.Conn(), "raw", Filters{}, 10); err == nil {
 		t.Fatal("expected invalid slow sort error")
 	}
+	if _, err := BuildSummary(database.Conn(), Filters{Since: "2026/05/01"}); err == nil {
+		t.Fatal("expected invalid since error")
+	}
+	if _, err := ListEvents(database.Conn(), Filters{Until: "tomorrow"}, 10); err == nil {
+		t.Fatal("expected invalid until error")
+	}
+	if _, err := distinctStrings(database.Conn(), "raw SQL"); err == nil {
+		t.Fatal("expected invalid filter option error")
+	}
 }

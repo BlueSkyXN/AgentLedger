@@ -112,6 +112,9 @@ type FilterOptions struct {
 }
 
 func BuildSummary(conn *sql.DB, filters Filters) (*Summary, error) {
+	if err := validateDateFilters(filters); err != nil {
+		return nil, err
+	}
 	query := `SELECT
 		COUNT(*),
 		COALESCE(SUM(total_tokens), 0),
@@ -164,6 +167,9 @@ func BuildSummary(conn *sql.DB, filters Filters) (*Summary, error) {
 }
 
 func BuildTimeseries(conn *sql.DB, bucket string, filters Filters) ([]MetricRow, error) {
+	if err := validateDateFilters(filters); err != nil {
+		return nil, err
+	}
 	labelExpr, err := timeBucketExpr(bucket, filters.Timezone)
 	if err != nil {
 		return nil, err
@@ -176,6 +182,9 @@ func BuildTimeseries(conn *sql.DB, bucket string, filters Filters) ([]MetricRow,
 }
 
 func BuildTimeseriesBreakdown(conn *sql.DB, bucket, by string, filters Filters) ([]TimeBreakdownRow, error) {
+	if err := validateDateFilters(filters); err != nil {
+		return nil, err
+	}
 	bucketExpr, err := timeBucketExpr(bucket, filters.Timezone)
 	if err != nil {
 		return nil, err
@@ -219,6 +228,9 @@ func timeBucketExpr(bucket, timezone string) (string, error) {
 }
 
 func BuildBreakdown(conn *sql.DB, by string, filters Filters) ([]MetricRow, error) {
+	if err := validateDateFilters(filters); err != nil {
+		return nil, err
+	}
 	labelExpr, err := breakdownLabelExpr(by)
 	if err != nil {
 		return nil, err
@@ -246,6 +258,9 @@ func breakdownLabelExpr(by string) (string, error) {
 }
 
 func BuildSessions(conn *sql.DB, filters Filters, limit int) ([]MetricRow, error) {
+	if err := validateDateFilters(filters); err != nil {
+		return nil, err
+	}
 	query := groupedMetricQuery("COALESCE(session_path_id, session_id, 'no-session')")
 	var args []any
 	query = addFilters(query, &args, filters, "timestamp_ms")
@@ -255,6 +270,9 @@ func BuildSessions(conn *sql.DB, filters Filters, limit int) ([]MetricRow, error
 }
 
 func BuildSlow(conn *sql.DB, sortBy string, filters Filters, limit int) ([]Event, error) {
+	if err := validateDateFilters(filters); err != nil {
+		return nil, err
+	}
 	orderExpr, notNullExpr, err := slowOrder(sortBy)
 	if err != nil {
 		return nil, err
@@ -297,6 +315,9 @@ func ListImportRuns(conn *sql.DB, limit int) ([]ImportRun, error) {
 }
 
 func ListEvents(conn *sql.DB, filters Filters, limit int) ([]Event, error) {
+	if err := validateDateFilters(filters); err != nil {
+		return nil, err
+	}
 	query := eventSelect() + " FROM usage_events WHERE 1=1"
 	var args []any
 	query = addFilters(query, &args, filters, "timestamp_ms")
@@ -314,11 +335,11 @@ func BuildFilterOptions(conn *sql.DB) (*FilterOptions, error) {
 	if err != nil {
 		return nil, err
 	}
-	models, err := distinctStrings(conn, "COALESCE(model_normalized, model_raw)")
+	models, err := distinctStrings(conn, "model")
 	if err != nil {
 		return nil, err
 	}
-	sessions, err := distinctStrings(conn, "COALESCE(session_path_id, session_id)")
+	sessions, err := distinctStrings(conn, "session")
 	if err != nil {
 		return nil, err
 	}
@@ -503,7 +524,11 @@ func slowOrder(sortBy string) (orderExpr, notNullExpr string, err error) {
 	}
 }
 
-func distinctStrings(conn *sql.DB, expr string) ([]string, error) {
+func distinctStrings(conn *sql.DB, key string) ([]string, error) {
+	expr, err := filterOptionExpr(key)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := conn.Query(fmt.Sprintf(`SELECT DISTINCT %s AS value FROM usage_events WHERE %s IS NOT NULL AND %s != '' ORDER BY value ASC LIMIT 500`, expr, expr, expr))
 	if err != nil {
 		return nil, err
@@ -518,6 +543,42 @@ func distinctStrings(conn *sql.DB, expr string) ([]string, error) {
 		values = append(values, value)
 	}
 	return values, rows.Err()
+}
+
+func filterOptionExpr(key string) (string, error) {
+	switch key {
+	case "channel":
+		return "channel", nil
+	case "provider":
+		return "provider", nil
+	case "model":
+		return "COALESCE(model_normalized, model_raw)", nil
+	case "session":
+		return "COALESCE(session_path_id, session_id)", nil
+	default:
+		return "", fmt.Errorf("unsupported filter option %q", key)
+	}
+}
+
+func validateDateFilters(filters Filters) error {
+	if filters.Since != "" {
+		if err := validateDate("since", filters.Since); err != nil {
+			return err
+		}
+	}
+	if filters.Until != "" {
+		if err := validateDate("until", filters.Until); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateDate(name, value string) error {
+	if _, err := time.Parse("2006-01-02", value); err != nil {
+		return fmt.Errorf("%s must use YYYY-MM-DD", name)
+	}
+	return nil
 }
 
 func dateStartMillis(value, timezone string) int64 {
