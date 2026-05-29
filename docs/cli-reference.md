@@ -52,7 +52,7 @@ agent-ledger import
 
 - 遍历启用 adapter。
 - 使用 configured paths 发现 JSON/JSONL 文件。
-- 跳过修改时间处于 grace period 内的文件。
+- 对修改时间处于 grace period 内的文件做短暂稳定性检查；size / mtime 稳定则解析，不稳定才跳过。
 - 解析 usage record，计算 fingerprint。
 - upsert 写入 `usage_events`。
 - 重复事件按完整度保留更完整记录。
@@ -72,7 +72,7 @@ Flags:
 |---|---|
 | `-o, --output string` | 输出路径；为空时使用 `agent-ledger-export.aldb`。 |
 
-当前 export 是数据库文件复制，不执行路径脱敏、时间范围过滤或压缩。
+当前 export 使用 SQLite `VACUUM INTO` 生成 `.aldb` 副本。默认 `[privacy].redact_paths_on_export = true` 时会清空 `project_path`、`source_file` 和 `raw_usage_json`；当前不执行时间范围过滤或压缩。
 
 ## `merge`
 

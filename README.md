@@ -2,7 +2,7 @@
 
 **面向 AI Coding Agent 的本地 usage 统计分析器。**
 
-AgentLedger 把 Claude Code、Codex、Gemini CLI、Qwen 等本机日志解析为统一 usage event，写入本地 SQLite，并提供按渠道、模型、provider、时间和 session 的筛选、聚合与慢请求分析。
+AgentLedger 把 Claude Code、Codex、GitHub Copilot、Gemini CLI 等本机日志解析为统一 usage event，写入本地 SQLite，并提供按渠道、模型、provider、时间和 session 的筛选、聚合与慢请求分析。
 
 ## 当前定位
 
@@ -26,7 +26,7 @@ agent-ledger init --reset
 
 ## 功能特性
 
-- **多 agent 导入**：Claude Code、Codex、Gemini CLI、Qwen。
+- **多 agent 导入**：Claude Code、Codex、GitHub Copilot、Gemini CLI。
 - **三表 SQLite schema**：只保留 `meta`、`import_runs`、`usage_events`。
 - **扁平事实表**：`usage_events` 直接保存 channel、provider、model、time、session、token、timing、source line 和 raw usage envelope。
 - **确定性去重 + 完整度 upsert**：重复事件优先保留有 timing、有 recorded cost、有 model、token 总量更高的记录。
@@ -228,12 +228,11 @@ session=<session-id>
 | Agent | 默认路径 | 解析格式 | 说明 |
 |---|---|---|---|
 | Claude Code | `~/.config/claude/projects`, `~/.claude/projects` | JSONL | 读取带有 `message.usage` 的 assistant 消息；旧配置写 `~/.claude` 时会自动展开到 `projects`。 |
-| Codex | `~/.codex/sessions` | JSONL | 读取 token count 记录；存在 `last_token_usage` 时优先使用；配置写 `~/.codex` 时会自动收敛到 `sessions`。 |
+| Codex | `~/.codex/sessions` | JSONL | 读取 token count 记录；默认用 `total_token_usage` 的 per-session 累计 delta 还原真实增量，`last_token_usage` 仅用于旧记录或 `ccusage_compatible` 对照；配置写 `~/.codex` 时会自动收敛到 `sessions`。 |
 | GitHub Copilot | `~/.copilot/otel`, `~/.copilot/session-state` | JSONL | 优先读取 OTel `gen_ai.usage.*`；没有 OTel 文件时回退到每条非空 `session.shutdown.data.modelMetrics` 的 segment+model 汇总。Copilot input 会拆成 `raw_input_tokens`、非缓存 `input_tokens` 和 `cache_read_tokens`。 |
 | Gemini CLI | `~/.gemini` | JSON / JSONL | 读取 `usageMetadata`。 |
-| Qwen | `~/.qwen` | JSONL | 读取 `usage`。 |
 
-`channel` 固定表示 agent 来源，例如 `claude`、`codex`、`copilot`、`gemini`、`qwen`。
+`channel` 固定表示 agent 来源，例如 `claude`、`codex`、`copilot`、`gemini`。
 
 ## 配置
 
@@ -273,9 +272,9 @@ duplicate_policy = "ledger"
 enabled = true
 paths = ["~/.gemini"]
 
-[agents.qwen]
+[agents.copilot]
 enabled = true
-paths = ["~/.qwen"]
+paths = ["~/.copilot/otel", "~/.copilot/session-state"]
 ```
 
 数据目录选择顺序：
@@ -289,7 +288,7 @@ paths = ["~/.qwen"]
 - Config: `<data-dir>/config.toml`
 - Database: 默认 `<data-dir>/agent-ledger.db`，也可通过 `[database].path` 修改
 
-当前 `[reports].timezone` 已用于 daily / weekly / monthly 报表分桶和 `--since` / `--until` 日期过滤；支持 `Local`、`UTC`、固定偏移如 `+08:00`，以及 Go 可加载的 IANA 时区如 `Asia/Shanghai`。`[cleanup]`、`[reports].currency` 和 `[privacy].redact_paths_on_export` 仍是配置占位；现有命令尚未实现 cleanup、currency 转换或 export redaction。
+当前 `[reports].timezone` 已用于 daily / weekly / monthly 报表分桶和 `--since` / `--until` 日期过滤；支持 `Local`、`UTC`、固定偏移如 `+08:00`，以及 Go 可加载的 IANA 时区如 `Asia/Shanghai`。`[privacy].redact_paths_on_export = true` 时，`export` 会移除导出副本里的 `project_path`、`source_file` 和 `raw_usage_json`。`[cleanup]` 和 `[reports].currency` 仍是配置占位；现有命令尚未实现 cleanup 或 currency 转换。
 
 ## 文档
 

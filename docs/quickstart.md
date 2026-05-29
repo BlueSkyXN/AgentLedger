@@ -34,7 +34,6 @@ go build -o bin/agent-ledger .
 - Codex: `~/.codex/sessions`
 - GitHub Copilot: `~/.copilot/otel`, `~/.copilot/session-state`。优先 OTel；没有 OTel 文件时读取 `session.shutdown.data.modelMetrics` 的 segment+model 汇总。
 - Gemini CLI: `~/.gemini`
-- Qwen: `~/.qwen`
 
 ## 4. Status
 

@@ -50,7 +50,7 @@ agent-ledger report slow --sort ttft_ms --limit 20
 
 ## 指标语义
 
-- `channel`: Agent 来源，例如 `claude`、`codex`、`gemini`、`qwen`。
+- `channel`: Agent 来源，例如 `claude`、`codex`、`copilot`、`gemini`。
 - `provider`: 模型或日志 provider，例如 `anthropic`、`openai`、`google`。
 - `model_normalized`: 归一化模型名。
 - `total_tokens`: source 提供时使用 source 值；否则按 input/output/reasoning/cache 分项计算。

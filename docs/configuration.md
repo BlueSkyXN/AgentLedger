@@ -46,9 +46,9 @@ duplicate_policy = "ledger"
 enabled = true
 paths = ["~/.gemini"]
 
-[agents.qwen]
+[agents.copilot]
 enabled = true
-paths = ["~/.qwen"]
+paths = ["~/.copilot/otel", "~/.copilot/session-state"]
 ```
 
 ## 当前生效的键
@@ -56,17 +56,17 @@ paths = ["~/.qwen"]
 | Key | 当前用途 |
 |---|---|
 | `[database].path` | SQLite 数据库路径；支持 `~/` 展开。默认生成在数据目录下。 |
-| `[import].gracing_minutes` | `import` 跳过最近修改文件的时间窗口。 |
+| `[import].gracing_minutes` | `import` 对最近修改文件启用稳定性检查的时间窗口；近期文件只有 size / mtime 仍在变化时才跳过。 |
 | `[agents.*].enabled` | 是否启用对应 adapter。 |
 | `[agents.*].paths` | adapter 扫描的根路径列表；支持 `~/` 展开。 |
 | `[reports].timezone` | daily / weekly / monthly 报表分桶和 `--since` / `--until` 日期过滤使用的时区。支持 `Local`、`UTC`、固定偏移如 `+08:00`，以及 Go 可加载的 IANA 时区如 `Asia/Shanghai`。 |
+| `[privacy].redact_paths_on_export` | `export` 是否在导出副本中清空 `project_path`、`source_file` 和 `raw_usage_json`。默认开启。 |
 
 ## 当前预留的键
 
 | Key | 当前状态 |
 |---|---|
 | `[privacy].mode` | 已保存到配置，但当前 import/export 逻辑尚未按该值切换隐私模式。 |
-| `[privacy].redact_paths_on_export` | 预留；当前 `export` 只是复制 SQLite 数据库。 |
 | `[import].single_thread` | 预留；当前 import 是顺序遍历。 |
 | `[cleanup].*` | 预留；当前 CLI 没有 `cleanup` 命令。 |
 | `[reports].currency` | 预留；当前没有 currency conversion。 |
@@ -81,7 +81,7 @@ enabled = true
 paths = ["~/custom-codex-logs"]
 ```
 
-Codex 的 `duplicate_policy` 默认为 `ledger`，会跳过同一 session 内重复写出的 `last_token_usage + total_token_usage` 快照。需要和 `ccusage codex` 的重复快照口径对账时，可在独立数据库或重建后设置：
+Codex 的 `duplicate_policy` 默认为 `ledger`，会用 `total_token_usage` 的 per-session 累计 delta 还原真实增量，自动跳过累计值不变的冗余 `token_count`。需要和 `ccusage codex` 的 `last_token_usage` 对照口径对账时，可在独立数据库或重建后设置：
 
 ```toml
 [agents.codex]

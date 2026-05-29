@@ -115,8 +115,8 @@ func TestComputeRawHash(t *testing.T) {
 
 func TestComputeFallback(t *testing.T) {
 	rec := &ParsedRecord{
-		Agent:      "qwen",
-		Provider:   "alibaba",
+		Agent:      "copilot",
+		Provider:   "github",
 		SourceFile: "/path/to/file.jsonl",
 		LineNumber: 42,
 		RawSHA256:  "abc123",

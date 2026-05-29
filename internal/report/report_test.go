@@ -88,6 +88,16 @@ func TestGenerateTimeBreakdownRejectsRawDimension(t *testing.T) {
 	}
 }
 
+func TestGenerateRejectsInvalidDateFilters(t *testing.T) {
+	database := reportTestDB(t)
+	if err := Generate(database.Conn(), "daily", Filters{Since: "2026/05/01"}, true); err == nil || !strings.Contains(err.Error(), "since must use YYYY-MM-DD") {
+		t.Fatalf("expected invalid since error, got %v", err)
+	}
+	if err := Generate(database.Conn(), "daily", Filters{Until: "tomorrow"}, true); err == nil || !strings.Contains(err.Error(), "until must use YYYY-MM-DD") {
+		t.Fatalf("expected invalid until error, got %v", err)
+	}
+}
+
 func captureReportOutput(t *testing.T, run func() error) string {
 	t.Helper()
 	oldStdout := os.Stdout

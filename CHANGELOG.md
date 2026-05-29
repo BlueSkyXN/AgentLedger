@@ -8,7 +8,7 @@ All notable changes to this project will be documented in this file.
 
 - Initial AgentLedger Go CLI implementation.
 - SQLite database layer with WAL mode and schema version 1.
-- Source adapters for Claude Code, Codex, Gemini CLI, and Qwen local usage logs.
+- Source adapters for Claude Code, Codex, and Gemini CLI local usage logs.
 - Import pipeline with file discovery, parse-time filtering, and grace-period skipping for recently modified files.
 - Event fingerprinting with four deterministic strategies: `message_id`, `session_token`, `raw_hash`, and `fallback`.
 - Cross-device export and merge using portable `.aldb` SQLite files.

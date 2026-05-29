@@ -24,6 +24,5 @@ func AllAdapters() []Adapter {
 		NewCodexAdapter(),
 		NewGeminiAdapter(),
 		NewCopilotAdapter(),
-		NewQwenAdapter(),
 	}
 }

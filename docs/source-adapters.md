@@ -10,7 +10,6 @@ AgentLedger v2 通过 adapter 读取本机 agent 日志，解析出统一的 `Pa
 | Codex | `~/.codex/sessions` | JSONL | `usage`、`response.usage`、`payload.info.last_token_usage`、`payload.info.total_token_usage`。 |
 | GitHub Copilot | `~/.copilot/otel`, `~/.copilot/session-state` | JSONL | 优先 OTel `gen_ai.usage.*` token telemetry；没有 OTel 文件时回退到 `session.shutdown.data.modelMetrics` session+model 汇总。 |
 | Gemini CLI | `~/.gemini` | JSON / JSONL | `usageMetadata`、`promptTokenCount`、`candidatesTokenCount`、`totalTokenCount`。 |
-| Qwen | `~/.qwen` | JSONL | Experimental，默认关闭；`usage`、`message_id`、token fields。 |
 
 ## Source-specific accounting
 
@@ -52,7 +51,7 @@ GitHub Copilot 优先读取本地 OTel JSONL telemetry：`~/.copilot/otel` 或 `
 
 Adapter 会尽量提供：
 
-- `Agent`: 写入 `channel`，例如 `claude`、`codex`、`copilot`、`gemini`、`qwen`。
+- `Agent`: 写入 `channel`，例如 `claude`、`codex`、`copilot`、`gemini`。
 - `Provider`
 - `Model`
 - `TimestampMs`

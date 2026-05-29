@@ -48,7 +48,6 @@ type AgentsConfig struct {
 	Codex   AgentConfig `toml:"codex"`
 	Gemini  AgentConfig `toml:"gemini"`
 	Copilot AgentConfig `toml:"copilot"`
-	Qwen    AgentConfig `toml:"qwen"`
 }
 
 type AgentConfig struct {
@@ -85,7 +84,6 @@ func Default() *Config {
 			Codex:   AgentConfig{Enabled: true, Paths: []string{"~/.codex/sessions"}, DuplicatePolicy: "ledger"},
 			Gemini:  AgentConfig{Enabled: true, Paths: []string{"~/.gemini"}},
 			Copilot: AgentConfig{Enabled: true, Paths: []string{"~/.copilot/otel", "~/.copilot/session-state"}},
-			Qwen:    AgentConfig{Enabled: false, Experimental: true, Paths: []string{"~/.qwen"}},
 		},
 	}
 }

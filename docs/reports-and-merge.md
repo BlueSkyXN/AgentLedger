@@ -84,12 +84,12 @@ Sort allowlist：
 agent-ledger export --output usage.aldb
 ```
 
-当前 export 是简单文件复制：
+当前 export 使用 SQLite `VACUUM INTO` 生成 `.aldb` 副本：
 
 - 源文件是当前配置指向的 SQLite 数据库。
 - 输出为空时默认 `agent-ledger-export.aldb`。
 - 不按时间过滤。
-- 不脱敏。
+- 默认按 `[privacy].redact_paths_on_export = true` 清空 `project_path`、`source_file` 和 `raw_usage_json`；关闭该配置时导出未脱敏副本。
 - 不压缩。
 
 ## Merge

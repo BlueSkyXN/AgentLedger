@@ -20,6 +20,7 @@ type ImportRun struct {
 	EventsAdded   int
 	EventsUpdated int
 	EventsSkipped int
+	Error         string
 }
 
 func (d *Database) StartImportRun(runID string) error {
@@ -31,16 +32,24 @@ func (d *Database) StartImportRun(runID string) error {
 }
 
 func (d *Database) FinishImportRun(runID string, filesScanned, eventsAdded, eventsUpdated, eventsSkipped int) error {
+	return d.FinishImportRunWithStatus(runID, filesScanned, eventsAdded, eventsUpdated, eventsSkipped, "completed", "")
+}
+
+func (d *Database) FinishImportRunWithStatus(runID string, filesScanned, eventsAdded, eventsUpdated, eventsSkipped int, status, errorText string) error {
+	if status == "" {
+		status = "completed"
+	}
 	_, err := d.conn.Exec(`
         UPDATE import_runs SET
             finished_at_ms = ?,
-            status = 'completed',
+            status = ?,
             files_scanned = ?,
             events_added = ?,
             events_updated = ?,
-            events_skipped = ?
+            events_skipped = ?,
+            error = ?
         WHERE id = ?
-    `, time.Now().UnixMilli(), filesScanned, eventsAdded, eventsUpdated, eventsSkipped, runID)
+    `, time.Now().UnixMilli(), status, filesScanned, eventsAdded, eventsUpdated, eventsSkipped, nullIfEmpty(errorText), runID)
 	return err
 }
 

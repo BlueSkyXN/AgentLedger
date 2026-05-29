@@ -14,12 +14,10 @@ v2 当前主线是本地 usage analytics：导入、去重、token/timing 聚合
 
 v2 为了简单已删除 `sources`、`source_files`、`raw_records`。如果后续确实需要增量导入状态、cleanup/quarantine 或 parse error replay，再重新设计 source tracking schema。
 
-## Possible: export redaction
+## Possible: richer export controls
 
-当前 export 是 SQLite 文件复制。后续可增加：
+当前 export 已支持在导出副本中清空路径和 raw usage envelope。后续可增加：
 
-- 路径脱敏。
-- raw usage envelope 移除。
 - 时间范围过滤。
 - 压缩包导出。
 

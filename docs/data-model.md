@@ -88,7 +88,7 @@ _foreign_keys=ON
 | `event_id` | `TEXT` | `PRIMARY KEY` | 稳定事件 ID，由 fingerprint 计算。 |
 | `dedupe_key` | `TEXT` | `NOT NULL` | 去重 key。 |
 | `dedupe_strategy` | `TEXT` | `NOT NULL` | `message_id`、`session_token`、`raw_hash` 或 `fallback`。 |
-| `channel` | `TEXT` | `NOT NULL` | Agent 来源，例如 `claude`、`codex`、`gemini`、`qwen`。 |
+| `channel` | `TEXT` | `NOT NULL` | Agent 来源，例如 `claude`、`codex`、`copilot`、`gemini`。 |
 | `provider` | `TEXT` | nullable | 模型或日志 provider，例如 `anthropic`、`openai`、`google`。 |
 | `model_raw` | `TEXT` | nullable | 日志中的原始模型名。 |
 | `model_normalized` | `TEXT` | nullable | 归一化后的模型名。 |

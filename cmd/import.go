@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/BlueSkyXN/AgentLedger/internal/adapters"
@@ -14,6 +15,8 @@ import (
 	"github.com/oklog/ulid/v2"
 	"github.com/spf13/cobra"
 )
+
+const recentFileStabilityDelay = 100 * time.Millisecond
 
 var importCmd = &cobra.Command{
 	Use:   "import",
@@ -43,6 +46,7 @@ var importCmd = &cobra.Command{
 		totalAdded := 0
 		totalUpdated := 0
 		totalSkipped := 0
+		var warnings []string
 
 		allAdapters := adapters.AllAdapters()
 		agentConfigs := map[string]*config.AgentConfig{
@@ -50,7 +54,6 @@ var importCmd = &cobra.Command{
 			"codex":   &cfg.Agents.Codex,
 			"gemini":  &cfg.Agents.Gemini,
 			"copilot": &cfg.Agents.Copilot,
-			"qwen":    &cfg.Agents.Qwen,
 		}
 
 		for _, adapter := range allAdapters {
@@ -62,14 +65,19 @@ var importCmd = &cobra.Command{
 
 			files, err := adapter.Discover(agentCfg.Paths)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Warning: %s discover failed: %v\n", adapter.Name(), err)
+				warning := fmt.Sprintf("%s discover failed: %v", adapter.Name(), err)
+				warnings = append(warnings, warning)
+				fmt.Fprintf(os.Stderr, "Warning: %s\n", warning)
 				continue
 			}
 
 			if postProcessor, ok := adapter.(adapters.RecordPostProcessor); ok {
 				records := make([]*fingerprint.ParsedRecord, 0)
 				for _, filePath := range files {
-					parsed, processed := parseImportFile(adapter, filePath, cutoff)
+					parsed, processed, warning := parseImportFile(adapter, filePath, cutoff)
+					if warning != "" {
+						warnings = append(warnings, warning)
+					}
 					if !processed {
 						continue
 					}
@@ -77,7 +85,8 @@ var importCmd = &cobra.Command{
 					records = append(records, parsed...)
 				}
 				records = postProcessor.PostProcessRecords(records)
-				added, updated, skipped := importParsedRecords(database, adapter.Name(), records)
+				added, updated, skipped, recordWarnings := importParsedRecords(database, adapter.Name(), records)
+				warnings = append(warnings, recordWarnings...)
 				totalAdded += added
 				totalUpdated += updated
 				totalSkipped += skipped
@@ -85,19 +94,29 @@ var importCmd = &cobra.Command{
 			}
 
 			for _, filePath := range files {
-				records, processed := parseImportFile(adapter, filePath, cutoff)
+				records, processed, warning := parseImportFile(adapter, filePath, cutoff)
+				if warning != "" {
+					warnings = append(warnings, warning)
+				}
 				if !processed {
 					continue
 				}
 				totalFiles++
-				added, updated, skipped := importParsedRecords(database, adapter.Name(), records)
+				added, updated, skipped, recordWarnings := importParsedRecords(database, adapter.Name(), records)
+				warnings = append(warnings, recordWarnings...)
 				totalAdded += added
 				totalUpdated += updated
 				totalSkipped += skipped
 			}
 		}
 
-		if err := database.FinishImportRun(runID, totalFiles, totalAdded, totalUpdated, totalSkipped); err != nil {
+		status := "completed"
+		errorSummary := ""
+		if len(warnings) > 0 {
+			status = "completed_with_warnings"
+			errorSummary = summarizeImportWarnings(warnings)
+		}
+		if err := database.FinishImportRunWithStatus(runID, totalFiles, totalAdded, totalUpdated, totalSkipped, status, errorSummary); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: failed to record import run finish: %v\n", err)
 		}
 
@@ -106,31 +125,54 @@ var importCmd = &cobra.Command{
 		fmt.Printf("  Events added:    %d\n", totalAdded)
 		fmt.Printf("  Events updated:  %d\n", totalUpdated)
 		fmt.Printf("  Events skipped:  %d (duplicates)\n", totalSkipped)
+		if len(warnings) > 0 {
+			fmt.Printf("  Warnings:        %d\n", len(warnings))
+		}
 		return nil
 	},
 }
 
-func parseImportFile(adapter adapters.Adapter, filePath string, cutoff time.Time) ([]*fingerprint.ParsedRecord, bool) {
+func parseImportFile(adapter adapters.Adapter, filePath string, cutoff time.Time) ([]*fingerprint.ParsedRecord, bool, string) {
 	info, err := os.Stat(filePath)
 	if err != nil {
-		return nil, false
+		warning := fmt.Sprintf("failed to stat %s: %v", filePath, err)
+		fmt.Fprintf(os.Stderr, "Warning: %s\n", warning)
+		return nil, false, warning
 	}
 	if info.ModTime().After(cutoff) {
-		return nil, false
+		stable, warning := recentFileIsStable(filePath, info)
+		if warning != "" {
+			fmt.Fprintf(os.Stderr, "Warning: %s\n", warning)
+			return nil, false, warning
+		}
+		if !stable {
+			return nil, false, ""
+		}
 	}
 
 	records, err := adapter.ParseFile(filePath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to parse %s: %v\n", filePath, err)
-		return nil, true
+		warning := fmt.Sprintf("failed to parse %s: %v", filePath, err)
+		fmt.Fprintf(os.Stderr, "Warning: %s\n", warning)
+		return nil, true, warning
 	}
-	return records, true
+	return records, true, ""
 }
 
-func importParsedRecords(database *db.Database, adapterName string, records []*fingerprint.ParsedRecord) (int, int, int) {
+func recentFileIsStable(filePath string, before os.FileInfo) (bool, string) {
+	time.Sleep(recentFileStabilityDelay)
+	after, err := os.Stat(filePath)
+	if err != nil {
+		return false, fmt.Sprintf("failed to restat %s: %v", filePath, err)
+	}
+	return before.Size() == after.Size() && before.ModTime().Equal(after.ModTime()), ""
+}
+
+func importParsedRecords(database *db.Database, adapterName string, records []*fingerprint.ParsedRecord) (int, int, int, []string) {
 	added := 0
 	updated := 0
 	skipped := 0
+	var warnings []string
 	for _, rec := range records {
 		fp, strategy := fingerprint.Compute(rec)
 		nowMs := time.Now().UnixMilli()
@@ -202,7 +244,9 @@ func importParsedRecords(database *db.Database, adapterName string, records []*f
 
 		result, err := database.UpsertEvent(event)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: insert error: %v\n", err)
+			warning := fmt.Sprintf("insert error for %s:%d: %v", rec.SourceFile, rec.LineNumber, err)
+			warnings = append(warnings, warning)
+			fmt.Fprintf(os.Stderr, "Warning: %s\n", warning)
 			continue
 		}
 		switch result {
@@ -214,7 +258,7 @@ func importParsedRecords(database *db.Database, adapterName string, records []*f
 			skipped++
 		}
 	}
-	return added, updated, skipped
+	return added, updated, skipped, warnings
 }
 
 func configureImportAdapter(adapter adapters.Adapter, agentCfg *config.AgentConfig) adapters.Adapter {
@@ -234,8 +278,6 @@ func sourceProductForAgent(agent string) string {
 		return "codex-cli"
 	case "copilot":
 		return "copilot-otel"
-	case "qwen":
-		return "qwen-cli"
 	default:
 		return agent
 	}
@@ -257,6 +299,26 @@ func defaultAccountingMethod(agent string) string {
 	default:
 		return ""
 	}
+}
+
+func summarizeImportWarnings(warnings []string) string {
+	const maxWarnings = 5
+	const maxLen = 2000
+	if len(warnings) == 0 {
+		return ""
+	}
+	limit := len(warnings)
+	if limit > maxWarnings {
+		limit = maxWarnings
+	}
+	summary := fmt.Sprintf("%d warning(s): %s", len(warnings), strings.Join(warnings[:limit], "; "))
+	if len(warnings) > limit {
+		summary += fmt.Sprintf("; ... %d more", len(warnings)-limit)
+	}
+	if len(summary) > maxLen {
+		return summary[:maxLen]
+	}
+	return summary
 }
 
 func applyTimingFields(event *model.UsageEvent, rec *fingerprint.ParsedRecord) {

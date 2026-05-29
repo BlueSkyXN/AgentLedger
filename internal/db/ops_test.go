@@ -204,6 +204,30 @@ func TestUnsupportedSchemaVersionFails(t *testing.T) {
 	}
 }
 
+func TestFinishImportRunWithStatusStoresError(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer database.Close()
+
+	if err := database.StartImportRun("run-warning"); err != nil {
+		t.Fatalf("start import run: %v", err)
+	}
+	if err := database.FinishImportRunWithStatus("run-warning", 2, 1, 0, 1, "completed_with_warnings", "parse warning"); err != nil {
+		t.Fatalf("finish import run: %v", err)
+	}
+
+	var status, errorText string
+	var files, added, skipped int
+	if err := database.Conn().QueryRow(`SELECT status, files_scanned, events_added, events_skipped, error FROM import_runs WHERE id='run-warning'`).Scan(&status, &files, &added, &skipped, &errorText); err != nil {
+		t.Fatalf("select import run: %v", err)
+	}
+	if status != "completed_with_warnings" || files != 2 || added != 1 || skipped != 1 || errorText != "parse warning" {
+		t.Fatalf("unexpected import run status=%s files=%d added=%d skipped=%d error=%q", status, files, added, skipped, errorText)
+	}
+}
+
 func TestUpsertFillsSourceMetadataOnce(t *testing.T) {
 	database, err := Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
 	if err != nil {
