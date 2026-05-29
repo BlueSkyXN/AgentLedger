@@ -169,7 +169,7 @@ func scanCodexDiagnosticFile(path string, diag *CodexDiagnostics) error {
 			}
 		}
 
-		usage, _, _, ok := extractCodexUsage(obj, entryType)
+		usage, _, _, ok, _ := extractCodexUsage(obj, entryType)
 		if ok && usage.storageUsage().isZero() {
 			diag.AllZeroUsageEvents++
 		}

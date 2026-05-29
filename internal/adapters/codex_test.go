@@ -59,11 +59,12 @@ func TestCodexCumulativeDeltaMultiSessionAndCounterReset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if len(records) != 3 {
-		t.Fatalf("expected 3 records after skip/reset-zero, got %d", len(records))
+	// 累计计数器在 session B 从 50 回落到 20（compact 重置），该段应整段计入而非丢弃。
+	if len(records) != 4 {
+		t.Fatalf("expected 4 records (counter reset segment counted), got %d", len(records))
 	}
-	expectedTotals := []int64{100, 50, 50}
-	expectedSessions := []string{"A", "B", "A"}
+	expectedTotals := []int64{100, 50, 50, 20}
+	expectedSessions := []string{"A", "B", "A", "B"}
 	for i, expected := range expectedTotals {
 		if records[i].TotalTokens != expected || records[i].SessionID != expectedSessions[i] {
 			t.Fatalf("record %d expected session=%s total=%d got session=%s total=%d", i, expectedSessions[i], expected, records[i].SessionID, records[i].TotalTokens)
@@ -74,6 +75,9 @@ func TestCodexCumulativeDeltaMultiSessionAndCounterReset(t *testing.T) {
 	}
 	if records[2].SourceTotalTokens == nil || *records[2].SourceTotalTokens != 150 {
 		t.Fatalf("expected raw cumulative source total 150, got %v", records[2].SourceTotalTokens)
+	}
+	if records[3].SourceTotalTokens == nil || *records[3].SourceTotalTokens != 20 {
+		t.Fatalf("expected reset-segment cumulative source total 20, got %v", records[3].SourceTotalTokens)
 	}
 }
 
@@ -146,6 +150,43 @@ func TestCodexCountsSameLastUsageWhenCumulativeTotalChanges(t *testing.T) {
 	}
 	if records[0].TotalTokens != 15 || records[1].TotalTokens != 15 {
 		t.Fatalf("unexpected totals: %d, %d", records[0].TotalTokens, records[1].TotalTokens)
+	}
+}
+
+func TestCodexTotalDeltaCapturesGapsThatLastTokenUsageMisses(t *testing.T) {
+	// 一个 token_count 区间内发生多次调用时，last_token_usage 只记最后一次、会漏掉
+	// 中间调用，而累计 total_token_usage 捕获全部。默认应据累计 delta 还原真实增量。
+	path := filepath.Join(t.TempDir(), "codex.jsonl")
+	data := strings.Join([]string{
+		`{"type":"event_msg","timestamp":"2026-01-01T00:01:00Z","session_id":"A","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"output_tokens":0,"total_tokens":100},"last_token_usage":{"input_tokens":100,"output_tokens":0,"total_tokens":100}}}}`,
+		`{"type":"event_msg","timestamp":"2026-01-01T00:02:00Z","session_id":"A","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":480,"output_tokens":20,"total_tokens":500},"last_token_usage":{"input_tokens":80,"output_tokens":0,"total_tokens":80}}}}`,
+	}, "\n")
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	accurate, err := NewCodexAdapter().ParseFile(path)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(accurate) != 2 {
+		t.Fatalf("expected 2 records, got %d", len(accurate))
+	}
+	// 默认: 100 + (500-100)=400，合计 500 = 最终累计，捕获了 last 漏掉的 320。
+	if accurate[0].TotalTokens != 100 || accurate[1].TotalTokens != 400 {
+		t.Fatalf("accurate totals expected 100,400 got %d,%d", accurate[0].TotalTokens, accurate[1].TotalTokens)
+	}
+	if accurate[1].InputTokens != 380 || accurate[1].OutputTokens != 20 {
+		t.Fatalf("accurate delta expected input=380 output=20 got input=%d output=%d", accurate[1].InputTokens, accurate[1].OutputTokens)
+	}
+
+	compat, err := NewCodexAdapterWithOptions(CodexOptions{DuplicatePolicy: CodexDuplicatePolicyCCUsageCompatible}).ParseFile(path)
+	if err != nil {
+		t.Fatalf("parse compat: %v", err)
+	}
+	// ccusage 口径: 直接用 last → 100 + 80 = 180，漏掉中间 320（即 ccusage 的低估侧）。
+	if len(compat) != 2 || compat[1].TotalTokens != 80 {
+		t.Fatalf("compat expected record1 total=80 (last-only), got %d records last=%d", len(compat), compat[len(compat)-1].TotalTokens)
 	}
 }
 
