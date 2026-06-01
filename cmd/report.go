@@ -73,6 +73,8 @@ func init() {
 		cmd.Flags().String("provider", "", "Filter by provider")
 		cmd.Flags().String("model", "", "Filter by normalized or raw model name")
 		cmd.Flags().String("session", "", "Filter by session ID")
+		cmd.Flags().String("cost", "recorded", "Cost mode: recorded, estimated, both, or none")
+		cmd.Flags().String("pricing", "", "Path to pricing JSON profile for estimated cost")
 		cmd.Flags().Bool("json", false, "Output as JSON")
 	}
 	for _, cmd := range []*cobra.Command{reportDailyCmd, reportWeeklyCmd, reportMonthlyCmd} {
@@ -101,6 +103,8 @@ func runReport(reportType string) func(cmd *cobra.Command, args []string) error 
 		provider, _ := cmd.Flags().GetString("provider")
 		modelName, _ := cmd.Flags().GetString("model")
 		session, _ := cmd.Flags().GetString("session")
+		costMode, _ := cmd.Flags().GetString("cost")
+		pricingPath, _ := cmd.Flags().GetString("pricing")
 		asJSON, _ := cmd.Flags().GetBool("json")
 		by := ""
 		if cmd.Flags().Lookup("by") != nil {
@@ -116,16 +120,18 @@ func runReport(reportType string) func(cmd *cobra.Command, args []string) error 
 		}
 
 		return report.Generate(database.Conn(), reportType, report.Filters{
-			Since:    since,
-			Until:    until,
-			Channel:  channel,
-			Provider: provider,
-			Model:    modelName,
-			Session:  session,
-			Timezone: cfg.Reports.Timezone,
-			By:       by,
-			SlowSort: sortBy,
-			Limit:    limit,
+			Since:       since,
+			Until:       until,
+			Channel:     channel,
+			Provider:    provider,
+			Model:       modelName,
+			Session:     session,
+			Timezone:    cfg.Reports.Timezone,
+			By:          by,
+			SlowSort:    sortBy,
+			Limit:       limit,
+			CostMode:    costMode,
+			PricingPath: pricingPath,
 		}, asJSON)
 	}
 }

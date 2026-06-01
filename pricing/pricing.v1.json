@@ -1,0 +1,185 @@
+{
+  "schema_version": 1,
+  "id": "agentledger-pricing-2026-06-01",
+  "currency": "USD",
+  "unit": "usd_per_1m_tokens",
+  "checked_at": "2026-06-01",
+  "defaults": {
+    "unknown_model_policy": "missing",
+    "reasoning_policy": "included_in_output",
+    "cache_write_assumption": "treat_as_input",
+    "confidence": "estimated"
+  },
+  "sources": [
+    {
+      "provider": "openai",
+      "name": "OpenAI API pricing",
+      "checked_at": "2026-06-01"
+    },
+    {
+      "provider": "anthropic",
+      "name": "Claude API pricing",
+      "checked_at": "2026-06-01"
+    },
+    {
+      "provider": "google",
+      "name": "Gemini API pricing",
+      "checked_at": "2026-06-01"
+    },
+    {
+      "provider": "github",
+      "name": "GitHub Copilot models and pricing",
+      "checked_at": "2026-06-01"
+    }
+  ],
+  "rules": [
+    {
+      "id": "openai:gpt-5.5",
+      "provider": "openai",
+      "channel": "*",
+      "model_patterns": ["gpt-5.5", "gpt-5.5-*"],
+      "priority": 10,
+      "basis": "api_equivalent",
+      "rates": { "input": 5.0, "cached_input": 0.5, "output": 30.0 },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated"
+    },
+    {
+      "id": "openai:gpt-5.4",
+      "provider": "openai",
+      "channel": "*",
+      "model_patterns": ["gpt-5.4", "gpt-5.4*"],
+      "priority": 10,
+      "basis": "api_equivalent",
+      "rates": { "input": 2.5, "cached_input": 0.25, "output": 15.0 },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated"
+    },
+    {
+      "id": "openai:gpt-5.4-mini",
+      "provider": "openai",
+      "channel": "*",
+      "model_patterns": ["gpt-5.4-mini", "gpt-5-mini"],
+      "priority": 20,
+      "basis": "api_equivalent",
+      "rates": { "input": 0.75, "cached_input": 0.075, "output": 4.5 },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated"
+    },
+    {
+      "id": "openai:gpt-5.3-codex",
+      "provider": "openai",
+      "channel": "*",
+      "model_patterns": ["gpt-5.3-codex", "gpt-5.3-codex-*", "gpt-5.2-codex"],
+      "priority": 20,
+      "basis": "api_equivalent",
+      "rates": { "input": 1.75, "cached_input": 0.175, "output": 14.0 },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated"
+    },
+    {
+      "id": "openai:gpt-5",
+      "provider": "openai",
+      "channel": "*",
+      "model_patterns": ["gpt-5", "gpt-5-*"],
+      "priority": 1,
+      "basis": "api_equivalent",
+      "rates": { "input": 1.25, "cached_input": 0.125, "output": 10.0 },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Fallback rule for normalized gpt-5 family entries."
+    },
+    {
+      "id": "openai:gpt-4.1",
+      "provider": "openai",
+      "channel": "*",
+      "model_patterns": ["gpt-4.1", "gpt-4.1*"],
+      "priority": 10,
+      "basis": "api_equivalent",
+      "rates": { "input": 2.0, "cached_input": 0.5, "output": 8.0 },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated"
+    },
+    {
+      "id": "anthropic:claude-opus-4",
+      "provider": "anthropic",
+      "channel": "*",
+      "model_patterns": ["claude-opus-4.*", "claude-opus-4-*", "claude-opus-4-*-*"],
+      "priority": 10,
+      "basis": "api_equivalent",
+      "rates": { "input": 5.0, "cache_write_5m": 6.25, "cache_write_1h": 10.0, "cache_read": 0.5, "output": 25.0 },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "5m_if_unknown",
+      "confidence": "estimated"
+    },
+    {
+      "id": "anthropic:claude-sonnet-4",
+      "provider": "anthropic",
+      "channel": "*",
+      "model_patterns": ["claude-sonnet-4.*", "claude-sonnet-4-*"],
+      "priority": 10,
+      "basis": "api_equivalent",
+      "rates": { "input": 3.0, "cache_write_5m": 3.75, "cache_write_1h": 6.0, "cache_read": 0.3, "output": 15.0 },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "5m_if_unknown",
+      "confidence": "estimated"
+    },
+    {
+      "id": "anthropic:claude-haiku-4.5",
+      "provider": "anthropic",
+      "channel": "*",
+      "model_patterns": ["claude-haiku-4.5", "claude-haiku-4-5*"],
+      "priority": 10,
+      "basis": "api_equivalent",
+      "rates": { "input": 1.0, "cache_write_5m": 1.25, "cache_write_1h": 2.0, "cache_read": 0.1, "output": 5.0 },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "5m_if_unknown",
+      "confidence": "estimated"
+    },
+    {
+      "id": "google:gemini-3.1-pro",
+      "provider": "google",
+      "channel": "*",
+      "model_patterns": ["gemini-3.1-pro", "gemini-3.1-pro-*"],
+      "priority": 10,
+      "basis": "api_equivalent_partial",
+      "rates": { "input": 2.0, "cached_input": 0.2, "output": 12.0 },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "partial",
+      "notes": "Gemini cached storage duration is not available in usage_events."
+    },
+    {
+      "id": "google:gemini-3-flash",
+      "provider": "google",
+      "channel": "*",
+      "model_patterns": ["gemini-3-flash", "gemini-3-flash-*"],
+      "priority": 10,
+      "basis": "api_equivalent_partial",
+      "rates": { "input": 0.5, "cached_input": 0.05, "output": 3.0 },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "partial",
+      "notes": "Gemini cached storage duration is not available in usage_events."
+    },
+    {
+      "id": "google:gemini-2.5-pro",
+      "provider": "google",
+      "channel": "*",
+      "model_patterns": ["gemini-2.5-pro", "gemini-2.5-pro-*"],
+      "priority": 10,
+      "basis": "api_equivalent_partial",
+      "rates": { "input": 1.25, "cached_input": 0.125, "output": 10.0 },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "partial",
+      "notes": "Gemini cached storage duration is not available in usage_events."
+    }
+  ]
+}

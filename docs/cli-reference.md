@@ -116,6 +116,8 @@ Report types:
 | `--provider string` | 过滤 provider。 |
 | `--model string` | 过滤 normalized model。 |
 | `--session string` | 过滤 session id。 |
+| `--cost string` | 成本显示模式：`recorded`、`estimated`、`both` 或 `none`；默认 `recorded`。 |
+| `--pricing string` | estimated cost 使用的 JSON pricing profile；为空时使用内置 `pricing/pricing.v1.json`。 |
 | `--json` | 输出 JSON。 |
 
 `report daily`、`report weekly`、`report monthly` 额外支持：
@@ -130,6 +132,8 @@ Report types:
 |---|---|
 | `--sort string` | `output_tps`、`ttft_ms` 或 `total_duration_ms`。 |
 | `--limit int` | 返回条数，默认 50。 |
+
+`--cost recorded` 只显示 `recorded_cost_usd` 聚合值，也就是来源日志明确给出的 USD 成本。`--cost estimated` 和 `--cost both` 会按 pricing JSON 对 token bucket 做只读估算，并返回 pricing coverage / confidence；估算结果不会写入 SQLite。`report slow` 当前不支持 estimated cost。
 
 ## `status`
 

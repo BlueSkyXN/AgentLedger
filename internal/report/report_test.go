@@ -56,7 +56,42 @@ func TestGenerateGroupedTableShowsCacheColumns(t *testing.T) {
 	output := captureReportOutput(t, func() error {
 		return Generate(database.Conn(), "models", Filters{Channel: "claude"}, false)
 	})
-	for _, want := range []string{"Cache Create", "Cache Read", "Reasoning", "claude-sonnet"} {
+	for _, want := range []string{"Cache Create", "Cache Read", "Reasoning", "Recorded Cost(USD)", "claude-sonnet"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("report output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestGenerateGroupedEstimatedCostJSON(t *testing.T) {
+	database := reportTestDB(t)
+	pricingPath := writeReportPricingProfile(t)
+	output := captureReportOutput(t, func() error {
+		return Generate(database.Conn(), "models", Filters{Channel: "claude", CostMode: "estimated", PricingPath: pricingPath}, true)
+	})
+	var rows []ReportRow
+	if err := json.Unmarshal([]byte(output), &rows); err != nil {
+		t.Fatalf("json: %v\n%s", err, output)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(rows))
+	}
+	row := rows[0]
+	if row.EstimatedCostMicroUSD == nil || *row.EstimatedCostMicroUSD != 212 {
+		t.Fatalf("expected estimated cost 212 micro USD, got %+v", row)
+	}
+	if row.Pricing == nil || row.Pricing.PricedEvents != 2 || row.Pricing.TotalEvents != 2 || row.Pricing.CoverageRatio != 1 {
+		t.Fatalf("unexpected pricing coverage: %+v", row.Pricing)
+	}
+}
+
+func TestGenerateGroupedEstimatedCostTable(t *testing.T) {
+	database := reportTestDB(t)
+	pricingPath := writeReportPricingProfile(t)
+	output := captureReportOutput(t, func() error {
+		return Generate(database.Conn(), "models", Filters{Channel: "claude", CostMode: "both", PricingPath: pricingPath}, false)
+	})
+	for _, want := range []string{"Recorded Cost(USD)", "Estimated Cost(USD)", "Pricing Coverage", "100.0%"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("report output missing %q:\n%s", want, output)
 		}
@@ -96,6 +131,41 @@ func TestGenerateRejectsInvalidDateFilters(t *testing.T) {
 	if err := Generate(database.Conn(), "daily", Filters{Until: "tomorrow"}, true); err == nil || !strings.Contains(err.Error(), "until must use YYYY-MM-DD") {
 		t.Fatalf("expected invalid until error, got %v", err)
 	}
+}
+
+func TestGenerateRejectsInvalidCostMode(t *testing.T) {
+	database := reportTestDB(t)
+	if err := Generate(database.Conn(), "models", Filters{CostMode: "blended"}, true); err == nil || !strings.Contains(err.Error(), "invalid cost mode") {
+		t.Fatalf("expected invalid cost mode error, got %v", err)
+	}
+}
+
+func writeReportPricingProfile(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "pricing.json")
+	data := `{
+	  "schema_version": 1,
+	  "id": "report-test-pricing",
+	  "currency": "USD",
+	  "unit": "usd_per_1m_tokens",
+	  "defaults": {"reasoning_policy": "included_in_output", "cache_write_assumption": "treat_as_input", "confidence": "exact"},
+	  "rules": [
+	    {
+	      "id": "anthropic:claude-sonnet",
+	      "provider": "anthropic",
+	      "channel": "*",
+	      "model_patterns": ["claude-sonnet"],
+	      "priority": 10,
+	      "basis": "api_equivalent",
+	      "rates": {"input": 2, "cached_input": 0.5, "output": 10},
+	      "confidence": "exact"
+	    }
+	  ]
+	}`
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatalf("write pricing profile: %v", err)
+	}
+	return path
 }
 
 func captureReportOutput(t *testing.T, run func() error) string {

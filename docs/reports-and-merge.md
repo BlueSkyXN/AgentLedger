@@ -13,6 +13,8 @@
 --provider string
 --model string
 --session string
+--cost recorded|estimated|both|none
+--pricing path/to/pricing.json
 --json
 ```
 
@@ -38,6 +40,8 @@
 Label, Events, Tokens, Input, Output, Cache Create, Cache Read, Reasoning, Avg Duration, Avg TTFT, Avg TPS, Recorded Cost
 ```
 
+默认 `--cost recorded` 显示 `Recorded Cost(USD)`。`--cost estimated` 显示 `Estimated Cost(USD)`、pricing coverage 和 pricing confidence；`--cost both` 同时显示 recorded 与 estimated；`--cost none` 隐藏成本列。estimated cost 使用 `pricing/pricing.v1.json` 或 `--pricing` 指定的 JSON profile，按 input/output/cache creation/cache read/reasoning token bucket 估算，不使用 `total_tokens * 单价`，也不会写回 `usage_events`。
+
 JSON 输出使用同一语义字段：
 
 ```json
@@ -54,7 +58,19 @@ JSON 输出使用同一语义字段：
     "avg_total_duration_ms": 12000,
     "avg_ttft_ms": 900,
     "avg_output_tps": 42.5,
-    "recorded_cost_usd": 0.12
+    "recorded_cost_usd": 0.12,
+    "estimated_cost_usd": 0.34,
+    "estimated_cost_micro_usd": 340000,
+    "pricing": {
+      "profile_id": "agentledger-pricing-2026-06-01",
+      "currency": "USD",
+      "priced_events": 10,
+      "total_events": 10,
+      "priced_tokens": 12345,
+      "total_tokens": 12345,
+      "coverage_ratio": 1,
+      "confidence": "estimated"
+    }
   }
 ]
 ```

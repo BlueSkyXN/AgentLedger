@@ -8,34 +8,41 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+
+	"github.com/BlueSkyXN/AgentLedger/internal/pricing"
 )
 
 type Filters struct {
-	Since    string
-	Until    string
-	Channel  string
-	Provider string
-	Model    string
-	Session  string
-	Timezone string
-	By       string
-	SlowSort string
-	Limit    int
+	Since       string
+	Until       string
+	Channel     string
+	Provider    string
+	Model       string
+	Session     string
+	Timezone    string
+	By          string
+	SlowSort    string
+	Limit       int
+	CostMode    string
+	PricingPath string
 }
 
 type ReportRow struct {
-	Label               string   `json:"label"`
-	Events              int64    `json:"events"`
-	TotalTokens         int64    `json:"total_tokens"`
-	InputTokens         int64    `json:"input_tokens"`
-	OutputTokens        int64    `json:"output_tokens"`
-	CacheCreationTokens int64    `json:"cache_creation_tokens"`
-	CacheReadTokens     int64    `json:"cache_read_tokens"`
-	ReasoningTokens     int64    `json:"reasoning_tokens"`
-	AvgTotalDurationMs  *float64 `json:"avg_total_duration_ms"`
-	AvgTTFTMs           *float64 `json:"avg_ttft_ms"`
-	AvgOutputTPS        *float64 `json:"avg_output_tps"`
-	RecordedCostUSD     float64  `json:"recorded_cost_usd"`
+	Label                 string                   `json:"label"`
+	Events                int64                    `json:"events"`
+	TotalTokens           int64                    `json:"total_tokens"`
+	InputTokens           int64                    `json:"input_tokens"`
+	OutputTokens          int64                    `json:"output_tokens"`
+	CacheCreationTokens   int64                    `json:"cache_creation_tokens"`
+	CacheReadTokens       int64                    `json:"cache_read_tokens"`
+	ReasoningTokens       int64                    `json:"reasoning_tokens"`
+	AvgTotalDurationMs    *float64                 `json:"avg_total_duration_ms"`
+	AvgTTFTMs             *float64                 `json:"avg_ttft_ms"`
+	AvgOutputTPS          *float64                 `json:"avg_output_tps"`
+	RecordedCostUSD       float64                  `json:"recorded_cost_usd"`
+	EstimatedCostUSD      *float64                 `json:"estimated_cost_usd,omitempty"`
+	EstimatedCostMicroUSD *int64                   `json:"estimated_cost_micro_usd,omitempty"`
+	Pricing               *pricing.CoverageSummary `json:"pricing,omitempty"`
 }
 
 type SlowRow struct {
@@ -53,24 +60,33 @@ type SlowRow struct {
 }
 
 type TimeBreakdownRow struct {
-	Bucket              string   `json:"bucket"`
-	Label               string   `json:"label"`
-	Events              int64    `json:"events"`
-	TotalTokens         int64    `json:"total_tokens"`
-	InputTokens         int64    `json:"input_tokens"`
-	OutputTokens        int64    `json:"output_tokens"`
-	CacheCreationTokens int64    `json:"cache_creation_tokens"`
-	CacheReadTokens     int64    `json:"cache_read_tokens"`
-	ReasoningTokens     int64    `json:"reasoning_tokens"`
-	AvgTotalDurationMs  *float64 `json:"avg_total_duration_ms"`
-	AvgTTFTMs           *float64 `json:"avg_ttft_ms"`
-	AvgOutputTPS        *float64 `json:"avg_output_tps"`
-	RecordedCostUSD     float64  `json:"recorded_cost_usd"`
+	Bucket                string                   `json:"bucket"`
+	Label                 string                   `json:"label"`
+	Events                int64                    `json:"events"`
+	TotalTokens           int64                    `json:"total_tokens"`
+	InputTokens           int64                    `json:"input_tokens"`
+	OutputTokens          int64                    `json:"output_tokens"`
+	CacheCreationTokens   int64                    `json:"cache_creation_tokens"`
+	CacheReadTokens       int64                    `json:"cache_read_tokens"`
+	ReasoningTokens       int64                    `json:"reasoning_tokens"`
+	AvgTotalDurationMs    *float64                 `json:"avg_total_duration_ms"`
+	AvgTTFTMs             *float64                 `json:"avg_ttft_ms"`
+	AvgOutputTPS          *float64                 `json:"avg_output_tps"`
+	RecordedCostUSD       float64                  `json:"recorded_cost_usd"`
+	EstimatedCostUSD      *float64                 `json:"estimated_cost_usd,omitempty"`
+	EstimatedCostMicroUSD *int64                   `json:"estimated_cost_micro_usd,omitempty"`
+	Pricing               *pricing.CoverageSummary `json:"pricing,omitempty"`
 }
 
 func Generate(conn *sql.DB, reportType string, filters Filters, asJSON bool) error {
 	if err := validateDateFilters(filters); err != nil {
 		return err
+	}
+	if err := validateCostMode(filters.CostMode); err != nil {
+		return err
+	}
+	if reportType == "slow" && needsEstimatedCost(filters.CostMode) {
+		return fmt.Errorf("estimated cost is not supported for slow reports yet")
 	}
 	switch reportType {
 	case "daily":
@@ -115,6 +131,15 @@ func validateDateFilters(filters Filters) error {
 	return nil
 }
 
+func validateCostMode(mode string) error {
+	switch normalizedCostMode(mode) {
+	case "recorded", "estimated", "both", "none":
+		return nil
+	default:
+		return fmt.Errorf("invalid cost mode %q: expected recorded, estimated, both, or none", mode)
+	}
+}
+
 func validateDate(name, value string) error {
 	if _, err := time.Parse("2006-01-02", value); err != nil {
 		return fmt.Errorf("%s must use YYYY-MM-DD", name)
@@ -124,6 +149,10 @@ func validateDate(name, value string) error {
 
 func generateTimeBreakdown(conn *sql.DB, bucketExpr string, filters Filters, asJSON bool) error {
 	labelExpr, labelHeader, err := reportBreakdownLabelExpr(filters.By)
+	if err != nil {
+		return err
+	}
+	estimates, err := estimateTimeBreakdownCosts(conn, bucketExpr, labelExpr, filters)
 	if err != nil {
 		return err
 	}
@@ -172,6 +201,9 @@ func generateTimeBreakdown(conn *sql.DB, bucketExpr string, filters Filters, asJ
 		if recordedCost.Valid {
 			r.RecordedCostUSD = recordedCost.Float64
 		}
+		if estimate, ok := estimates[timeBreakdownEstimateKey(r.Bucket, r.Label)]; ok {
+			attachTimeEstimate(&r, estimate)
+		}
 		results = append(results, r)
 	}
 	if err := rows.Err(); err != nil {
@@ -188,13 +220,16 @@ func generateTimeBreakdown(conn *sql.DB, bucketExpr string, filters Filters, asJ
 		return nil
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintf(w, "Bucket\t%s\tEvents\tTokens\tInput\tOutput\tCache Create\tCache Read\tReasoning\tAvg TPS\tAvg TTFT(ms)\tCost(USD)\n", labelHeader)
-	fmt.Fprintf(w, "---\t---\t---\t---\t---\t---\t---\t---\t---\t---\t---\t---\n")
+	headers := append([]string{"Bucket", labelHeader, "Events", "Tokens", "Input", "Output", "Cache Create", "Cache Read", "Reasoning", "Avg TPS", "Avg TTFT(ms)"}, costHeaders(filters.CostMode)...)
+	fmt.Fprintln(w, strings.Join(headers, "\t"))
+	fmt.Fprintln(w, strings.Join(repeatStrings("---", len(headers)), "\t"))
 	for _, r := range results {
-		fmt.Fprintf(w, "%s\t%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%s\t%s\t$%.4f\n",
-			r.Bucket, truncate(r.Label, 40), r.Events, r.TotalTokens, r.InputTokens, r.OutputTokens,
-			r.CacheCreationTokens, r.CacheReadTokens, r.ReasoningTokens,
-			formatFloatPtr(r.AvgOutputTPS), formatFloatPtr(r.AvgTTFTMs), r.RecordedCostUSD)
+		fields := []string{
+			r.Bucket, truncate(r.Label, 40), fmt.Sprintf("%d", r.Events), fmt.Sprintf("%d", r.TotalTokens), fmt.Sprintf("%d", r.InputTokens), fmt.Sprintf("%d", r.OutputTokens),
+			fmt.Sprintf("%d", r.CacheCreationTokens), fmt.Sprintf("%d", r.CacheReadTokens), fmt.Sprintf("%d", r.ReasoningTokens),
+			formatFloatPtr(r.AvgOutputTPS), formatFloatPtr(r.AvgTTFTMs),
+		}
+		fmt.Fprintln(w, strings.Join(append(fields, costValues(filters.CostMode, r.RecordedCostUSD, r.EstimatedCostUSD, r.Pricing)...), "\t"))
 	}
 	return w.Flush()
 }
@@ -215,6 +250,10 @@ func reportBreakdownLabelExpr(by string) (expr, header string, err error) {
 }
 
 func generateGrouped(conn *sql.DB, labelExpr string, filters Filters, asJSON bool, labelHeader, order string) error {
+	estimates, err := estimateGroupedCosts(conn, labelExpr, filters)
+	if err != nil {
+		return err
+	}
 	query := fmt.Sprintf(`SELECT
         %s AS label,
         COUNT(*) AS events,
@@ -232,7 +271,7 @@ func generateGrouped(conn *sql.DB, labelExpr string, filters Filters, asJSON boo
 	args := make([]any, 0)
 	query = addFilters(query, &args, filters)
 	query += " GROUP BY label ORDER BY " + order
-	return executeReport(conn, query, args, asJSON, labelHeader)
+	return executeReport(conn, query, args, asJSON, labelHeader, filters, estimates)
 }
 
 func generateSlow(conn *sql.DB, filters Filters, asJSON bool) error {
@@ -326,7 +365,285 @@ func slowOrderBy(sortBy string) (string, error) {
 	}
 }
 
-func executeReport(conn *sql.DB, query string, args []any, asJSON bool, labelHeader string) error {
+type reportCost struct {
+	MicroUSD int64
+	Summary  *pricing.CoverageSummary
+}
+
+func estimateGroupedCosts(conn *sql.DB, labelExpr string, filters Filters) (map[string]reportCost, error) {
+	if !needsEstimatedCost(filters.CostMode) {
+		return nil, nil
+	}
+	estimator, profile, err := reportEstimator(filters.PricingPath)
+	if err != nil {
+		return nil, err
+	}
+	query := fmt.Sprintf(`SELECT
+        %s AS label,
+        timestamp_ms,
+        channel,
+        COALESCE(provider, ''),
+        COALESCE(model_normalized, model_raw, 'unknown'),
+        COALESCE(source_product, ''),
+        COALESCE(observability_level, ''),
+        COALESCE(token_accounting_method, ''),
+        COALESCE(accounting_profile, ''),
+        COALESCE(input_tokens, 0),
+        COALESCE(output_tokens, 0),
+        COALESCE(cache_creation_tokens, 0),
+        COALESCE(cache_read_tokens, 0),
+        COALESCE(reasoning_tokens, 0),
+        COALESCE(total_tokens, 0)
+    FROM usage_events WHERE 1=1`, labelExpr)
+	args := make([]any, 0)
+	query = addFilters(query, &args, filters)
+	return scanEstimatedCosts(conn, query, args, estimator, profile, false)
+}
+
+func estimateTimeBreakdownCosts(conn *sql.DB, bucketExpr, labelExpr string, filters Filters) (map[string]reportCost, error) {
+	if !needsEstimatedCost(filters.CostMode) {
+		return nil, nil
+	}
+	estimator, profile, err := reportEstimator(filters.PricingPath)
+	if err != nil {
+		return nil, err
+	}
+	query := fmt.Sprintf(`SELECT
+        %s AS bucket,
+        %s AS label,
+        timestamp_ms,
+        channel,
+        COALESCE(provider, ''),
+        COALESCE(model_normalized, model_raw, 'unknown'),
+        COALESCE(source_product, ''),
+        COALESCE(observability_level, ''),
+        COALESCE(token_accounting_method, ''),
+        COALESCE(accounting_profile, ''),
+        COALESCE(input_tokens, 0),
+        COALESCE(output_tokens, 0),
+        COALESCE(cache_creation_tokens, 0),
+        COALESCE(cache_read_tokens, 0),
+        COALESCE(reasoning_tokens, 0),
+        COALESCE(total_tokens, 0)
+    FROM usage_events WHERE 1=1`, bucketExpr, labelExpr)
+	args := make([]any, 0)
+	query = addFilters(query, &args, filters)
+	return scanEstimatedCosts(conn, query, args, estimator, profile, true)
+}
+
+func scanEstimatedCosts(conn *sql.DB, query string, args []any, estimator *pricing.Estimator, profile *pricing.Profile, hasBucket bool) (map[string]reportCost, error) {
+	rows, err := conn.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("pricing query failed: %w", err)
+	}
+	defer rows.Close()
+
+	aggregates := make(map[string]*reportCostAccumulator)
+	for rows.Next() {
+		var bucket string
+		var label string
+		var ev pricing.Event
+		if hasBucket {
+			if err := rows.Scan(&bucket, &label, &ev.TimestampMs, &ev.Channel, &ev.Provider, &ev.Model, &ev.SourceProduct, &ev.ObservabilityLevel, &ev.TokenAccountingMethod, &ev.AccountingProfile, &ev.InputTokens, &ev.OutputTokens, &ev.CacheCreationTokens, &ev.CacheReadTokens, &ev.ReasoningTokens, &ev.TotalTokens); err != nil {
+				return nil, err
+			}
+		} else {
+			if err := rows.Scan(&label, &ev.TimestampMs, &ev.Channel, &ev.Provider, &ev.Model, &ev.SourceProduct, &ev.ObservabilityLevel, &ev.TokenAccountingMethod, &ev.AccountingProfile, &ev.InputTokens, &ev.OutputTokens, &ev.CacheCreationTokens, &ev.CacheReadTokens, &ev.ReasoningTokens, &ev.TotalTokens); err != nil {
+				return nil, err
+			}
+		}
+		key := label
+		if hasBucket {
+			key = timeBreakdownEstimateKey(bucket, label)
+		}
+		aggregate := aggregates[key]
+		if aggregate == nil {
+			aggregate = newReportCostAccumulator(estimator, profile)
+			aggregates[key] = aggregate
+		}
+		if err := aggregate.Add(ev); err != nil {
+			return nil, err
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	results := make(map[string]reportCost, len(aggregates))
+	for key, aggregate := range aggregates {
+		result, err := aggregate.Result()
+		if err != nil {
+			return nil, err
+		}
+		results[key] = result
+	}
+	return results, nil
+}
+
+type reportCostAccumulator struct {
+	estimator *pricing.Estimator
+	profile   *pricing.Profile
+	coverage  pricing.Coverage
+	buckets   map[string]*reportPricingBucket
+}
+
+type reportPricingBucket struct {
+	match pricing.Match
+	event pricing.Event
+}
+
+func newReportCostAccumulator(estimator *pricing.Estimator, profile *pricing.Profile) *reportCostAccumulator {
+	return &reportCostAccumulator{
+		estimator: estimator,
+		profile:   profile,
+		buckets:   make(map[string]*reportPricingBucket),
+	}
+}
+
+func (a *reportCostAccumulator) Add(ev pricing.Event) error {
+	match := a.estimator.Resolve(ev)
+	if match.Rule == nil {
+		a.coverage.Add(ev, pricing.Estimate{Confidence: "missing", MissingReason: match.MissingReason})
+		return nil
+	}
+	a.coverage.Add(ev, pricing.Estimate{Priced: true, Confidence: match.Confidence})
+	bucket := a.buckets[match.RuleID]
+	if bucket == nil {
+		copied := ev
+		bucket = &reportPricingBucket{match: match, event: copied}
+		a.buckets[match.RuleID] = bucket
+		return nil
+	}
+	bucket.event.InputTokens += ev.InputTokens
+	bucket.event.OutputTokens += ev.OutputTokens
+	bucket.event.CacheCreationTokens += ev.CacheCreationTokens
+	bucket.event.CacheReadTokens += ev.CacheReadTokens
+	bucket.event.ReasoningTokens += ev.ReasoningTokens
+	bucket.event.TotalTokens += ev.TotalTokens
+	return nil
+}
+
+func (a *reportCostAccumulator) Result() (reportCost, error) {
+	var micro int64
+	for _, bucket := range a.buckets {
+		estimate, err := a.estimator.EstimateMatch(bucket.event, bucket.match)
+		if err != nil {
+			return reportCost{}, err
+		}
+		micro += estimate.CostMicroUSD
+	}
+	return reportCost{MicroUSD: micro, Summary: a.coverage.Summary(a.profile)}, nil
+}
+
+func reportEstimator(path string) (*pricing.Estimator, *pricing.Profile, error) {
+	var profile *pricing.Profile
+	var err error
+	if strings.TrimSpace(path) == "" {
+		profile, err = pricing.LoadDefaultProfile()
+	} else {
+		profile, err = pricing.LoadProfileFile(path)
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	estimator, err := pricing.NewEstimator(profile)
+	if err != nil {
+		return nil, nil, err
+	}
+	return estimator, profile, nil
+}
+
+func attachReportEstimate(row *ReportRow, estimate reportCost) {
+	row.EstimatedCostMicroUSD = &estimate.MicroUSD
+	usd := pricing.MicroUSDToUSD(estimate.MicroUSD)
+	row.EstimatedCostUSD = &usd
+	row.Pricing = estimate.Summary
+}
+
+func attachTimeEstimate(row *TimeBreakdownRow, estimate reportCost) {
+	row.EstimatedCostMicroUSD = &estimate.MicroUSD
+	usd := pricing.MicroUSDToUSD(estimate.MicroUSD)
+	row.EstimatedCostUSD = &usd
+	row.Pricing = estimate.Summary
+}
+
+func timeBreakdownEstimateKey(bucket, label string) string {
+	return bucket + "\x00" + label
+}
+
+func normalizedCostMode(mode string) string {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode == "" {
+		return "recorded"
+	}
+	return mode
+}
+
+func needsEstimatedCost(mode string) bool {
+	switch normalizedCostMode(mode) {
+	case "estimated", "both":
+		return true
+	default:
+		return false
+	}
+}
+
+func costHeaders(mode string) []string {
+	switch normalizedCostMode(mode) {
+	case "none":
+		return nil
+	case "estimated":
+		return []string{"Estimated Cost(USD)", "Pricing Coverage", "Pricing Confidence"}
+	case "both":
+		return []string{"Recorded Cost(USD)", "Estimated Cost(USD)", "Pricing Coverage", "Pricing Confidence"}
+	default:
+		return []string{"Recorded Cost(USD)"}
+	}
+}
+
+func costValues(mode string, recorded float64, estimated *float64, summary *pricing.CoverageSummary) []string {
+	switch normalizedCostMode(mode) {
+	case "none":
+		return nil
+	case "estimated":
+		return []string{formatCostPtr(estimated), formatCoverage(summary), formatConfidence(summary)}
+	case "both":
+		return []string{fmt.Sprintf("$%.4f", recorded), formatCostPtr(estimated), formatCoverage(summary), formatConfidence(summary)}
+	default:
+		return []string{fmt.Sprintf("$%.4f", recorded)}
+	}
+}
+
+func repeatStrings(value string, count int) []string {
+	items := make([]string, count)
+	for i := range items {
+		items[i] = value
+	}
+	return items
+}
+
+func formatCostPtr(value *float64) string {
+	if value == nil {
+		return "-"
+	}
+	return fmt.Sprintf("$%.4f", *value)
+}
+
+func formatCoverage(summary *pricing.CoverageSummary) string {
+	if summary == nil {
+		return "-"
+	}
+	return fmt.Sprintf("%.1f%%", summary.CoverageRatio*100)
+}
+
+func formatConfidence(summary *pricing.CoverageSummary) string {
+	if summary == nil || summary.Confidence == "" {
+		return "-"
+	}
+	return summary.Confidence
+}
+
+func executeReport(conn *sql.DB, query string, args []any, asJSON bool, labelHeader string, filters Filters, estimates map[string]reportCost) error {
 	rows, err := conn.Query(query, args...)
 	if err != nil {
 		return fmt.Errorf("query failed: %w", err)
@@ -353,6 +670,9 @@ func executeReport(conn *sql.DB, query string, args []any, asJSON bool, labelHea
 		if recordedCost.Valid {
 			r.RecordedCostUSD = recordedCost.Float64
 		}
+		if estimate, ok := estimates[r.Label]; ok {
+			attachReportEstimate(&r, estimate)
+		}
 		results = append(results, r)
 	}
 	if err := rows.Err(); err != nil {
@@ -370,13 +690,16 @@ func executeReport(conn *sql.DB, query string, args []any, asJSON bool, labelHea
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintf(w, "%s\tEvents\tTokens\tInput\tOutput\tCache Create\tCache Read\tReasoning\tAvg TPS\tAvg TTFT(ms)\tCost(USD)\n", labelHeader)
-	fmt.Fprintf(w, "---\t---\t---\t---\t---\t---\t---\t---\t---\t---\t---\n")
+	headers := append([]string{labelHeader, "Events", "Tokens", "Input", "Output", "Cache Create", "Cache Read", "Reasoning", "Avg TPS", "Avg TTFT(ms)"}, costHeaders(filters.CostMode)...)
+	fmt.Fprintln(w, strings.Join(headers, "\t"))
+	fmt.Fprintln(w, strings.Join(repeatStrings("---", len(headers)), "\t"))
 	for _, r := range results {
-		fmt.Fprintf(w, "%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%s\t%s\t$%.4f\n",
-			truncate(r.Label, 40), r.Events, r.TotalTokens, r.InputTokens, r.OutputTokens,
-			r.CacheCreationTokens, r.CacheReadTokens, r.ReasoningTokens,
-			formatFloatPtr(r.AvgOutputTPS), formatFloatPtr(r.AvgTTFTMs), r.RecordedCostUSD)
+		fields := []string{
+			truncate(r.Label, 40), fmt.Sprintf("%d", r.Events), fmt.Sprintf("%d", r.TotalTokens), fmt.Sprintf("%d", r.InputTokens), fmt.Sprintf("%d", r.OutputTokens),
+			fmt.Sprintf("%d", r.CacheCreationTokens), fmt.Sprintf("%d", r.CacheReadTokens), fmt.Sprintf("%d", r.ReasoningTokens),
+			formatFloatPtr(r.AvgOutputTPS), formatFloatPtr(r.AvgTTFTMs),
+		}
+		fmt.Fprintln(w, strings.Join(append(fields, costValues(filters.CostMode, r.RecordedCostUSD, r.EstimatedCostUSD, r.Pricing)...), "\t"))
 	}
 	_ = w.Flush()
 
