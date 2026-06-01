@@ -2,7 +2,7 @@ import { createContext, ReactNode, useContext, useEffect, useMemo, useState } fr
 
 import type { Filters } from "@/api/types";
 
-export type TimeRange = "all" | "7d" | "30d" | "month" | "custom";
+export type TimeRange = "all" | "24h" | "7d" | "30d" | "month" | "last_month" | "custom";
 
 type StoredFilterState = {
   range: TimeRange;
@@ -51,10 +51,23 @@ function shiftDays(days: number): string {
   return dateInput(date);
 }
 
+function shiftHoursISO(hours: number): string {
+  const date = new Date();
+  date.setHours(date.getHours() + hours);
+  return date.toISOString();
+}
+
 function monthStart(): string {
   const date = new Date();
   date.setDate(1);
   return dateInput(date);
+}
+
+function lastMonthRange(): { since: string; until: string } {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const end = new Date(now.getFullYear(), now.getMonth(), 0);
+  return { since: dateInput(start), until: dateInput(end) };
 }
 
 function readInitialState(): StoredFilterState {
@@ -64,7 +77,7 @@ function readInitialState(): StoredFilterState {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return empty;
     const parsed = JSON.parse(raw) as Partial<StoredFilterState>;
-    const range = parsed.range && ["all", "7d", "30d", "month", "custom"].includes(parsed.range) ? parsed.range : "all";
+    const range = parsed.range && ["all", "24h", "7d", "30d", "month", "last_month", "custom"].includes(parsed.range) ? parsed.range : "all";
     return {
       range,
       customSince: parsed.customSince ?? "",
@@ -81,12 +94,16 @@ function readInitialState(): StoredFilterState {
 
 function buildDateRange(range: TimeRange, customSince: string, customUntil: string): { since: string; until: string } {
   switch (range) {
+    case "24h":
+      return { since: shiftHoursISO(-24), until: shiftHoursISO(0) };
     case "7d":
       return { since: shiftDays(-6), until: shiftDays(0) };
     case "30d":
       return { since: shiftDays(-29), until: shiftDays(0) };
     case "month":
       return { since: monthStart(), until: shiftDays(0) };
+    case "last_month":
+      return lastMonthRange();
     case "custom":
       return { since: customSince, until: customUntil };
     case "all":

@@ -1,5 +1,5 @@
 import { useConfig, useHealth, useStatus } from "@/hooks/queries";
-import { formatCost, formatInt } from "@/utils/format";
+import { formatInt } from "@/utils/format";
 
 export function SettingsPage() {
   const { data: health } = useHealth();
@@ -23,7 +23,6 @@ export function SettingsPage() {
           <dl>
             <dt>总事件</dt><dd>{formatInt(status?.total_events)}</dd>
             <dt>总 Tokens</dt><dd>{formatInt(status?.total_tokens)}</dd>
-            <dt>记录成本</dt><dd>{formatCost(status?.total_recorded_cost_usd)}</dd>
             <dt>配置路径</dt><dd className="mono">{config?.config_path ?? "-"}</dd>
           </dl>
         </div>

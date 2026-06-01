@@ -7,6 +7,27 @@ export type Filters = {
   session?: string;
 };
 
+export type PricingCoverage = {
+  profile_id: string;
+  currency: string;
+  priced_events: number;
+  total_events: number;
+  priced_tokens: number;
+  total_tokens: number;
+  event_coverage_ratio?: number;
+  token_coverage_ratio?: number;
+  coverage_ratio: number;
+  confidence: string;
+  missing_models?: Array<{
+    provider: string;
+    channel: string;
+    model: string;
+    reason: string;
+    events: number;
+    tokens: number;
+  }>;
+};
+
 export type Summary = {
   total_events: number;
   import_runs: number;
@@ -22,6 +43,9 @@ export type Summary = {
   avg_output_tps: number | null;
   first_event_at: string | null;
   last_event_at: string | null;
+  estimated_cost_usd?: number | null;
+  estimated_cost_micro_usd?: number | null;
+  pricing?: PricingCoverage | null;
 };
 
 export type MetricRow = {
@@ -37,6 +61,9 @@ export type MetricRow = {
   avg_total_duration_ms: number | null;
   avg_ttft_ms: number | null;
   avg_output_tps: number | null;
+  estimated_cost_usd?: number | null;
+  estimated_cost_micro_usd?: number | null;
+  pricing?: PricingCoverage | null;
 };
 
 export type Health = {

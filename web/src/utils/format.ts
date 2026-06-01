@@ -6,6 +6,22 @@ export function formatCost(value: number | null | undefined): string {
   return value == null ? "-" : `$${value.toFixed(4)}`;
 }
 
+export function formatPercent(value: number | null | undefined): string {
+  return value == null ? "-" : `${(value * 100).toFixed(1)}%`;
+}
+
+export function formatConfidence(value: string | null | undefined): string {
+  if (!value) return "-";
+  const labels: Record<string, string> = {
+    exact: "精确",
+    estimated: "估算",
+    approximate: "近似",
+    partial: "部分",
+    missing: "缺价",
+  };
+  return labels[value] ?? value;
+}
+
 export function formatMs(value: number | null | undefined): string {
   if (value == null) return "-";
   if (value >= 1000) return `${(value / 1000).toFixed(2)}s`;

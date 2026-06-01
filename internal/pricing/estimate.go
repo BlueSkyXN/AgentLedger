@@ -55,13 +55,6 @@ func estimateWithRule(ev Event, rule *Rule, profile *Profile) (int64, error) {
 		}
 		total += value
 	}
-	if reasoningPolicy(rule, profile) == "separate" {
-		value, err := rule.Rates.Reasoning.MicroUSD(ev.ReasoningTokens)
-		if err != nil {
-			return 0, fmt.Errorf("reasoning cost: %w", err)
-		}
-		total += value
-	}
 	return total, nil
 }
 

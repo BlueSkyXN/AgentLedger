@@ -51,12 +51,10 @@ func (e *Estimator) Resolve(ev Event) Match {
 	if model == "" || model == "unknown" {
 		return Match{Confidence: "missing", MissingReason: "missing_model"}
 	}
+	modelAliases := pricingModelAliases(model)
 	for i := range e.profile.Rules {
 		rule := &e.profile.Rules[i]
-		if !matchesProvider(rule.Provider, ev.Provider) || !matchesProvider(rule.Channel, ev.Channel) {
-			continue
-		}
-		if !matchesAnyPattern(rule.ModelPatterns, model) {
+		if !matchesAnyPattern(rule.ModelPatterns, modelAliases...) {
 			continue
 		}
 		if !matchesEffectiveWindow(rule, ev.TimestampMs) {
@@ -71,26 +69,60 @@ func (e *Estimator) Resolve(ev Event) Match {
 	return Match{Confidence: "missing", MissingReason: "missing_pricing_rule"}
 }
 
-func matchesProvider(ruleValue, eventValue string) bool {
-	ruleValue = strings.ToLower(strings.TrimSpace(ruleValue))
-	eventValue = strings.ToLower(strings.TrimSpace(eventValue))
-	return ruleValue == "" || ruleValue == "*" || ruleValue == eventValue
-}
-
-func matchesAnyPattern(patterns []string, value string) bool {
+func matchesAnyPattern(patterns []string, values ...string) bool {
 	for _, pattern := range patterns {
 		pattern = strings.ToLower(strings.TrimSpace(pattern))
 		if pattern == "" {
 			continue
 		}
-		if pattern == value {
-			return true
-		}
-		if ok, err := path.Match(pattern, value); err == nil && ok {
-			return true
+		for _, value := range values {
+			if pattern == value {
+				return true
+			}
+			if ok, err := path.Match(pattern, value); err == nil && ok {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+func pricingModelAliases(model string) []string {
+	model = strings.ToLower(strings.TrimSpace(model))
+	aliases := []string{model}
+	if base, ok := stripReasoningSuffix(model); ok && base != model {
+		aliases = append(aliases, base)
+	}
+	return aliases
+}
+
+func stripReasoningSuffix(model string) (string, bool) {
+	if !strings.HasSuffix(model, ")") {
+		return model, false
+	}
+	start := strings.LastIndex(model, "(")
+	if start <= 0 {
+		return model, false
+	}
+	suffix := strings.TrimSpace(model[start+1 : len(model)-1])
+	if !isReasoningSuffix(suffix) {
+		return model, false
+	}
+	return strings.TrimSpace(model[:start]), true
+}
+
+func isReasoningSuffix(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.TrimPrefix(value, "reasoning=")
+	value = strings.TrimPrefix(value, "reasoning:")
+	value = strings.TrimPrefix(value, "effort=")
+	value = strings.TrimPrefix(value, "effort:")
+	switch value {
+	case "minimal", "low", "medium", "high", "xhigh", "x-high":
+		return true
+	default:
+		return false
+	}
 }
 
 func matchesEffectiveWindow(rule *Rule, timestampMs int64) bool {

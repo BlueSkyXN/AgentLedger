@@ -20,15 +20,17 @@ type Coverage struct {
 }
 
 type CoverageSummary struct {
-	ProfileID     string         `json:"profile_id"`
-	Currency      string         `json:"currency"`
-	PricedEvents  int64          `json:"priced_events"`
-	TotalEvents   int64          `json:"total_events"`
-	PricedTokens  int64          `json:"priced_tokens"`
-	TotalTokens   int64          `json:"total_tokens"`
-	CoverageRatio float64        `json:"coverage_ratio"`
-	Confidence    string         `json:"confidence"`
-	MissingModels []MissingModel `json:"missing_models,omitempty"`
+	ProfileID          string         `json:"profile_id"`
+	Currency           string         `json:"currency"`
+	PricedEvents       int64          `json:"priced_events"`
+	TotalEvents        int64          `json:"total_events"`
+	PricedTokens       int64          `json:"priced_tokens"`
+	TotalTokens        int64          `json:"total_tokens"`
+	EventCoverageRatio float64        `json:"event_coverage_ratio"`
+	TokenCoverageRatio float64        `json:"token_coverage_ratio"`
+	CoverageRatio      float64        `json:"coverage_ratio"`
+	Confidence         string         `json:"confidence"`
+	MissingModels      []MissingModel `json:"missing_models,omitempty"`
 }
 
 type MissingModel struct {
@@ -83,9 +85,13 @@ func (c Coverage) Summary(profile *Profile) *CoverageSummary {
 	if c.TotalEvents == 0 && c.TotalTokens == 0 {
 		return nil
 	}
-	ratio := 0.0
+	eventRatio := 0.0
+	if c.TotalEvents > 0 {
+		eventRatio = float64(c.PricedEvents) / float64(c.TotalEvents)
+	}
+	tokenRatio := 0.0
 	if c.TotalTokens > 0 {
-		ratio = float64(c.PricedTokens) / float64(c.TotalTokens)
+		tokenRatio = float64(c.PricedTokens) / float64(c.TotalTokens)
 	}
 	confidence := c.confidence
 	if confidence == "" {
@@ -102,15 +108,17 @@ func (c Coverage) Summary(profile *Profile) *CoverageSummary {
 		return missing[i].Tokens > missing[j].Tokens
 	})
 	return &CoverageSummary{
-		ProfileID:     profile.ID,
-		Currency:      profile.Currency,
-		PricedEvents:  c.PricedEvents,
-		TotalEvents:   c.TotalEvents,
-		PricedTokens:  c.PricedTokens,
-		TotalTokens:   c.TotalTokens,
-		CoverageRatio: ratio,
-		Confidence:    confidence,
-		MissingModels: missing,
+		ProfileID:          profile.ID,
+		Currency:           profile.Currency,
+		PricedEvents:       c.PricedEvents,
+		TotalEvents:        c.TotalEvents,
+		PricedTokens:       c.PricedTokens,
+		TotalTokens:        c.TotalTokens,
+		EventCoverageRatio: eventRatio,
+		TokenCoverageRatio: tokenRatio,
+		CoverageRatio:      tokenRatio,
+		Confidence:         confidence,
+		MissingModels:      missing,
 	}
 }
 

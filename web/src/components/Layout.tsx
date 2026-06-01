@@ -31,12 +31,7 @@ export function Layout() {
         </nav>
         <ThemeToggle />
       </header>
-      <section className="hero">
-        <div>
-          <p className="eyebrow">只读 Usage Analytics</p>
-          <h1>按渠道、模型和时间筛选本机 Agent 用量。</h1>
-          <p className="hero-copy">所有图表实时来自 SQLite 聚合查询；耗时、TTFT 和 TPS 只在来源日志明确提供时展示。</p>
-        </div>
+      <section className="control-strip">
         <FilterBar />
       </section>
       <main>
