@@ -96,7 +96,7 @@ func (a *ClaudeAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, err
 			Model:                 modelName,
 			TimestampMs:           parseTimestamp(candidate.timestamp),
 			SessionID:             sessionID,
-			ProjectPath:           extractClaudeProject(path),
+			ProjectPath:           firstNonEmpty(getString(obj, "cwd"), extractClaudeProject(path)),
 			DedupeID:              dedupeID,
 			MessageID:             messageID,
 			RequestID:             candidate.requestID,

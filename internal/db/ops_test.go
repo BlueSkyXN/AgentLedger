@@ -299,6 +299,95 @@ func TestUpsertFillsSourceMetadataOnce(t *testing.T) {
 	}
 }
 
+func TestUpsertCorrectsOpenCoworkSourceProductToClaudeCode(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer database.Close()
+
+	base := &model.UsageEvent{
+		EventID:        "claude-cowork-event",
+		DedupeKey:      "claude-cowork-event",
+		DedupeStrategy: "message_id",
+		Channel:        "claude",
+		SourceAgent:    "claude",
+		SourceProduct:  "open-cowork",
+		Provider:       "anthropic",
+		TimestampMs:    1,
+		InputTokens:    10,
+		OutputTokens:   5,
+		TotalTokens:    15,
+		ImportedAtMs:   1,
+		UpdatedAtMs:    1,
+	}
+	status, err := database.UpsertEvent(base)
+	if err != nil || status != "inserted" {
+		t.Fatalf("insert base status=%s err=%v", status, err)
+	}
+
+	candidate := *base
+	candidate.SourceProduct = "claude-code"
+	candidate.UpdatedAtMs = 2
+	status, err = database.UpsertEvent(&candidate)
+	if err != nil || status != "updated" {
+		t.Fatalf("source product correction status=%s err=%v", status, err)
+	}
+
+	var sourceProduct string
+	if err := database.Conn().QueryRow(`SELECT source_product FROM usage_events WHERE event_id='claude-cowork-event'`).Scan(&sourceProduct); err != nil {
+		t.Fatalf("select source product: %v", err)
+	}
+	if sourceProduct != "claude-code" {
+		t.Fatalf("expected claude-code source product, got %q", sourceProduct)
+	}
+}
+
+func TestUpsertUpgradesProjectPathToMoreSpecificPath(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer database.Close()
+
+	base := &model.UsageEvent{
+		EventID:        "claude-project-event",
+		DedupeKey:      "claude-project-event",
+		DedupeStrategy: "message_id",
+		Channel:        "claude",
+		SourceAgent:    "claude",
+		SourceProduct:  "claude-code",
+		Provider:       "anthropic",
+		ProjectPath:    "-Users-test-Github-open-cowork",
+		TimestampMs:    1,
+		InputTokens:    10,
+		OutputTokens:   5,
+		TotalTokens:    15,
+		ImportedAtMs:   1,
+		UpdatedAtMs:    1,
+	}
+	status, err := database.UpsertEvent(base)
+	if err != nil || status != "inserted" {
+		t.Fatalf("insert base status=%s err=%v", status, err)
+	}
+
+	candidate := *base
+	candidate.ProjectPath = "/Users/test/Github/open-cowork"
+	candidate.UpdatedAtMs = 2
+	status, err = database.UpsertEvent(&candidate)
+	if err != nil || status != "updated" {
+		t.Fatalf("project path upgrade status=%s err=%v", status, err)
+	}
+
+	var projectPath string
+	if err := database.Conn().QueryRow(`SELECT project_path FROM usage_events WHERE event_id='claude-project-event'`).Scan(&projectPath); err != nil {
+		t.Fatalf("select project path: %v", err)
+	}
+	if projectPath != "/Users/test/Github/open-cowork" {
+		t.Fatalf("expected cwd project path, got %q", projectPath)
+	}
+}
+
 func TestMoreCompleteReplacementPreservesExistingSourceMetadata(t *testing.T) {
 	database, err := Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
 	if err != nil {

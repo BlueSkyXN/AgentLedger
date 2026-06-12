@@ -69,6 +69,12 @@ func TestSummarizeImportWarnings(t *testing.T) {
 	}
 }
 
+func TestSourceProductForClaudeRemainsClaudeCode(t *testing.T) {
+	if got := sourceProductForAgent("claude"); got != "claude-code" {
+		t.Fatalf("expected Claude default source product claude-code, got %q", got)
+	}
+}
+
 func TestParseImportFileProcessesStableRecentFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "recent.jsonl")
 	if err := os.WriteFile(path, []byte("{}\n"), 0o644); err != nil {

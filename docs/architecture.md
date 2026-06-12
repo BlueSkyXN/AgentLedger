@@ -143,10 +143,11 @@ output_tps = output_tokens / (output_duration_ms / 1000.0)
 - `monthly`: 按月。
 - `models`: 按 normalized model。
 - `channels`: 按 `channel`。
+- `projects`: 按从 `project_path` 派生的项目标签。
 - `sessions`: 按 session id。
 - `slow`: 按低输出 TPS、高 TTFT 或高总耗时列出事件。
 
-所有 report 支持 `--since`、`--until`、`--channel`、`--provider`、`--model`、`--session`、`--json`。`daily`、`weekly`、`monthly` 额外支持 `--by channel|model|provider|session`，用于时间桶内维度拆分。
+所有 report 支持 `--since`、`--until`、`--channel`、`--provider`、`--model`、`--session`、`--project`、`--json`。`daily`、`weekly`、`monthly` 额外支持 `--by channel|model|provider|session|project`，用于时间桶内维度拆分。
 
 当前配置中的 timezone 已参与 daily / weekly / monthly 报表分桶和日期过滤；currency 尚未参与报表计算。
 
@@ -155,8 +156,8 @@ output_tps = output_tokens / (output_duration_ms / 1000.0)
 `internal/control` 暴露：
 
 - `/api/v1/analytics/summary`
-- `/api/v1/analytics/timeseries?bucket=daily|weekly|monthly[&by=channel|model|provider|session]`
-- `/api/v1/analytics/breakdown?by=channel|model|provider|session`
+- `/api/v1/analytics/timeseries?bucket=daily|weekly|monthly[&by=channel|model|provider|session|project]`
+- `/api/v1/analytics/breakdown?by=channel|model|provider|session|project`
 - `/api/v1/analytics/slow?sort=output_tps|ttft_ms|total_duration_ms&limit=50`
 - `/api/v1/filter-options`
 - `/api/v1/events`
@@ -165,7 +166,7 @@ output_tps = output_tokens / (output_duration_ms / 1000.0)
 - `/api/v1/config`
 - `/api/v1/health`
 
-API 统一支持 `since`、`until`、`channel`、`provider`、`model`、`session` filters。非法日期、非法 breakdown 维度和非法 slow sort 会返回 400。
+API 统一支持 `since`、`until`、`channel`、`provider`、`model`、`session`、`project` filters。非法日期、非法 breakdown 维度和非法 slow sort 会返回 400。
 
 ## Export / Merge
 

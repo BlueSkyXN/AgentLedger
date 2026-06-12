@@ -51,6 +51,7 @@ go build -o bin/agent-ledger .
 ./bin/agent-ledger report monthly --provider anthropic
 ./bin/agent-ledger report models --json
 ./bin/agent-ledger report channels --since 2026-05-01
+./bin/agent-ledger report projects --channel claude
 ./bin/agent-ledger report sessions --model gpt-5.5
 ./bin/agent-ledger report slow --sort output_tps --limit 50
 ```
@@ -64,6 +65,7 @@ go build -o bin/agent-ledger .
 --provider string
 --model string
 --session string
+--project string
 --json
 ```
 

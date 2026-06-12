@@ -18,13 +18,13 @@ func testDB(t *testing.T) *db.Database {
 	base := time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC).UnixMilli()
 	_, err = database.Conn().Exec(`INSERT INTO usage_events (
 		event_id, dedupe_key, dedupe_strategy,
-		channel, provider, model_raw, model_normalized, timestamp_ms, session_id, message_id,
+		channel, provider, model_raw, model_normalized, timestamp_ms, session_id, project_path, message_id,
 		input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, reasoning_tokens, total_tokens,
 		request_started_at_ms, first_token_at_ms, completed_at_ms, total_duration_ms, ttft_ms, output_duration_ms, output_tps,
 		recorded_cost_usd, raw_usage_json, imported_at_ms, updated_at_ms
 	) VALUES
-		('fp1', 'fp1', 'message_id', 'codex', 'openai', 'gpt-5', 'gpt-5', ?, 's1', 'm1', 100, 50, 10, 5, 20, 185, ?, ?, ?, 3000, 500, 2500, 20.0, 0.1, '{"secret":"hidden"}', 1, 1),
-		('fp2', 'fp2', 'message_id', 'claude', 'anthropic', 'claude-sonnet', 'claude-sonnet', ?, 's2', 'm2', 200, 80, 0, 0, 0, 280, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0.2, '{"secret":"hidden"}', 2, 2)`,
+		('fp1', 'fp1', 'message_id', 'codex', 'openai', 'gpt-5', 'gpt-5', ?, 's1', '/Users/test/Github/project-a', 'm1', 100, 50, 10, 5, 20, 185, ?, ?, ?, 3000, 500, 2500, 20.0, 0.1, '{"secret":"hidden"}', 1, 1),
+		('fp2', 'fp2', 'message_id', 'claude', 'anthropic', 'claude-sonnet', 'claude-sonnet', ?, 's2', '/Users/test/Github/project-b', 'm2', 200, 80, 0, 0, 0, 280, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0.2, '{"secret":"hidden"}', 2, 2)`,
 		base, base, base+500, base+3000, base+86400000)
 	if err != nil {
 		t.Fatalf("insert events: %v", err)
@@ -76,6 +76,13 @@ func TestBuildTimeseriesBreakdownAndFilters(t *testing.T) {
 	}
 	if len(timeByModel) != 2 || timeByModel[0].Bucket != "2026-05-01" || timeByModel[0].Label != "gpt-5" || timeByModel[0].InputTokens != 100 {
 		t.Fatalf("unexpected time model breakdown: %+v", timeByModel)
+	}
+	projects, err := BuildBreakdown(database.Conn(), "project", Filters{Project: "project-b"})
+	if err != nil {
+		t.Fatalf("project breakdown: %v", err)
+	}
+	if len(projects) != 1 || projects[0].Label != "project-b" || projects[0].TotalTokens != 280 {
+		t.Fatalf("unexpected project breakdown: %+v", projects)
 	}
 }
 
@@ -144,7 +151,7 @@ func TestSessionsImportRunsEventsSlowAndOptions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("options: %v", err)
 	}
-	if len(options.Channels) != 2 || len(options.Models) != 2 {
+	if len(options.Channels) != 2 || len(options.Models) != 2 || len(options.Projects) != 2 {
 		t.Fatalf("unexpected options: %+v", options)
 	}
 }

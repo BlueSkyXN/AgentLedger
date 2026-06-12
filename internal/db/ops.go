@@ -107,23 +107,24 @@ func (d *Database) UpsertEvent(ev *model.UsageEvent) (string, error) {
 
 func selectEventForComparison(tx *sql.Tx, eventID string) (*model.UsageEvent, error) {
 	row := tx.QueryRow(`
-        SELECT event_id, model_raw, model_normalized, total_tokens,
+        SELECT event_id, channel, model_raw, model_normalized, total_tokens,
             request_started_at_ms, first_token_at_ms, completed_at_ms,
             total_duration_ms, ttft_ms, output_duration_ms, output_tps,
             recorded_cost_usd, imported_at_ms,
             source_agent, source_product, observability_level, model_is_fallback,
             source_total_tokens, raw_input_tokens, token_accounting_method,
-            accounting_profile, session_path_id, turn_id
+            accounting_profile, session_path_id, turn_id, project_path
         FROM usage_events WHERE event_id = ?
     `, eventID)
 	var ev model.UsageEvent
 	var requestStarted, firstToken, completed, totalDuration, ttft, outputDuration sql.NullInt64
 	var sourceTotal, rawInput sql.NullInt64
 	var outputTPS, recordedCost sql.NullFloat64
-	var sourceAgent, sourceProduct, observabilityLevel, accountingMethod, accountingProfile, sessionPathID, turnID sql.NullString
+	var sourceAgent, sourceProduct, observabilityLevel, accountingMethod, accountingProfile, sessionPathID, turnID, projectPath sql.NullString
 	var modelIsFallback int
 	if err := row.Scan(
 		&ev.EventID,
+		&ev.Channel,
 		&ev.ModelRaw,
 		&ev.ModelNormalized,
 		&ev.TotalTokens,
@@ -146,6 +147,7 @@ func selectEventForComparison(tx *sql.Tx, eventID string) (*model.UsageEvent, er
 		&accountingProfile,
 		&sessionPathID,
 		&turnID,
+		&projectPath,
 	); err != nil {
 		return nil, err
 	}
@@ -167,6 +169,7 @@ func selectEventForComparison(tx *sql.Tx, eventID string) (*model.UsageEvent, er
 	ev.AccountingProfile = nullStringValue(accountingProfile)
 	ev.SessionPathID = nullStringValue(sessionPathID)
 	ev.TurnID = nullStringValue(turnID)
+	ev.ProjectPath = nullStringValue(projectPath)
 	return &ev, nil
 }
 
@@ -266,6 +269,7 @@ func updateEventMetadata(tx *sql.Tx, ev *model.UsageEvent) error {
             accounting_profile = ?,
             session_path_id = ?,
             turn_id = ?,
+            project_path = ?,
             updated_at_ms = ?
         WHERE event_id = ?
     `,
@@ -279,6 +283,7 @@ func updateEventMetadata(tx *sql.Tx, ev *model.UsageEvent) error {
 		nullIfEmpty(ev.AccountingProfile),
 		nullIfEmpty(ev.SessionPathID),
 		nullIfEmpty(ev.TurnID),
+		nullIfEmpty(ev.ProjectPath),
 		ev.UpdatedAtMs,
 		ev.EventID,
 	)
@@ -502,6 +507,9 @@ func mergeMissingMetadata(target, candidate *model.UsageEvent) bool {
 	if target.SourceProduct == "" && candidate.SourceProduct != "" {
 		target.SourceProduct = candidate.SourceProduct
 		changed = true
+	} else if shouldCorrectSourceProduct(target, candidate) {
+		target.SourceProduct = candidate.SourceProduct
+		changed = true
 	}
 	if (target.ObservabilityLevel == "" || target.ObservabilityLevel == "unknown") && candidate.ObservabilityLevel != "" {
 		target.ObservabilityLevel = candidate.ObservabilityLevel
@@ -535,6 +543,13 @@ func mergeMissingMetadata(target, candidate *model.UsageEvent) bool {
 		target.TurnID = candidate.TurnID
 		changed = true
 	}
+	if target.ProjectPath == "" && candidate.ProjectPath != "" {
+		target.ProjectPath = candidate.ProjectPath
+		changed = true
+	} else if shouldUpgradeProjectPath(target.ProjectPath, candidate.ProjectPath) {
+		target.ProjectPath = candidate.ProjectPath
+		changed = true
+	}
 	if changed && candidate.UpdatedAtMs > 0 {
 		target.UpdatedAtMs = candidate.UpdatedAtMs
 	}
@@ -545,7 +560,7 @@ func preserveExistingMetadata(target, existing *model.UsageEvent) {
 	if existing.SourceAgent != "" {
 		target.SourceAgent = existing.SourceAgent
 	}
-	if existing.SourceProduct != "" {
+	if existing.SourceProduct != "" && !shouldCorrectSourceProduct(existing, target) {
 		target.SourceProduct = existing.SourceProduct
 	}
 	if existing.ObservabilityLevel != "" && existing.ObservabilityLevel != "unknown" {
@@ -571,7 +586,43 @@ func preserveExistingMetadata(target, existing *model.UsageEvent) {
 	if existing.TurnID != "" {
 		target.TurnID = existing.TurnID
 	}
+	if existing.ProjectPath != "" && !shouldUpgradeProjectPath(existing.ProjectPath, target.ProjectPath) {
+		target.ProjectPath = existing.ProjectPath
+	}
 	target.ModelIsFallback = target.ModelIsFallback || existing.ModelIsFallback
+}
+
+func shouldCorrectSourceProduct(existing, candidate *model.UsageEvent) bool {
+	if existing == nil || candidate == nil {
+		return false
+	}
+	if existing.SourceProduct != "open-cowork" || candidate.SourceProduct != "claude-code" {
+		return false
+	}
+	return existing.Channel == "claude" || existing.SourceAgent == "claude" || candidate.Channel == "claude" || candidate.SourceAgent == "claude"
+}
+
+func shouldUpgradeProjectPath(existing, candidate string) bool {
+	existing = strings.TrimSpace(existing)
+	candidate = strings.TrimSpace(candidate)
+	if existing == "" || candidate == "" || existing == candidate {
+		return false
+	}
+	return projectPathSpecificity(candidate) > projectPathSpecificity(existing)
+}
+
+func projectPathSpecificity(value string) int {
+	normalized := filepath.ToSlash(strings.TrimSpace(value))
+	if normalized == "" {
+		return 0
+	}
+	if filepath.IsAbs(value) || strings.HasPrefix(normalized, "/") || strings.Contains(normalized, "/") {
+		return 3
+	}
+	if strings.HasPrefix(normalized, "-") {
+		return 1
+	}
+	return 2
 }
 
 func nullInt64Ptr(value sql.NullInt64) *int64 {

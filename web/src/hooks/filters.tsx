@@ -12,6 +12,7 @@ type StoredFilterState = {
   provider: string;
   model: string;
   session: string;
+  project: string;
 };
 
 type FilterContextValue = {
@@ -25,6 +26,7 @@ type FilterContextValue = {
   provider: string;
   model: string;
   session: string;
+  project: string;
   setRange: (value: TimeRange) => void;
   setCustomSince: (value: string) => void;
   setCustomUntil: (value: string) => void;
@@ -32,6 +34,7 @@ type FilterContextValue = {
   setProvider: (value: string) => void;
   setModel: (value: string) => void;
   setSession: (value: string) => void;
+  setProject: (value: string) => void;
   clearFilters: () => void;
 };
 
@@ -71,7 +74,7 @@ function lastMonthRange(): { since: string; until: string } {
 }
 
 function readInitialState(): StoredFilterState {
-  const empty = { range: "all" as TimeRange, customSince: "", customUntil: "", channel: "", provider: "", model: "", session: "" };
+  const empty = { range: "all" as TimeRange, customSince: "", customUntil: "", channel: "", provider: "", model: "", session: "", project: "" };
   if (typeof window === "undefined") return empty;
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
@@ -86,6 +89,7 @@ function readInitialState(): StoredFilterState {
       provider: parsed.provider ?? "",
       model: parsed.model ?? "",
       session: parsed.session ?? "",
+      project: parsed.project ?? "",
     };
   } catch (_) {
     return empty;
@@ -125,7 +129,8 @@ export function FilterProvider({ children }: { children: ReactNode }) {
     provider: state.provider,
     model: state.model,
     session: state.session,
-  }), [activeSince, activeUntil, state.channel, state.model, state.provider, state.session]);
+    project: state.project,
+  }), [activeSince, activeUntil, state.channel, state.model, state.project, state.provider, state.session]);
 
   useEffect(() => {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -142,6 +147,7 @@ export function FilterProvider({ children }: { children: ReactNode }) {
     provider: state.provider,
     model: state.model,
     session: state.session,
+    project: state.project,
     setRange: (range) => setState((current) => ({ ...current, range })),
     setCustomSince: (customSince) => setState((current) => ({ ...current, range: "custom", customSince })),
     setCustomUntil: (customUntil) => setState((current) => ({ ...current, range: "custom", customUntil })),
@@ -149,8 +155,9 @@ export function FilterProvider({ children }: { children: ReactNode }) {
     setProvider: (provider) => setState((current) => ({ ...current, provider })),
     setModel: (model) => setState((current) => ({ ...current, model })),
     setSession: (session) => setState((current) => ({ ...current, session })),
-    clearFilters: () => setState({ range: "all", customSince: "", customUntil: "", channel: "", provider: "", model: "", session: "" }),
-  }), [activeSince, activeUntil, filters, state.channel, state.customSince, state.customUntil, state.model, state.provider, state.range, state.session]);
+    setProject: (project) => setState((current) => ({ ...current, project })),
+    clearFilters: () => setState({ range: "all", customSince: "", customUntil: "", channel: "", provider: "", model: "", session: "", project: "" }),
+  }), [activeSince, activeUntil, filters, state.channel, state.customSince, state.customUntil, state.model, state.project, state.provider, state.range, state.session]);
 
   return <FilterContext.Provider value={value}>{children}</FilterContext.Provider>;
 }

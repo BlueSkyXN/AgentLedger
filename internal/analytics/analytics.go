@@ -16,6 +16,7 @@ type Filters struct {
 	Provider string
 	Model    string
 	Session  string
+	Project  string
 	Timezone string
 }
 
@@ -120,6 +121,7 @@ type FilterOptions struct {
 	Providers []string `json:"providers"`
 	Models    []string `json:"models"`
 	Sessions  []string `json:"sessions"`
+	Projects  []string `json:"projects"`
 }
 
 func BuildSummary(conn *sql.DB, filters Filters) (*Summary, error) {
@@ -282,6 +284,8 @@ func breakdownLabelExpr(by string) (string, error) {
 		return "COALESCE(provider, 'unknown')", nil
 	case "session":
 		return "COALESCE(session_path_id, session_id, 'no-session')", nil
+	case "project":
+		return projectLabelExpr(), nil
 	default:
 		return "", fmt.Errorf("unsupported breakdown %q", by)
 	}
@@ -377,7 +381,11 @@ func BuildFilterOptions(conn *sql.DB) (*FilterOptions, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &FilterOptions{Channels: channels, Providers: providers, Models: models, Sessions: sessions}, nil
+	projects, err := distinctStrings(conn, "project")
+	if err != nil {
+		return nil, err
+	}
+	return &FilterOptions{Channels: channels, Providers: providers, Models: models, Sessions: sessions, Projects: projects}, nil
 }
 
 func groupedMetricQuery(labelExpr string) string {
@@ -421,6 +429,10 @@ func addFilters(query string, args *[]any, filters Filters, timestampExpr string
 	if filters.Session != "" {
 		query += " AND (session_id = ? OR session_path_id = ?)"
 		*args = append(*args, filters.Session, filters.Session)
+	}
+	if filters.Project != "" {
+		query += " AND (project_path = ? OR " + projectLabelExpr() + " = ?)"
+		*args = append(*args, filters.Project, filters.Project)
 	}
 	return query
 }
@@ -811,9 +823,15 @@ func filterOptionExpr(key string) (string, error) {
 		return "COALESCE(model_normalized, model_raw)", nil
 	case "session":
 		return "COALESCE(session_path_id, session_id)", nil
+	case "project":
+		return projectLabelExpr(), nil
 	default:
 		return "", fmt.Errorf("unsupported filter option %q", key)
 	}
+}
+
+func projectLabelExpr() string {
+	return "agentledger_project_label(project_path)"
 }
 
 func validateDateFilters(filters Filters) error {

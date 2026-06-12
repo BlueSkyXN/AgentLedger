@@ -72,7 +72,7 @@ agent-ledger serve
 
 - API 和面板不返回 `raw_usage_json`。
 - `/api/v1/config` 会对用户主目录路径做 `~` 形式脱敏。
-- 面板仍会展示聚合 token、模型、agent、session 和数据库状态，应按本机私有使用数据处理。
+- 面板仍会展示聚合 token、模型、agent、project、session 和数据库状态，应按本机私有使用数据处理。
 - 当前没有远程访问和 auth；不要通过代理、端口转发或非 loopback 地址对外暴露。
 
 ## Cleanup 边界

@@ -93,7 +93,7 @@ _foreign_keys=ON
 | `model_raw` | `TEXT` | nullable | 日志中的原始模型名。 |
 | `model_normalized` | `TEXT` | nullable | 归一化后的模型名。 |
 | `source_agent` | `TEXT` | nullable | 解析来源 agent，通常与 `channel` 一致。 |
-| `source_product` | `TEXT` | nullable | 更具体的来源形态，例如 `codex-cli`、`copilot-otel`、`copilot-session-state`。 |
+| `source_product` | `TEXT` | nullable | 更具体的来源形态，例如 `claude-code`、`codex-cli`、`copilot-otel`、`copilot-session-state`。 |
 | `observability_level` | `TEXT` | nullable | 来源完整度，例如 `full`、`session_summary`、`inferred`。 |
 | `model_is_fallback` | `INTEGER` | `NOT NULL DEFAULT 0` | 模型名是否来自 fallback。 |
 | `source_total_tokens` | `INTEGER` | nullable | 源日志中的 raw cumulative / envelope total，用于排查，不直接求和。 |
@@ -104,7 +104,7 @@ _foreign_keys=ON
 | `session_id` | `TEXT` | nullable | 会话 ID。 |
 | `session_path_id` | `TEXT` | nullable | 相对源路径的 session ID；Codex 用于对齐 ccusage 的 session 粒度，Copilot session-state 使用目录 ID。 |
 | `turn_id` | `TEXT` | nullable | 明确存在时的 turn ID；Codex 目前主要来自 `task_complete`。 |
-| `project_path` | `TEXT` | nullable | adapter 能解析到的项目路径。 |
+| `project_path` | `TEXT` | nullable | adapter 能解析到的项目路径；报表/API 会从它派生项目标签用于按项目筛选和聚合，不代表客户端产品。 |
 | `message_id` | `TEXT` | nullable | 日志中的 message id。 |
 | `request_id` | `TEXT` | nullable | 日志中的 request id。 |
 | `source_file` | `TEXT` | nullable | 来源文件路径。 |

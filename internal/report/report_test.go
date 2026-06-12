@@ -21,12 +21,12 @@ func reportTestDB(t *testing.T) *db.Database {
 	t.Cleanup(func() { _ = database.Close() })
 	_, err = database.Conn().Exec(`INSERT INTO usage_events (
 		event_id, dedupe_key, dedupe_strategy,
-		channel, provider, model_raw, model_normalized, timestamp_ms, session_id, message_id,
+		channel, provider, model_raw, model_normalized, timestamp_ms, session_id, project_path, message_id,
 		input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, reasoning_tokens, total_tokens,
 		imported_at_ms, updated_at_ms
 	) VALUES
-		('claude-a', 'claude-a', 'message_id', 'claude', 'anthropic', 'claude-sonnet', 'claude-sonnet', 1, 's1', 'm1', 10, 5, 3, 7, 0, 25, 1, 1),
-		('claude-b', 'claude-b', 'message_id', 'claude', 'anthropic', 'claude-sonnet', 'claude-sonnet', 2, 's1', 'm2', 20, 8, 4, 9, 0, 41, 1, 1)`)
+		('claude-a', 'claude-a', 'message_id', 'claude', 'anthropic', 'claude-sonnet', 'claude-sonnet', 1, 's1', '/Users/test/Github/project-a', 'm1', 10, 5, 3, 7, 0, 25, 1, 1),
+		('claude-b', 'claude-b', 'message_id', 'claude', 'anthropic', 'claude-sonnet', 'claude-sonnet', 2, 's1', '/Users/test/Github/project-b', 'm2', 20, 8, 4, 9, 0, 41, 1, 1)`)
 	if err != nil {
 		t.Fatalf("insert events: %v", err)
 	}
@@ -113,6 +113,34 @@ func TestGenerateTimeBreakdownJSON(t *testing.T) {
 	row := rows[0]
 	if row.Bucket != "1970-01-01" || row.Label != "claude-sonnet" || row.TotalTokens != 66 || row.CacheReadTokens != 16 {
 		t.Fatalf("unexpected time breakdown: %+v", row)
+	}
+}
+
+func TestGenerateProjectsReportAndFilter(t *testing.T) {
+	database := reportTestDB(t)
+	output := captureReportOutput(t, func() error {
+		return Generate(database.Conn(), "projects", Filters{Project: "project-a"}, true)
+	})
+	var rows []ReportRow
+	if err := json.Unmarshal([]byte(output), &rows); err != nil {
+		t.Fatalf("json: %v\n%s", err, output)
+	}
+	if len(rows) != 1 || rows[0].Label != "project-a" || rows[0].TotalTokens != 25 {
+		t.Fatalf("unexpected project report: %+v", rows)
+	}
+}
+
+func TestGenerateTimeBreakdownByProject(t *testing.T) {
+	database := reportTestDB(t)
+	output := captureReportOutput(t, func() error {
+		return Generate(database.Conn(), "daily", Filters{By: "project"}, true)
+	})
+	var rows []TimeBreakdownRow
+	if err := json.Unmarshal([]byte(output), &rows); err != nil {
+		t.Fatalf("json: %v\n%s", err, output)
+	}
+	if len(rows) != 2 || rows[0].Bucket != "1970-01-01" || rows[0].Label != "project-b" || rows[0].TotalTokens != 41 {
+		t.Fatalf("unexpected project time breakdown: %+v", rows)
 	}
 }
 

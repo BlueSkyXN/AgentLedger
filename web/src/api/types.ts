@@ -5,6 +5,7 @@ export type Filters = {
   provider?: string;
   model?: string;
   session?: string;
+  project?: string;
 };
 
 export type PricingCoverage = {
@@ -133,6 +134,7 @@ export type FilterOptions = {
   providers: string[];
   models: string[];
   sessions: string[];
+  projects: string[];
 };
 
 export type SlowSort = "output_tps" | "ttft_ms" | "total_duration_ms";

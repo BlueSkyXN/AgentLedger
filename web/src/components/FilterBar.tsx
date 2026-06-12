@@ -27,6 +27,7 @@ export function FilterBar() {
     provider,
     model,
     session,
+    project,
     setRange,
     setCustomSince,
     setCustomUntil,
@@ -34,6 +35,7 @@ export function FilterBar() {
     setProvider,
     setModel,
     setSession,
+    setProject,
     clearFilters,
   } = useFilterContext();
   const rangeText = activeSince || activeUntil
@@ -41,7 +43,7 @@ export function FilterBar() {
     : summary?.first_event_at || summary?.last_event_at
       ? `${formatDate(summary?.first_event_at)} 至 ${formatDate(summary?.last_event_at)}`
       : "全部时间";
-  const detailedCount = [channel, provider, model, session].filter(Boolean).length;
+  const detailedCount = [channel, provider, model, session, project].filter(Boolean).length;
   const [advancedOpen, setAdvancedOpen] = useState(detailedCount > 0 || range === "custom");
   const chips = useMemo(() => {
     const values: string[] = [];
@@ -50,8 +52,9 @@ export function FilterBar() {
     if (provider) values.push(`Provider: ${provider}`);
     if (model) values.push(`Model: ${model}`);
     if (session) values.push(`Session: ${session}`);
+    if (project) values.push(`Project: ${project}`);
     return values;
-  }, [channel, model, provider, range, rangeText, session]);
+  }, [channel, model, project, provider, range, rangeText, session]);
 
   function chooseRange(value: TimeRange) {
     setRange(value);
@@ -70,7 +73,7 @@ export function FilterBar() {
         </div>
         <div className="filter-state">
           <strong>{rangeText}</strong>
-          <span>{chips.length > 0 ? chips.join(" · ") : "未限定 channel / provider / model / session"}</span>
+          <span>{chips.length > 0 ? chips.join(" · ") : "未限定 channel / provider / model / session / project"}</span>
         </div>
         <button type="button" className="ghost-button" onClick={clearFilters}>重置</button>
         <button type="button" className="filter-toggle" onClick={() => setAdvancedOpen((open) => !open)}>
@@ -113,6 +116,13 @@ export function FilterBar() {
             <input list="session-options" value={session} onChange={(event) => setSession(event.target.value)} placeholder="全部会话" />
             <datalist id="session-options">
               {(options?.sessions ?? []).map((value) => <option key={value} value={value} />)}
+            </datalist>
+          </label>
+          <label>
+            <span>Project</span>
+            <input list="project-options" value={project} onChange={(event) => setProject(event.target.value)} placeholder="全部项目" />
+            <datalist id="project-options">
+              {(options?.projects ?? []).map((value) => <option key={value} value={value} />)}
             </datalist>
           </label>
         </div>

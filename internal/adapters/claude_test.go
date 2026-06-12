@@ -8,7 +8,12 @@ import (
 
 func writeClaudeUsageFile(t *testing.T, lines ...string) string {
 	t.Helper()
-	dir := filepath.Join(t.TempDir(), ".claude", "projects", "project-a", "session-a")
+	return writeClaudeUsageFileForProject(t, "project-a", lines...)
+}
+
+func writeClaudeUsageFileForProject(t *testing.T, project string, lines ...string) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), ".claude", "projects", project, "session-a")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -115,6 +120,26 @@ func TestClaudeAdapterFastModelSuffix(t *testing.T) {
 	}
 	if records[0].Model != "claude-sonnet-fast" || records[0].UsageSpeed != "fast" {
 		t.Fatalf("expected fast suffix, model=%q speed=%q", records[0].Model, records[0].UsageSpeed)
+	}
+}
+
+func TestClaudeAdapterKeepsOpenCoworkAsProjectPath(t *testing.T) {
+	path := writeClaudeUsageFileForProject(t, "-Users-test-Github-open-cowork",
+		`{"type":"assistant","uuid":"uuid-cowork","timestamp":"2026-01-02T03:04:05Z","cwd":"/Users/test/Github/open-cowork","message":{"id":"msg-cowork","model":"claude-sonnet","usage":{"input_tokens":10,"output_tokens":5}}}`,
+	)
+
+	records, err := NewClaudeAdapter().ParseFile(path)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(records))
+	}
+	if records[0].ProjectPath != "/Users/test/Github/open-cowork" {
+		t.Fatalf("expected cwd project path, got %q", records[0].ProjectPath)
+	}
+	if records[0].SourceProduct != "" {
+		t.Fatalf("Claude adapter should not infer source product from project path, got %q", records[0].SourceProduct)
 	}
 }
 

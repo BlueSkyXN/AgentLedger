@@ -29,7 +29,7 @@ export function useTimeseries(bucket: "daily" | "weekly" | "monthly") {
   return useQuery({ queryKey: ["timeseries", bucket, filters], queryFn: () => api.timeseries(bucket, filters) });
 }
 
-export function useBreakdown(by: "channel" | "model" | "provider" | "session") {
+export function useBreakdown(by: "channel" | "model" | "provider" | "session" | "project") {
   const { filters } = useFilterContext();
   return useQuery({ queryKey: ["breakdown", by, filters], queryFn: () => api.breakdown(by, filters) });
 }

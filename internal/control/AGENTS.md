@@ -6,7 +6,7 @@
 
 - API methods are GET-only. Non-GET requests must not mutate local state.
 - API responses must not expose `raw_usage_json`; config and DB paths should be home-redacted where intended.
-- Filter dates must use `YYYY-MM-DD`; limits must stay bounded.
+- Filter dates must use `YYYY-MM-DD` or RFC3339 datetime; limits must stay bounded.
 - Static serving must prevent path traversal and fall back to `index.html` only inside the selected static root.
 - `serve` loopback enforcement lives in `cmd/serve.go`; keep API changes consistent with that local-only trust boundary.
 

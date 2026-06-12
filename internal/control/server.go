@@ -309,14 +309,15 @@ func parseFilters(w http.ResponseWriter, r *http.Request, timezone string) (anal
 		Provider: strings.TrimSpace(r.URL.Query().Get("provider")),
 		Model:    strings.TrimSpace(r.URL.Query().Get("model")),
 		Session:  strings.TrimSpace(r.URL.Query().Get("session")),
+		Project:  strings.TrimSpace(r.URL.Query().Get("project")),
 		Timezone: timezone,
 	}
 	if filters.Since != "" && !validDate(filters.Since) {
-		writeError(w, http.StatusBadRequest, "since must use YYYY-MM-DD")
+		writeError(w, http.StatusBadRequest, "since must use YYYY-MM-DD or RFC3339 datetime")
 		return filters, false
 	}
 	if filters.Until != "" && !validDate(filters.Until) {
-		writeError(w, http.StatusBadRequest, "until must use YYYY-MM-DD")
+		writeError(w, http.StatusBadRequest, "until must use YYYY-MM-DD or RFC3339 datetime")
 		return filters, false
 	}
 	return filters, true
@@ -336,8 +337,13 @@ func parseLimit(w http.ResponseWriter, r *http.Request, defaultValue, minValue, 
 }
 
 func validDate(value string) bool {
-	_, err := time.Parse("2006-01-02", value)
-	return err == nil
+	if _, err := time.Parse("2006-01-02", value); err == nil {
+		return true
+	}
+	if _, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		return true
+	}
+	return false
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {

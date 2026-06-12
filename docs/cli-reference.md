@@ -103,6 +103,7 @@ Report types:
 | `monthly` | 按月聚合。 |
 | `models` | 按 normalized model 聚合。 |
 | `channels` | 按 agent 来源渠道聚合。 |
+| `projects` | 按项目标签聚合。 |
 | `sessions` | 按 session 聚合。 |
 | `slow` | 慢请求列表。 |
 
@@ -116,6 +117,7 @@ Report types:
 | `--provider string` | 过滤 provider。 |
 | `--model string` | 过滤 normalized model。 |
 | `--session string` | 过滤 session id。 |
+| `--project string` | 过滤项目标签或原始项目路径。 |
 | `--cost string` | 成本显示模式：`recorded`、`estimated`、`both` 或 `none`；默认 `recorded`。 |
 | `--pricing string` | estimated cost 使用的 JSON pricing profile；为空时使用内置 `pricing/pricing.v1.json`。 |
 | `--json` | 输出 JSON。 |
@@ -124,7 +126,7 @@ Report types:
 
 | Flag | 说明 |
 |---|---|
-| `--by string` | 在时间桶内继续按 `channel`、`model`、`provider` 或 `session` 拆分。 |
+| `--by string` | 在时间桶内继续按 `channel`、`model`、`provider`、`session` 或 `project` 拆分。 |
 
 `report slow` 额外支持：
 
@@ -205,9 +207,9 @@ Flags:
 | `GET` | `/api/v1/status` | 数据库统计。 |
 | `GET` | `/api/v1/config` | 脱敏配置快照。 |
 | `GET` | `/api/v1/analytics/summary` | 总览统计，支持统一 filters。 |
-| `GET` | `/api/v1/analytics/timeseries` | 趋势数据，`bucket=daily|weekly|monthly`；可选 `by=channel|model|provider|session`。 |
-| `GET` | `/api/v1/analytics/breakdown` | 维度排行，`by=channel|model|provider|session`。 |
+| `GET` | `/api/v1/analytics/timeseries` | 趋势数据，`bucket=daily|weekly|monthly`；可选 `by=channel|model|provider|session|project`。 |
+| `GET` | `/api/v1/analytics/breakdown` | 维度排行，`by=channel|model|provider|session|project`。 |
 | `GET` | `/api/v1/analytics/slow` | 慢请求列表，`sort=output_tps|ttft_ms|total_duration_ms`。 |
-| `GET` | `/api/v1/filter-options` | 当前库中存在的 channel/provider/model/session 选项。 |
+| `GET` | `/api/v1/filter-options` | 当前库中存在的 channel/provider/model/session/project 选项。 |
 | `GET` | `/api/v1/events` | 最近 usage events，不返回 raw JSON。 |
 | `GET` | `/api/v1/import-runs` | 最近 import runs。 |

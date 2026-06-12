@@ -17,6 +17,8 @@ AgentLedger v2 通过 adapter 读取本机 agent 日志，解析出统一的 `Pa
 
 Claude Code 的 token 口径与 ccusage 对齐：单条 usage 的 `total_tokens` 按 `input_tokens + output_tokens + cache_creation_input_tokens + cache_read_input_tokens` 计算。
 
+Claude 兼容 JSONL 当前统一作为 Claude Code 形态导入：`channel = claude`、`source_agent = claude`、`source_product = claude-code`。如果记录发生在 Open-Cowork 等项目目录下，项目路径写入 `project_path`，报表/API/Web 会派生项目标签，可通过 `--project open-cowork`、`report projects` 或 `by=project` 单独统计。AgentLedger 不会仅凭项目目录把客户端产品改写为 Open-Cowork，也不会解析 Open-Cowork app DB、缓存或运行日志作为 usage 来源。
+
 Claude Code 日志会把同一次 assistant message 以多条流式行写出。AgentLedger 以 `message.id + requestId` 作为自然事件 key，并在同 key 重复时保留 token total 更大的记录；sidechain replay 记录按 ccusage 口径优先保留非 sidechain 版本。缺少 `message.id` 的旧格式记录才回退到 `uuid`。
 
 `model == "<synthetic>"` 且 token total 为 0 的记录不会写入统计；`usage.speed == "fast"` 时，模型名追加 `-fast` 后缀，避免和 standard model 混在同一 model 维度。
@@ -72,7 +74,7 @@ Adapter 会尽量提供：
 - `RawSHA256`
 - `RawUsageJSON`
 
-新写入事件会同时写入 `channel` 和 `source_agent`，并保持二者一致。`source_product` 用于区分 `claude-code`、`codex-cli`、`copilot-otel`、`copilot-session-state` 等具体来源形态。
+新写入事件会同时写入 `channel` 和 `source_agent`，并保持二者一致。`source_product` 用于区分 `claude-code`、`codex-cli`、`copilot-otel`、`copilot-session-state` 等具体来源形态；项目或工作目录维度保存在 `project_path`。
 
 ## Timing 边界
 

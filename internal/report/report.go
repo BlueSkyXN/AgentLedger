@@ -19,6 +19,7 @@ type Filters struct {
 	Provider    string
 	Model       string
 	Session     string
+	Project     string
 	Timezone    string
 	By          string
 	SlowSort    string
@@ -108,6 +109,8 @@ func Generate(conn *sql.DB, reportType string, filters Filters, asJSON bool) err
 		return generateGrouped(conn, "COALESCE(model_normalized, model_raw, 'unknown')", filters, asJSON, "Model", "total_tokens DESC")
 	case "channels":
 		return generateGrouped(conn, "COALESCE(channel, 'unknown')", filters, asJSON, "Channel", "total_tokens DESC")
+	case "projects":
+		return generateGrouped(conn, projectLabelExpr(), filters, asJSON, "Project", "total_tokens DESC LIMIT 100")
 	case "sessions":
 		return generateGrouped(conn, "COALESCE(session_path_id, session_id, 'no-session')", filters, asJSON, "Session", "total_tokens DESC LIMIT 50")
 	case "slow":
@@ -244,8 +247,10 @@ func reportBreakdownLabelExpr(by string) (expr, header string, err error) {
 		return "COALESCE(provider, 'unknown')", "Provider", nil
 	case "session":
 		return "COALESCE(session_path_id, session_id, 'no-session')", "Session", nil
+	case "project":
+		return projectLabelExpr(), "Project", nil
 	default:
-		return "", "", fmt.Errorf("invalid time breakdown %q: expected channel, model, provider, or session", by)
+		return "", "", fmt.Errorf("invalid time breakdown %q: expected channel, model, provider, session, or project", by)
 	}
 }
 
@@ -738,7 +743,15 @@ func addFilters(query string, args *[]any, filters Filters) string {
 		query += " AND (session_id = ? OR session_path_id = ?)"
 		*args = append(*args, filters.Session, filters.Session)
 	}
+	if filters.Project != "" {
+		query += " AND (project_path = ? OR " + projectLabelExpr() + " = ?)"
+		*args = append(*args, filters.Project, filters.Project)
+	}
 	return query
+}
+
+func projectLabelExpr() string {
+	return "agentledger_project_label(project_path)"
 }
 
 func dateStartMillis(value, timezone string) int64 {

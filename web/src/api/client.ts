@@ -36,7 +36,7 @@ export const api = {
   summary: (filters: Filters) => request<Summary>(`/analytics/summary${query(filters)}`),
   timeseries: (bucket: "daily" | "weekly" | "monthly", filters: Filters) =>
     request<MetricRow[]>(`/analytics/timeseries${query({ ...filters, bucket })}`),
-  breakdown: (by: "channel" | "model" | "provider" | "session", filters: Filters) =>
+  breakdown: (by: "channel" | "model" | "provider" | "session" | "project", filters: Filters) =>
     request<MetricRow[]>(`/analytics/breakdown${query({ ...filters, by })}`),
   slow: (sort: SlowSort, filters: Filters, limit = 50) =>
     request<EventItem[]>(`/analytics/slow${query({ ...filters, sort, limit })}`),

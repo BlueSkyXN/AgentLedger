@@ -13,6 +13,7 @@
 --provider string
 --model string
 --session string
+--project string
 --cost recorded|estimated|both|none
 --pricing path/to/pricing.json
 --json
@@ -29,10 +30,11 @@
 | `report monthly` | 月份 | month desc |
 | `report models` | `model_normalized` / `model_raw` | total tokens desc |
 | `report channels` | `channel` | total tokens desc |
+| `report projects` | 从 `project_path` 派生的项目标签 | total tokens desc |
 | `report sessions` | `session_id` | total tokens desc |
 | `report slow` | 单个 timed event | sort flag 决定 |
 
-`report daily`、`report weekly`、`report monthly` 可加 `--by channel|model|provider|session`，在每个时间桶内继续拆分 token 分项，适合做按时间的模型/渠道用量趋势。
+`report daily`、`report weekly`、`report monthly` 可加 `--by channel|model|provider|session|project`，在每个时间桶内继续拆分 token 分项，适合做按时间的模型/渠道/项目用量趋势。
 
 聚合报表输出：
 

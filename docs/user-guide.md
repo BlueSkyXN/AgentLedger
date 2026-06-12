@@ -1,6 +1,6 @@
 # User Guide
 
-AgentLedger v2 是本地 usage 统计分析器。典型使用流程是：初始化 v2 数据库，导入本机 agent 日志，按渠道 / 模型 / provider / 时间 / session 查看统计，并用只读 Web 面板做分析。
+AgentLedger v2 是本地 usage 统计分析器。典型使用流程是：初始化 v2 数据库，导入本机 agent 日志，按渠道 / 模型 / provider / 时间 / session / project 查看统计，并用只读 Web 面板做分析。
 
 ## 初始化
 
@@ -32,6 +32,7 @@ agent-ledger report weekly --channel codex
 agent-ledger report monthly --provider anthropic
 agent-ledger report models --json
 agent-ledger report channels
+agent-ledger report projects --channel claude
 agent-ledger report sessions --since 2026-05-01
 agent-ledger report slow --sort ttft_ms --limit 20
 ```
@@ -45,6 +46,7 @@ agent-ledger report slow --sort ttft_ms --limit 20
 --provider string
 --model string
 --session string
+--project string
 --json
 ```
 
@@ -53,6 +55,7 @@ agent-ledger report slow --sort ttft_ms --limit 20
 - `channel`: Agent 来源，例如 `claude`、`codex`、`copilot`、`gemini`。
 - `provider`: 模型或日志 provider，例如 `anthropic`、`openai`、`google`。
 - `model_normalized`: 归一化模型名。
+- `project_path`: adapter 解析到的项目路径；报表/API 从它派生项目标签，可用于统计某个项目下的 usage，不代表客户端产品。
 - `total_tokens`: source 提供时使用 source 值；否则按 input/output/reasoning/cache 分项计算。
 - `ttft_ms`: `first_token_at_ms - request_started_at_ms`。
 - `output_duration_ms`: `completed_at_ms - first_token_at_ms`。
@@ -73,7 +76,7 @@ agent-ledger serve
 http://127.0.0.1:54217
 ```
 
-面板提供 Overview、趋势、渠道 / provider、模型、session、慢请求、导入 / 设置等只读页面。
+面板提供 Overview、趋势、渠道 / provider、模型、project / session、慢请求、导入 / 设置等只读页面。
 
 ## Export / merge
 
