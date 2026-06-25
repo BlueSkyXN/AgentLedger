@@ -15,6 +15,74 @@ func TestDefaultProfileLoads(t *testing.T) {
 	}
 }
 
+func TestDefaultProfilePricesUserSuppliedModels(t *testing.T) {
+	profile, err := LoadDefaultProfile()
+	if err != nil {
+		t.Fatalf("load default profile: %v", err)
+	}
+	estimator, err := NewEstimator(profile)
+	if err != nil {
+		t.Fatalf("estimator: %v", err)
+	}
+
+	tests := []struct {
+		name         string
+		event        Event
+		wantRuleID   string
+		wantMicroUSD int64
+	}{
+		{
+			name: "claude fable uses claude cache multipliers",
+			event: Event{
+				Model:               "claude-fable-5",
+				InputTokens:         1_000_000,
+				OutputTokens:        1_000_000,
+				CacheCreationTokens: 1_000_000,
+				CacheReadTokens:     1_000_000,
+			},
+			wantRuleID:   "claude-fable-5",
+			wantMicroUSD: 73_500_000,
+		},
+		{
+			name: "kimi k2.5 uses cache hit and miss prices",
+			event: Event{
+				Model:           "kimi-k2.5",
+				InputTokens:     1_000_000,
+				OutputTokens:    1_000_000,
+				CacheReadTokens: 1_000_000,
+			},
+			wantRuleID:   "kimi-k2.5",
+			wantMicroUSD: 3_700_000,
+		},
+		{
+			name: "doubao seed cny prices are converted at 6.8",
+			event: Event{
+				Model:           "doubao-seed-2.0-pro",
+				InputTokens:     85,
+				OutputTokens:    85,
+				CacheReadTokens: 85,
+			},
+			wantRuleID:   "doubao-seed-2.0-pro",
+			wantMicroUSD: 744,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			estimate, err := estimator.Estimate(tt.event)
+			if err != nil {
+				t.Fatalf("estimate: %v", err)
+			}
+			if !estimate.Priced || estimate.RuleID != tt.wantRuleID {
+				t.Fatalf("expected priced rule %q, got %+v", tt.wantRuleID, estimate)
+			}
+			if estimate.CostMicroUSD != tt.wantMicroUSD {
+				t.Fatalf("expected %d micro USD, got %d", tt.wantMicroUSD, estimate.CostMicroUSD)
+			}
+		})
+	}
+}
+
 func TestEstimateUsesTokenBucketsNotTotalTokens(t *testing.T) {
 	profile := testProfile(t)
 	estimator, err := NewEstimator(profile)

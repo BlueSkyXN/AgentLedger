@@ -64,7 +64,7 @@ JSON 输出使用同一语义字段：
     "estimated_cost_usd": 0.34,
     "estimated_cost_micro_usd": 340000,
     "pricing": {
-      "profile_id": "agentledger-pricing-2026-06-01",
+      "profile_id": "agentledger-pricing-2026-06-25",
       "currency": "USD",
       "priced_events": 10,
       "total_events": 10,

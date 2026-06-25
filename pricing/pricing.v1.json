@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "id": "agentledger-pricing-2026-06-01",
+  "id": "agentledger-pricing-2026-06-25",
   "currency": "USD",
   "unit": "usd_per_1m_tokens",
-  "checked_at": "2026-06-01",
+  "checked_at": "2026-06-25",
   "defaults": {
     "unknown_model_policy": "missing",
     "reasoning_policy": "included_in_output",
@@ -15,6 +15,11 @@
       "provider": "model_id",
       "name": "Official model list prices by model ID",
       "checked_at": "2026-06-01"
+    },
+    {
+      "provider": "user_supplied",
+      "name": "User supplied model list prices for Claude Fable, Kimi K2.5, and Doubao Seed",
+      "checked_at": "2026-06-25"
     }
   ],
   "rules": [
@@ -188,6 +193,66 @@
       "cache_write_assumption": "5m_if_unknown",
       "confidence": "estimated",
       "model_id": "claude-haiku-4.5"
+    },
+    {
+      "id": "claude-fable-5",
+      "model_patterns": [
+        "claude-fable-5",
+        "claude-fable-5.*",
+        "claude-fable-5-*"
+      ],
+      "priority": 10,
+      "basis": "user_provided_list_price",
+      "rates": {
+        "input": 10.0,
+        "cache_write_5m": 12.5,
+        "cache_write_1h": 20.0,
+        "cache_read": 1.0,
+        "output": 50.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "5m_if_unknown",
+      "confidence": "estimated",
+      "notes": "User supplied 10 input / 50 output USD per 1M tokens; cache write/read use the same Claude multipliers as other Claude rules.",
+      "model_id": "claude-fable-5"
+    },
+    {
+      "id": "kimi-k2.5",
+      "model_patterns": [
+        "kimi-k2.5",
+        "kimi-k2.5-*"
+      ],
+      "priority": 10,
+      "basis": "user_provided_list_price",
+      "rates": {
+        "input": 0.6,
+        "cached_input": 0.1,
+        "output": 3.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "User supplied cache miss input 0.60, cache hit input 0.10, output 3.00 USD per 1M tokens; context window 262144 tokens.",
+      "model_id": "kimi-k2.5"
+    },
+    {
+      "id": "doubao-seed-2.0-pro",
+      "model_patterns": [
+        "doubao-seed-2.0-pro",
+        "doubao-seed-2.0-pro-*"
+      ],
+      "priority": 10,
+      "basis": "user_provided_list_price",
+      "rates": {
+        "input": "24/17",
+        "cached_input": "24/85",
+        "output": "120/17"
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "User supplied CNY prices divided by 6.8: input 9.6 CNY, cache hit 1.92 CNY, output 48 CNY per 1M tokens.",
+      "model_id": "doubao-seed-2.0-pro"
     },
     {
       "id": "gemini-3.1-pro",
