@@ -69,6 +69,29 @@ func (d *Database) UpsertEvent(ev *model.UsageEvent) (string, error) {
 		return "", err
 	}
 	if err == sql.ErrNoRows {
+		existing, err = selectEventForComparisonBySourceIdentity(tx, ev)
+		if err != nil && err != sql.ErrNoRows {
+			return "", err
+		}
+		if err != sql.ErrNoRows {
+			if isMoreComplete(ev, existing) {
+				ev.ImportedAtMs = existing.ImportedAtMs
+				preserveExistingMetadata(ev, existing)
+				if err = updateEventByID(tx, existing.EventID, ev); err != nil {
+					return "", err
+				}
+			} else {
+				preserveExistingClassification(ev, existing)
+				preserveExistingMetadata(ev, existing)
+				if err = updateEventIdentityAndMetadataByID(tx, existing.EventID, ev); err != nil {
+					return "", err
+				}
+			}
+			if err = tx.Commit(); err != nil {
+				return "", err
+			}
+			return "updated", nil
+		}
 		if err = insertEvent(tx, ev); err != nil {
 			return "", err
 		}
@@ -107,7 +130,7 @@ func (d *Database) UpsertEvent(ev *model.UsageEvent) (string, error) {
 
 func selectEventForComparison(tx *sql.Tx, eventID string) (*model.UsageEvent, error) {
 	row := tx.QueryRow(`
-        SELECT event_id, channel, model_raw, model_normalized, total_tokens,
+        SELECT event_id, channel, provider, model_raw, model_normalized, total_tokens,
             request_started_at_ms, first_token_at_ms, completed_at_ms,
             total_duration_ms, ttft_ms, output_duration_ms, output_tps,
             recorded_cost_usd, imported_at_ms,
@@ -116,6 +139,34 @@ func selectEventForComparison(tx *sql.Tx, eventID string) (*model.UsageEvent, er
             accounting_profile, session_path_id, turn_id, project_path
         FROM usage_events WHERE event_id = ?
     `, eventID)
+	return scanEventForComparison(row)
+}
+
+func selectEventForComparisonBySourceIdentity(tx *sql.Tx, ev *model.UsageEvent) (*model.UsageEvent, error) {
+	if strings.TrimSpace(ev.SourceFile) == "" || ev.LineNumber <= 0 || strings.TrimSpace(ev.RawSHA256) == "" {
+		return nil, sql.ErrNoRows
+	}
+	row := tx.QueryRow(`
+        SELECT event_id, channel, provider, model_raw, model_normalized, total_tokens,
+            request_started_at_ms, first_token_at_ms, completed_at_ms,
+            total_duration_ms, ttft_ms, output_duration_ms, output_tps,
+            recorded_cost_usd, imported_at_ms,
+            source_agent, source_product, observability_level, model_is_fallback,
+            source_total_tokens, raw_input_tokens, token_accounting_method,
+            accounting_profile, session_path_id, turn_id, project_path
+        FROM usage_events
+        WHERE source_file = ? AND line_number = ? AND raw_sha256 = ?
+        ORDER BY imported_at_ms ASC, event_id ASC
+        LIMIT 1
+    `, ev.SourceFile, ev.LineNumber, ev.RawSHA256)
+	return scanEventForComparison(row)
+}
+
+type eventComparisonScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanEventForComparison(row eventComparisonScanner) (*model.UsageEvent, error) {
 	var ev model.UsageEvent
 	var requestStarted, firstToken, completed, totalDuration, ttft, outputDuration sql.NullInt64
 	var sourceTotal, rawInput sql.NullInt64
@@ -125,6 +176,7 @@ func selectEventForComparison(tx *sql.Tx, eventID string) (*model.UsageEvent, er
 	if err := row.Scan(
 		&ev.EventID,
 		&ev.Channel,
+		&ev.Provider,
 		&ev.ModelRaw,
 		&ev.ModelNormalized,
 		&ev.TotalTokens,
@@ -230,8 +282,12 @@ func insertEvent(exec interface {
 }
 
 func updateEvent(tx *sql.Tx, ev *model.UsageEvent) error {
+	return updateEventByID(tx, ev.EventID, ev)
+}
+
+func updateEventByID(tx *sql.Tx, existingEventID string, ev *model.UsageEvent) error {
 	args := []any{
-		ev.DedupeKey, ev.DedupeStrategy,
+		ev.EventID, ev.DedupeKey, ev.DedupeStrategy,
 		ev.Channel, ev.Provider, ev.ModelRaw, ev.ModelNormalized,
 		nullIfEmpty(ev.SourceAgent), nullIfEmpty(ev.SourceProduct), nullIfEmpty(ev.ObservabilityLevel), boolToInt(ev.ModelIsFallback), nullableInt64(ev.SourceTotalTokens), nullableInt64(ev.RawInputTokens), nullIfEmpty(ev.TokenAccountingMethod), nullIfEmpty(ev.AccountingProfile),
 		ev.TimestampMs, ev.SessionID, ev.SessionPathID, ev.TurnID, ev.ProjectPath, ev.MessageID, ev.RequestID, ev.SourceFile, ev.LineNumber, ev.RawSHA256,
@@ -239,11 +295,11 @@ func updateEvent(tx *sql.Tx, ev *model.UsageEvent) error {
 		ev.RequestStartedAtMs, ev.FirstTokenAtMs, ev.CompletedAtMs, ev.TotalDurationMs, ev.TTFTMs, ev.OutputDurationMs, ev.OutputTPS,
 		ev.RecordedCostUSD, ev.RawUsageJSON,
 		ev.UpdatedAtMs,
-		ev.EventID,
+		existingEventID,
 	}
 	_, err := tx.Exec(`
         UPDATE usage_events SET
-            dedupe_key = ?, dedupe_strategy = ?,
+            event_id = ?, dedupe_key = ?, dedupe_strategy = ?,
             channel = ?, provider = ?, model_raw = ?, model_normalized = ?,
             source_agent = ?, source_product = ?, observability_level = ?, model_is_fallback = ?, source_total_tokens = ?, raw_input_tokens = ?, token_accounting_method = ?, accounting_profile = ?,
             timestamp_ms = ?, session_id = ?, session_path_id = ?, turn_id = ?, project_path = ?, message_id = ?, request_id = ?, source_file = ?, line_number = ?, raw_sha256 = ?,
@@ -286,6 +342,54 @@ func updateEventMetadata(tx *sql.Tx, ev *model.UsageEvent) error {
 		nullIfEmpty(ev.ProjectPath),
 		ev.UpdatedAtMs,
 		ev.EventID,
+	)
+	return err
+}
+
+func updateEventIdentityAndMetadataByID(tx *sql.Tx, existingEventID string, ev *model.UsageEvent) error {
+	_, err := tx.Exec(`
+        UPDATE usage_events SET
+            event_id = ?,
+            dedupe_key = ?,
+            dedupe_strategy = ?,
+            channel = ?,
+            provider = ?,
+            model_raw = ?,
+            model_normalized = ?,
+            source_agent = ?,
+            source_product = ?,
+            observability_level = ?,
+            model_is_fallback = ?,
+            source_total_tokens = ?,
+            raw_input_tokens = ?,
+            token_accounting_method = ?,
+            accounting_profile = ?,
+            session_path_id = ?,
+            turn_id = ?,
+            project_path = ?,
+            updated_at_ms = ?
+        WHERE event_id = ?
+    `,
+		ev.EventID,
+		ev.DedupeKey,
+		ev.DedupeStrategy,
+		ev.Channel,
+		ev.Provider,
+		nullIfEmpty(ev.ModelRaw),
+		nullIfEmpty(ev.ModelNormalized),
+		nullIfEmpty(ev.SourceAgent),
+		nullIfEmpty(ev.SourceProduct),
+		nullIfEmpty(ev.ObservabilityLevel),
+		boolToInt(ev.ModelIsFallback),
+		nullableInt64(ev.SourceTotalTokens),
+		nullableInt64(ev.RawInputTokens),
+		nullIfEmpty(ev.TokenAccountingMethod),
+		nullIfEmpty(ev.AccountingProfile),
+		nullIfEmpty(ev.SessionPathID),
+		nullIfEmpty(ev.TurnID),
+		nullIfEmpty(ev.ProjectPath),
+		ev.UpdatedAtMs,
+		existingEventID,
 	)
 	return err
 }
@@ -590,6 +694,21 @@ func preserveExistingMetadata(target, existing *model.UsageEvent) {
 		target.ProjectPath = existing.ProjectPath
 	}
 	target.ModelIsFallback = target.ModelIsFallback || existing.ModelIsFallback
+}
+
+func preserveExistingClassification(target, existing *model.UsageEvent) {
+	if target.Channel == "" {
+		target.Channel = existing.Channel
+	}
+	if target.Provider == "" {
+		target.Provider = existing.Provider
+	}
+	if target.ModelRaw == "" {
+		target.ModelRaw = existing.ModelRaw
+	}
+	if target.ModelNormalized == "" {
+		target.ModelNormalized = existing.ModelNormalized
+	}
 }
 
 func shouldCorrectSourceProduct(existing, candidate *model.UsageEvent) bool {

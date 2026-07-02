@@ -81,6 +81,28 @@ func TestCodexCumulativeDeltaMultiSessionAndCounterReset(t *testing.T) {
 	}
 }
 
+func TestCodexMergesSessionModelProviderIntoOpenAIProvider(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "codex.jsonl")
+	data := strings.Join([]string{
+		`{"type":"session_meta","timestamp":"2026-01-01T00:00:00Z","payload":{"id":"A","model_provider":"cpa-hfs"}}`,
+		`{"type":"event_msg","timestamp":"2026-01-01T00:01:00Z","session_id":"A","model":"gpt-5","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":80,"output_tokens":20,"total_tokens":100}}}}`,
+	}, "\n")
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	records, err := NewCodexAdapter().ParseFile(path)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(records))
+	}
+	if records[0].Provider != "openai" || records[0].TotalTokens != 100 {
+		t.Fatalf("expected merged openai provider with total 100, got provider=%q total=%d", records[0].Provider, records[0].TotalTokens)
+	}
+}
+
 func TestCodexSkipsDuplicateLastTokenUsageSnapshots(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "codex.jsonl")
 	data := strings.Join([]string{

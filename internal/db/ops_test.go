@@ -65,6 +65,127 @@ func TestUpsertEventKeepsMoreCompleteDuplicate(t *testing.T) {
 	}
 }
 
+func TestUpsertEventMigratesChangedFingerprintBySourceIdentity(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer database.Close()
+
+	legacy := &model.UsageEvent{
+		EventID:         "legacy-openai-event",
+		DedupeKey:       "legacy-openai-event",
+		DedupeStrategy:  "session_token",
+		Channel:         "codex",
+		SourceAgent:     "codex",
+		SourceProduct:   "codex-cli",
+		Provider:        "openai",
+		ModelRaw:        "gpt-5",
+		ModelNormalized: "gpt-5",
+		TimestampMs:     1,
+		SessionID:       "session-a",
+		SourceFile:      "/Users/test/.codex/sessions/session-a.jsonl",
+		LineNumber:      7,
+		RawSHA256:       "raw-hash-a",
+		InputTokens:     10,
+		OutputTokens:    5,
+		TotalTokens:     15,
+		ImportedAtMs:    1,
+		UpdatedAtMs:     1,
+	}
+	if status, err := database.UpsertEvent(legacy); err != nil || status != "inserted" {
+		t.Fatalf("legacy insert status=%s err=%v", status, err)
+	}
+
+	corrected := *legacy
+	corrected.EventID = "corrected-event"
+	corrected.DedupeKey = corrected.EventID
+	corrected.ModelRaw = "gpt-5-codex"
+	corrected.ModelNormalized = "gpt-5-codex"
+	corrected.UpdatedAtMs = 2
+	status, err := database.UpsertEvent(&corrected)
+	if err != nil || status != "updated" {
+		t.Fatalf("corrected upsert status=%s err=%v", status, err)
+	}
+
+	var count int
+	if err := database.Conn().QueryRow(`SELECT COUNT(*) FROM usage_events`).Scan(&count); err != nil {
+		t.Fatalf("count events: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected source-identity migration to keep one event, got %d", count)
+	}
+
+	var eventID, provider string
+	var importedAt, updatedAt int64
+	if err := database.Conn().QueryRow(`SELECT event_id, provider, imported_at_ms, updated_at_ms FROM usage_events`).Scan(&eventID, &provider, &importedAt, &updatedAt); err != nil {
+		t.Fatalf("select migrated event: %v", err)
+	}
+	if eventID != corrected.EventID || provider != "openai" || importedAt != 1 || updatedAt != 2 {
+		t.Fatalf("unexpected migrated event id=%s provider=%s imported=%d updated=%d", eventID, provider, importedAt, updatedAt)
+	}
+}
+
+func TestUpsertEventSourceIdentityMigrationPreservesMoreCompleteUsage(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer database.Close()
+
+	ttft := int64(300)
+	legacy := &model.UsageEvent{
+		EventID:         "legacy-provider-event",
+		DedupeKey:       "legacy-provider-event",
+		DedupeStrategy:  "session_token",
+		Channel:         "codex",
+		SourceAgent:     "codex",
+		SourceProduct:   "codex-cli",
+		Provider:        "cpa-hfs",
+		ModelRaw:        "gpt-5",
+		ModelNormalized: "gpt-5",
+		TimestampMs:     1,
+		SessionID:       "session-a",
+		SourceFile:      "/Users/test/.codex/sessions/session-a.jsonl",
+		LineNumber:      8,
+		RawSHA256:       "raw-hash-b",
+		InputTokens:     40,
+		OutputTokens:    10,
+		TotalTokens:     50,
+		TTFTMs:          &ttft,
+		ImportedAtMs:    1,
+		UpdatedAtMs:     1,
+	}
+	if status, err := database.UpsertEvent(legacy); err != nil || status != "inserted" {
+		t.Fatalf("legacy insert status=%s err=%v", status, err)
+	}
+
+	corrected := *legacy
+	corrected.EventID = "corrected-provider-event"
+	corrected.DedupeKey = corrected.EventID
+	corrected.Provider = "openai"
+	corrected.ModelRaw = "gpt-5-codex"
+	corrected.ModelNormalized = "gpt-5-codex"
+	corrected.InputTokens = 15
+	corrected.OutputTokens = 5
+	corrected.TotalTokens = 20
+	corrected.TTFTMs = nil
+	corrected.UpdatedAtMs = 2
+	status, err := database.UpsertEvent(&corrected)
+	if err != nil || status != "updated" {
+		t.Fatalf("corrected upsert status=%s err=%v", status, err)
+	}
+
+	var eventID, provider, modelName string
+	var total, storedTTFT int64
+	if err := database.Conn().QueryRow(`SELECT event_id, provider, model_normalized, total_tokens, ttft_ms FROM usage_events`).Scan(&eventID, &provider, &modelName, &total, &storedTTFT); err != nil {
+		t.Fatalf("select migrated event: %v", err)
+	}
+	if eventID != corrected.EventID || provider != "openai" || modelName != "gpt-5-codex" || total != 50 || storedTTFT != ttft {
+		t.Fatalf("unexpected migrated event id=%s provider=%s model=%s total=%d ttft=%d", eventID, provider, modelName, total, storedTTFT)
+	}
+}
+
 func TestUpsertClaudeDuplicateKeepsLargestTokenTotal(t *testing.T) {
 	database, err := Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
 	if err != nil {

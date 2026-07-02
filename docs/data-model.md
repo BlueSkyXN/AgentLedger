@@ -89,7 +89,7 @@ _foreign_keys=ON
 | `dedupe_key` | `TEXT` | `NOT NULL` | 去重 key。 |
 | `dedupe_strategy` | `TEXT` | `NOT NULL` | `message_id`、`session_token`、`raw_hash` 或 `fallback`。 |
 | `channel` | `TEXT` | `NOT NULL` | Agent 来源，例如 `claude`、`codex`、`copilot`、`gemini`。 |
-| `provider` | `TEXT` | nullable | 模型或日志 provider，例如 `anthropic`、`openai`、`google`。 |
+| `provider` | `TEXT` | nullable | 模型或日志 provider，例如 `anthropic`、`openai`、`google`。Codex 当前归一为 `openai`，不按 session `model_provider` 拆分。 |
 | `model_raw` | `TEXT` | nullable | 日志中的原始模型名。 |
 | `model_normalized` | `TEXT` | nullable | 归一化后的模型名。 |
 | `source_agent` | `TEXT` | nullable | 解析来源 agent，通常与 `channel` 一致。 |
@@ -151,7 +151,7 @@ output_tps = output_tokens / (output_duration_ms / 1000.0)
 
 ## Upsert 完整度规则
 
-`import` 不再使用 `INSERT OR IGNORE`。重复事件会按完整度决定是否覆盖旧记录。
+`import` 不再使用 `INSERT OR IGNORE`。重复事件会按完整度决定是否覆盖旧记录；如果 parser 或 fingerprint 规则修正导致 `event_id` 改变，但 `source_file + line_number + raw_sha256` 仍指向同一原始 JSONL 行，upsert 会更新旧行而不是插入重复事件。来源行兼容更新只有在新记录更完整时才覆盖 token、timing、cost 等用量字段；否则只迁移 `event_id` / provider / model / metadata，保留旧行已有用量。
 
 优先级：
 
@@ -184,7 +184,7 @@ output_tps = output_tokens / (output_duration_ms / 1000.0)
 | Command | 写入表 | 读取表 | 说明 |
 |---|---|---|---|
 | `init` | `meta` | config | 初始化 v2 schema；`--reset` 删除本地 DB/WAL/SHM 后重建。 |
-| `import` | `import_runs`、`usage_events` | configured source paths | 遍历启用 adapter，解析 usage record，按 fingerprint upsert。 |
+| `import` | `import_runs`、`usage_events` | configured source paths | 遍历启用 adapter，解析 usage record，按 fingerprint upsert；同一来源行可用于兼容更新旧 fingerprint。 |
 | `export` | 无 | 当前 SQLite 数据库文件 | 直接复制数据库文件。 |
 | `merge` | `usage_events` | incoming `.aldb` 的 `usage_events` | 只接受 schema v2，插入未见事件。 |
 | `status` | 无 | `meta`、`usage_events`、`import_runs` | 输出 v2 统计。 |
