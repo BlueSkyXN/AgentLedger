@@ -68,30 +68,24 @@ func (d *Database) UpsertEvent(ev *model.UsageEvent) (string, error) {
 	if err != nil && err != sql.ErrNoRows {
 		return "", err
 	}
-	if err == sql.ErrNoRows {
-		existing, err = selectEventForComparisonBySourceIdentity(tx, ev)
-		if err != nil && err != sql.ErrNoRows {
+	exactMatch := err == nil
+	if !exactMatch {
+		existing = nil
+	}
+
+	sourceMatches, err := selectEventsForComparisonBySourceIdentity(tx, ev)
+	if err != nil {
+		return "", err
+	}
+	sourceReconciled := false
+	if len(sourceMatches) > 0 && (!exactMatch || (len(sourceMatches) > 1 && containsEventID(sourceMatches, ev.EventID))) {
+		existing, sourceReconciled, err = reconcileSourceIdentityMatches(tx, ev, sourceMatches)
+		if err != nil {
 			return "", err
 		}
-		if err != sql.ErrNoRows {
-			if isMoreComplete(ev, existing) {
-				ev.ImportedAtMs = existing.ImportedAtMs
-				preserveExistingMetadata(ev, existing)
-				if err = updateEventByID(tx, existing.EventID, ev); err != nil {
-					return "", err
-				}
-			} else {
-				preserveExistingClassification(ev, existing)
-				preserveExistingMetadata(ev, existing)
-				if err = updateEventIdentityAndMetadataByID(tx, existing.EventID, ev); err != nil {
-					return "", err
-				}
-			}
-			if err = tx.Commit(); err != nil {
-				return "", err
-			}
-			return "updated", nil
-		}
+	}
+
+	if existing == nil {
 		if err = insertEvent(tx, ev); err != nil {
 			return "", err
 		}
@@ -114,11 +108,14 @@ func (d *Database) UpsertEvent(ev *model.UsageEvent) (string, error) {
 		if err = tx.Commit(); err != nil {
 			return "", err
 		}
+		if sourceReconciled {
+			return "updated", nil
+		}
 		return "skipped", nil
 	}
 
 	ev.ImportedAtMs = existing.ImportedAtMs
-	preserveExistingMetadata(ev, existing)
+	preserveExistingSourceMetadata(ev, existing)
 	if err = updateEvent(tx, ev); err != nil {
 		return "", err
 	}
@@ -130,10 +127,12 @@ func (d *Database) UpsertEvent(ev *model.UsageEvent) (string, error) {
 
 func selectEventForComparison(tx *sql.Tx, eventID string) (*model.UsageEvent, error) {
 	row := tx.QueryRow(`
-        SELECT event_id, channel, provider, model_raw, model_normalized, total_tokens,
+        SELECT event_id, channel, provider, model_raw, model_normalized,
+            input_tokens, output_tokens, reasoning_tokens,
+            cache_creation_tokens, cache_read_tokens, total_tokens,
             request_started_at_ms, first_token_at_ms, completed_at_ms,
             total_duration_ms, ttft_ms, output_duration_ms, output_tps,
-            recorded_cost_usd, imported_at_ms,
+            recorded_cost_usd, imported_at_ms, updated_at_ms,
             source_agent, source_product, observability_level, model_is_fallback,
             source_total_tokens, raw_input_tokens, token_accounting_method,
             accounting_profile, session_path_id, turn_id, project_path
@@ -142,24 +141,101 @@ func selectEventForComparison(tx *sql.Tx, eventID string) (*model.UsageEvent, er
 	return scanEventForComparison(row)
 }
 
-func selectEventForComparisonBySourceIdentity(tx *sql.Tx, ev *model.UsageEvent) (*model.UsageEvent, error) {
-	if strings.TrimSpace(ev.SourceFile) == "" || ev.LineNumber <= 0 || strings.TrimSpace(ev.RawSHA256) == "" {
-		return nil, sql.ErrNoRows
+func selectEventsForComparisonBySourceIdentity(tx *sql.Tx, ev *model.UsageEvent) ([]*model.UsageEvent, error) {
+	if ev.Channel != "codex" || strings.TrimSpace(ev.SourceFile) == "" || ev.LineNumber <= 0 || strings.TrimSpace(ev.RawSHA256) == "" {
+		return nil, nil
 	}
-	row := tx.QueryRow(`
-        SELECT event_id, channel, provider, model_raw, model_normalized, total_tokens,
+	rows, err := tx.Query(`
+        SELECT event_id, channel, provider, model_raw, model_normalized,
+            input_tokens, output_tokens, reasoning_tokens,
+            cache_creation_tokens, cache_read_tokens, total_tokens,
             request_started_at_ms, first_token_at_ms, completed_at_ms,
             total_duration_ms, ttft_ms, output_duration_ms, output_tps,
-            recorded_cost_usd, imported_at_ms,
+            recorded_cost_usd, imported_at_ms, updated_at_ms,
             source_agent, source_product, observability_level, model_is_fallback,
             source_total_tokens, raw_input_tokens, token_accounting_method,
             accounting_profile, session_path_id, turn_id, project_path
         FROM usage_events
-        WHERE source_file = ? AND line_number = ? AND raw_sha256 = ?
+        WHERE source_file = ? AND line_number = ? AND raw_sha256 = ? AND channel = ?
         ORDER BY imported_at_ms ASC, event_id ASC
-        LIMIT 1
-    `, ev.SourceFile, ev.LineNumber, ev.RawSHA256)
-	return scanEventForComparison(row)
+    `, ev.SourceFile, ev.LineNumber, ev.RawSHA256, ev.Channel)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var matches []*model.UsageEvent
+	for rows.Next() {
+		match, err := scanEventForComparison(rows)
+		if err != nil {
+			return nil, err
+		}
+		matches = append(matches, match)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return matches, nil
+}
+
+func containsEventID(events []*model.UsageEvent, eventID string) bool {
+	for _, event := range events {
+		if event.EventID == eventID {
+			return true
+		}
+	}
+	return false
+}
+
+func reconcileSourceIdentityMatches(tx *sql.Tx, ev *model.UsageEvent, matches []*model.UsageEvent) (*model.UsageEvent, bool, error) {
+	winner := matches[0]
+	earliestImportedAt := winner.ImportedAtMs
+	latestUpdatedAt := ev.UpdatedAtMs
+	if winner.UpdatedAtMs > latestUpdatedAt {
+		latestUpdatedAt = winner.UpdatedAtMs
+	}
+	for _, match := range matches[1:] {
+		if match.ImportedAtMs < earliestImportedAt {
+			earliestImportedAt = match.ImportedAtMs
+		}
+		if match.UpdatedAtMs > latestUpdatedAt {
+			latestUpdatedAt = match.UpdatedAtMs
+		}
+		if isMoreComplete(match, winner) {
+			winner = match
+		}
+	}
+	ev.UpdatedAtMs = latestUpdatedAt
+
+	for _, match := range matches {
+		if match.EventID == winner.EventID {
+			continue
+		}
+		if err := deleteEventByID(tx, match.EventID); err != nil {
+			return nil, false, err
+		}
+	}
+
+	reconciled := len(matches) > 1 || winner.EventID != ev.EventID
+	if winner.EventID != ev.EventID {
+		migrated := *ev
+		migrated.ImportedAtMs = earliestImportedAt
+		preserveExistingClassification(&migrated, winner)
+		preserveExistingUsageMetadata(&migrated, winner)
+		if err := updateEventIdentityAndMetadataByID(tx, winner.EventID, &migrated); err != nil {
+			return nil, false, err
+		}
+	} else if reconciled {
+		if err := updateEventReconciliationTimestamps(tx, winner.EventID, earliestImportedAt, latestUpdatedAt); err != nil {
+			return nil, false, err
+		}
+	}
+
+	stored, err := selectEventForComparison(tx, ev.EventID)
+	if err != nil {
+		return nil, false, err
+	}
+	return stored, reconciled, nil
 }
 
 type eventComparisonScanner interface {
@@ -179,6 +255,11 @@ func scanEventForComparison(row eventComparisonScanner) (*model.UsageEvent, erro
 		&ev.Provider,
 		&ev.ModelRaw,
 		&ev.ModelNormalized,
+		&ev.InputTokens,
+		&ev.OutputTokens,
+		&ev.ReasoningTokens,
+		&ev.CacheCreationTokens,
+		&ev.CacheReadTokens,
 		&ev.TotalTokens,
 		&requestStarted,
 		&firstToken,
@@ -189,6 +270,7 @@ func scanEventForComparison(row eventComparisonScanner) (*model.UsageEvent, erro
 		&outputTPS,
 		&recordedCost,
 		&ev.ImportedAtMs,
+		&ev.UpdatedAtMs,
 		&sourceAgent,
 		&sourceProduct,
 		&observabilityLevel,
@@ -346,6 +428,21 @@ func updateEventMetadata(tx *sql.Tx, ev *model.UsageEvent) error {
 	return err
 }
 
+func deleteEventByID(tx *sql.Tx, eventID string) error {
+	_, err := tx.Exec(`DELETE FROM usage_events WHERE event_id = ?`, eventID)
+	return err
+}
+
+func updateEventReconciliationTimestamps(tx *sql.Tx, eventID string, importedAtMs, updatedAtMs int64) error {
+	_, err := tx.Exec(`
+        UPDATE usage_events
+        SET imported_at_ms = ?,
+            updated_at_ms = CASE WHEN updated_at_ms < ? THEN ? ELSE updated_at_ms END
+        WHERE event_id = ?
+    `, importedAtMs, updatedAtMs, updatedAtMs, eventID)
+	return err
+}
+
 func updateEventIdentityAndMetadataByID(tx *sql.Tx, existingEventID string, ev *model.UsageEvent) error {
 	_, err := tx.Exec(`
         UPDATE usage_events SET
@@ -367,6 +464,7 @@ func updateEventIdentityAndMetadataByID(tx *sql.Tx, existingEventID string, ev *
             session_path_id = ?,
             turn_id = ?,
             project_path = ?,
+            imported_at_ms = ?,
             updated_at_ms = ?
         WHERE event_id = ?
     `,
@@ -388,6 +486,7 @@ func updateEventIdentityAndMetadataByID(tx *sql.Tx, existingEventID string, ev *
 		nullIfEmpty(ev.SessionPathID),
 		nullIfEmpty(ev.TurnID),
 		nullIfEmpty(ev.ProjectPath),
+		ev.ImportedAtMs,
 		ev.UpdatedAtMs,
 		existingEventID,
 	)
@@ -623,21 +722,23 @@ func mergeMissingMetadata(target, candidate *model.UsageEvent) bool {
 		target.ModelIsFallback = true
 		changed = true
 	}
-	if target.SourceTotalTokens == nil && candidate.SourceTotalTokens != nil {
-		target.SourceTotalTokens = candidate.SourceTotalTokens
-		changed = true
-	}
-	if target.RawInputTokens == nil && candidate.RawInputTokens != nil {
-		target.RawInputTokens = candidate.RawInputTokens
-		changed = true
-	}
-	if target.TokenAccountingMethod == "" && candidate.TokenAccountingMethod != "" {
-		target.TokenAccountingMethod = candidate.TokenAccountingMethod
-		changed = true
-	}
-	if target.AccountingProfile == "" && candidate.AccountingProfile != "" {
-		target.AccountingProfile = candidate.AccountingProfile
-		changed = true
+	if sameTokenUsage(target, candidate) {
+		if target.SourceTotalTokens == nil && candidate.SourceTotalTokens != nil {
+			target.SourceTotalTokens = candidate.SourceTotalTokens
+			changed = true
+		}
+		if target.RawInputTokens == nil && candidate.RawInputTokens != nil {
+			target.RawInputTokens = candidate.RawInputTokens
+			changed = true
+		}
+		if target.TokenAccountingMethod == "" && candidate.TokenAccountingMethod != "" {
+			target.TokenAccountingMethod = candidate.TokenAccountingMethod
+			changed = true
+		}
+		if target.AccountingProfile == "" && candidate.AccountingProfile != "" {
+			target.AccountingProfile = candidate.AccountingProfile
+			changed = true
+		}
 	}
 	if target.SessionPathID == "" && candidate.SessionPathID != "" {
 		target.SessionPathID = candidate.SessionPathID
@@ -660,7 +761,16 @@ func mergeMissingMetadata(target, candidate *model.UsageEvent) bool {
 	return changed
 }
 
-func preserveExistingMetadata(target, existing *model.UsageEvent) {
+func sameTokenUsage(left, right *model.UsageEvent) bool {
+	return left.InputTokens == right.InputTokens &&
+		left.OutputTokens == right.OutputTokens &&
+		left.ReasoningTokens == right.ReasoningTokens &&
+		left.CacheCreationTokens == right.CacheCreationTokens &&
+		left.CacheReadTokens == right.CacheReadTokens &&
+		left.TotalTokens == right.TotalTokens
+}
+
+func preserveExistingSourceMetadata(target, existing *model.UsageEvent) {
 	if existing.SourceAgent != "" {
 		target.SourceAgent = existing.SourceAgent
 	}
@@ -672,18 +782,6 @@ func preserveExistingMetadata(target, existing *model.UsageEvent) {
 	} else if target.ObservabilityLevel == "" {
 		target.ObservabilityLevel = existing.ObservabilityLevel
 	}
-	if existing.SourceTotalTokens != nil {
-		target.SourceTotalTokens = existing.SourceTotalTokens
-	}
-	if existing.RawInputTokens != nil {
-		target.RawInputTokens = existing.RawInputTokens
-	}
-	if existing.TokenAccountingMethod != "" {
-		target.TokenAccountingMethod = existing.TokenAccountingMethod
-	}
-	if existing.AccountingProfile != "" {
-		target.AccountingProfile = existing.AccountingProfile
-	}
 	if existing.SessionPathID != "" {
 		target.SessionPathID = existing.SessionPathID
 	}
@@ -693,7 +791,14 @@ func preserveExistingMetadata(target, existing *model.UsageEvent) {
 	if existing.ProjectPath != "" && !shouldUpgradeProjectPath(existing.ProjectPath, target.ProjectPath) {
 		target.ProjectPath = existing.ProjectPath
 	}
-	target.ModelIsFallback = target.ModelIsFallback || existing.ModelIsFallback
+}
+
+func preserveExistingUsageMetadata(target, existing *model.UsageEvent) {
+	preserveExistingSourceMetadata(target, existing)
+	target.SourceTotalTokens = existing.SourceTotalTokens
+	target.RawInputTokens = existing.RawInputTokens
+	target.TokenAccountingMethod = existing.TokenAccountingMethod
+	target.AccountingProfile = existing.AccountingProfile
 }
 
 func preserveExistingClassification(target, existing *model.UsageEvent) {

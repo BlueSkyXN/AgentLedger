@@ -151,7 +151,7 @@ output_tps = output_tokens / (output_duration_ms / 1000.0)
 
 ## Upsert 完整度规则
 
-`import` 不再使用 `INSERT OR IGNORE`。重复事件会按完整度决定是否覆盖旧记录；如果 parser 或 fingerprint 规则修正导致 `event_id` 改变，但 `source_file + line_number + raw_sha256` 仍指向同一原始 JSONL 行，upsert 会更新旧行而不是插入重复事件。来源行兼容更新只有在新记录更完整时才覆盖 token、timing、cost 等用量字段；否则只迁移 `event_id` / provider / model / metadata，保留旧行已有用量。
+`import` 不再使用 `INSERT OR IGNORE`。重复事件会按完整度决定是否覆盖旧记录；对于 Codex，如果 parser 或 fingerprint 规则修正导致 `event_id` 改变，但 `source_file + line_number + raw_sha256` 仍指向同一原始 JSONL 行，upsert 会把已存在的同来源行收敛为一条 corrected `event_id` 记录。来源行兼容更新只有在新记录更完整时才覆盖 token、timing、cost 等用量字段，并让 token accounting metadata 跟随同一个用量 winner；否则只迁移 identity / provider / model / metadata，保留旧行已有用量和对应 accounting metadata。只有两条记录的 token 分项完全一致时，才会用重复记录补齐 winner 缺失的 accounting metadata。其他 adapter 的单行日志可能拆出多个合法事件，因此不使用这一 Codex 专用兼容身份。
 
 优先级：
 
@@ -178,13 +178,14 @@ output_tps = output_tokens / (output_duration_ms / 1000.0)
 | `idx_usage_events_total_duration` | `total_duration_ms` |
 | `idx_usage_events_channel_time` | `channel, timestamp_ms` |
 | `idx_usage_events_model_time` | `model_normalized, timestamp_ms` |
+| `idx_usage_source_identity` | `source_file, line_number, raw_sha256, channel, imported_at_ms, event_id` |
 
 ## 命令读写矩阵
 
 | Command | 写入表 | 读取表 | 说明 |
 |---|---|---|---|
 | `init` | `meta` | config | 初始化 v2 schema；`--reset` 删除本地 DB/WAL/SHM 后重建。 |
-| `import` | `import_runs`、`usage_events` | configured source paths | 遍历启用 adapter，解析 usage record，按 fingerprint upsert；同一来源行可用于兼容更新旧 fingerprint。 |
+| `import` | `import_runs`、`usage_events` | configured source paths | 遍历启用 adapter，解析 usage record，按 fingerprint upsert；Codex 同一来源行可用于兼容更新旧 fingerprint。 |
 | `export` | 无 | 当前 SQLite 数据库文件 | 直接复制数据库文件。 |
 | `merge` | `usage_events` | incoming `.aldb` 的 `usage_events` | 只接受 schema v2，插入未见事件。 |
 | `status` | 无 | `meta`、`usage_events`、`import_runs` | 输出 v2 统计。 |

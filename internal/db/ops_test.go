@@ -169,6 +169,10 @@ func TestUpsertEventSourceIdentityMigrationPreservesMoreCompleteUsage(t *testing
 	corrected.InputTokens = 15
 	corrected.OutputTokens = 5
 	corrected.TotalTokens = 20
+	corrected.SourceTotalTokens = int64PtrForTest(20)
+	corrected.RawInputTokens = int64PtrForTest(15)
+	corrected.TokenAccountingMethod = model.AccCodexTotalDelta
+	corrected.AccountingProfile = "ccusage_compatible"
 	corrected.TTFTMs = nil
 	corrected.UpdatedAtMs = 2
 	status, err := database.UpsertEvent(&corrected)
@@ -178,11 +182,222 @@ func TestUpsertEventSourceIdentityMigrationPreservesMoreCompleteUsage(t *testing
 
 	var eventID, provider, modelName string
 	var total, storedTTFT int64
-	if err := database.Conn().QueryRow(`SELECT event_id, provider, model_normalized, total_tokens, ttft_ms FROM usage_events`).Scan(&eventID, &provider, &modelName, &total, &storedTTFT); err != nil {
+	var storedSourceTotal, storedRawInput sql.NullInt64
+	var accounting, profile sql.NullString
+	if err := database.Conn().QueryRow(`
+        SELECT event_id, provider, model_normalized, total_tokens, ttft_ms,
+            source_total_tokens, raw_input_tokens, token_accounting_method,
+            accounting_profile
+        FROM usage_events
+    `).Scan(&eventID, &provider, &modelName, &total, &storedTTFT, &storedSourceTotal, &storedRawInput, &accounting, &profile); err != nil {
 		t.Fatalf("select migrated event: %v", err)
 	}
-	if eventID != corrected.EventID || provider != "openai" || modelName != "gpt-5-codex" || total != 50 || storedTTFT != ttft {
-		t.Fatalf("unexpected migrated event id=%s provider=%s model=%s total=%d ttft=%d", eventID, provider, modelName, total, storedTTFT)
+	if eventID != corrected.EventID || provider != "openai" || modelName != "gpt-5-codex" || total != 50 || storedTTFT != ttft || storedSourceTotal.Valid || storedRawInput.Valid || accounting.Valid || profile.Valid {
+		t.Fatalf("unexpected migrated event id=%s provider=%s model=%s total=%d ttft=%d source_total=%v raw_input=%v accounting=%v profile=%v", eventID, provider, modelName, total, storedTTFT, storedSourceTotal, storedRawInput, accounting, profile)
+	}
+}
+
+func TestUpsertEventReconcilesPreexistingSourceIdentityDuplicates(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer database.Close()
+
+	ttft := int64(300)
+	sourceTotal := int64(50)
+	rawInput := int64(40)
+	legacy := &model.UsageEvent{
+		EventID:               "legacy-provider-event",
+		DedupeKey:             "legacy-provider-event",
+		DedupeStrategy:        "session_token",
+		Channel:               "codex",
+		SourceAgent:           "codex",
+		SourceProduct:         "codex-cli",
+		Provider:              "legacy-provider",
+		ModelRaw:              "gpt-5",
+		ModelNormalized:       "gpt-5",
+		ModelIsFallback:       true,
+		SourceTotalTokens:     &sourceTotal,
+		RawInputTokens:        &rawInput,
+		TokenAccountingMethod: model.AccCodexLastTokenUsage,
+		AccountingProfile:     "ledger",
+		TimestampMs:           1,
+		SessionID:             "session-a",
+		SourceFile:            "/synthetic/session-a.jsonl",
+		LineNumber:            9,
+		RawSHA256:             "raw-hash-collision",
+		InputTokens:           40,
+		OutputTokens:          10,
+		TotalTokens:           50,
+		TTFTMs:                &ttft,
+		ImportedAtMs:          1,
+		UpdatedAtMs:           1,
+	}
+	if err := insertEvent(database.Conn(), legacy); err != nil {
+		t.Fatalf("insert legacy duplicate: %v", err)
+	}
+
+	shadowSourceTotal := int64(30)
+	shadowRawInput := int64(25)
+	shadow := *legacy
+	shadow.EventID = "shadow-provider-event"
+	shadow.DedupeKey = shadow.EventID
+	shadow.SourceTotalTokens = &shadowSourceTotal
+	shadow.RawInputTokens = &shadowRawInput
+	shadow.InputTokens = 25
+	shadow.OutputTokens = 5
+	shadow.TotalTokens = 30
+	shadow.TTFTMs = nil
+	shadow.ImportedAtMs = 2
+	shadow.UpdatedAtMs = 5
+	if err := insertEvent(database.Conn(), &shadow); err != nil {
+		t.Fatalf("insert shadow duplicate: %v", err)
+	}
+
+	correctedSourceTotal := int64(20)
+	correctedRawInput := int64(15)
+	corrected := *legacy
+	corrected.EventID = "corrected-provider-event"
+	corrected.DedupeKey = corrected.EventID
+	corrected.Provider = "openai"
+	corrected.ModelRaw = "gpt-5-codex"
+	corrected.ModelNormalized = "gpt-5-codex"
+	corrected.ModelIsFallback = false
+	corrected.SourceTotalTokens = &correctedSourceTotal
+	corrected.RawInputTokens = &correctedRawInput
+	corrected.TokenAccountingMethod = model.AccCodexTotalDelta
+	corrected.InputTokens = 15
+	corrected.OutputTokens = 5
+	corrected.TotalTokens = 20
+	corrected.TTFTMs = nil
+	corrected.ImportedAtMs = 3
+	corrected.UpdatedAtMs = 3
+	if err := insertEvent(database.Conn(), &corrected); err != nil {
+		t.Fatalf("insert corrected duplicate: %v", err)
+	}
+
+	candidate := corrected
+	candidate.UpdatedAtMs = 4
+	status, err := database.UpsertEvent(&candidate)
+	if err != nil {
+		t.Fatalf("reconcile duplicate: %v", err)
+	}
+
+	var count int
+	if err := database.Conn().QueryRow(`
+        SELECT COUNT(*)
+        FROM usage_events
+        WHERE source_file = ? AND line_number = ? AND raw_sha256 = ?
+    `, candidate.SourceFile, candidate.LineNumber, candidate.RawSHA256).Scan(&count); err != nil {
+		t.Fatalf("count source duplicates: %v", err)
+	}
+	if status != "updated" || count != 1 {
+		t.Fatalf("expected source duplicate convergence, status=%s rows=%d", status, count)
+	}
+
+	var eventID, provider, modelName, accounting, profile string
+	var fallback int
+	var total, storedTTFT, importedAt, updatedAt, storedSourceTotal, storedRawInput int64
+	if err := database.Conn().QueryRow(`
+        SELECT event_id, provider, model_normalized, model_is_fallback,
+            total_tokens, ttft_ms, imported_at_ms, updated_at_ms,
+            source_total_tokens, raw_input_tokens, token_accounting_method,
+            accounting_profile
+        FROM usage_events
+        WHERE source_file = ? AND line_number = ? AND raw_sha256 = ?
+    `, candidate.SourceFile, candidate.LineNumber, candidate.RawSHA256).Scan(
+		&eventID,
+		&provider,
+		&modelName,
+		&fallback,
+		&total,
+		&storedTTFT,
+		&importedAt,
+		&updatedAt,
+		&storedSourceTotal,
+		&storedRawInput,
+		&accounting,
+		&profile,
+	); err != nil {
+		t.Fatalf("select reconciled event: %v", err)
+	}
+	if eventID != corrected.EventID || provider != "openai" || modelName != "gpt-5-codex" || fallback != 0 || total != 50 || storedTTFT != ttft || importedAt != 1 || updatedAt != 5 || storedSourceTotal != sourceTotal || storedRawInput != rawInput || accounting != model.AccCodexLastTokenUsage || profile != "ledger" {
+		t.Fatalf("unexpected reconciled event id=%s provider=%s model=%s fallback=%d total=%d ttft=%d imported=%d updated=%d source_total=%d raw_input=%d accounting=%s profile=%s", eventID, provider, modelName, fallback, total, storedTTFT, importedAt, updatedAt, storedSourceTotal, storedRawInput, accounting, profile)
+	}
+
+	status, err = database.UpsertEvent(&candidate)
+	if err != nil || status != "skipped" {
+		t.Fatalf("second reconciliation should be idempotent, status=%s err=%v", status, err)
+	}
+}
+
+func TestUpsertEventDoesNotUseAmbiguousSourceIdentityOutsideCodex(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer database.Close()
+
+	base := &model.UsageEvent{
+		EventID:         "copilot-row-a",
+		DedupeKey:       "copilot-row-a",
+		DedupeStrategy:  "message_id",
+		Channel:         "copilot",
+		SourceAgent:     "copilot",
+		SourceProduct:   "copilot-otel",
+		Provider:        "github",
+		ModelRaw:        "gpt-4.1",
+		ModelNormalized: "gpt-4.1",
+		TimestampMs:     1,
+		SourceFile:      "/synthetic/copilot.jsonl",
+		LineNumber:      5,
+		RawSHA256:       "shared-outer-envelope",
+		InputTokens:     8,
+		OutputTokens:    2,
+		TotalTokens:     10,
+		ImportedAtMs:    1,
+		UpdatedAtMs:     1,
+	}
+	if err := insertEvent(database.Conn(), base); err != nil {
+		t.Fatalf("insert first Copilot event: %v", err)
+	}
+
+	second := *base
+	second.EventID = "copilot-row-b"
+	second.DedupeKey = second.EventID
+	second.InputTokens = 16
+	second.OutputTokens = 4
+	second.TotalTokens = 20
+	second.ImportedAtMs = 2
+	second.UpdatedAtMs = 2
+	if err := insertEvent(database.Conn(), &second); err != nil {
+		t.Fatalf("insert second Copilot event: %v", err)
+	}
+
+	candidate := *base
+	candidate.EventID = "copilot-row-c"
+	candidate.DedupeKey = candidate.EventID
+	candidate.InputTokens = 24
+	candidate.OutputTokens = 6
+	candidate.TotalTokens = 30
+	candidate.ImportedAtMs = 3
+	candidate.UpdatedAtMs = 3
+	status, err := database.UpsertEvent(&candidate)
+	if err != nil {
+		t.Fatalf("upsert Copilot event: %v", err)
+	}
+
+	var count int
+	if err := database.Conn().QueryRow(`
+        SELECT COUNT(*)
+        FROM usage_events
+        WHERE source_file = ? AND line_number = ? AND raw_sha256 = ?
+    `, candidate.SourceFile, candidate.LineNumber, candidate.RawSHA256).Scan(&count); err != nil {
+		t.Fatalf("count Copilot events: %v", err)
+	}
+	if status != "inserted" || count != 3 {
+		t.Fatalf("non-Codex source identity must remain ambiguous, status=%s rows=%d", status, count)
 	}
 }
 
@@ -420,6 +635,66 @@ func TestUpsertFillsSourceMetadataOnce(t *testing.T) {
 	}
 }
 
+func TestLessCompleteReplacementDoesNotFillAccountingFromDifferentUsage(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer database.Close()
+
+	ttft := int64(100)
+	base := &model.UsageEvent{
+		EventID:         "event-accounting-winner",
+		DedupeKey:       "event-accounting-winner",
+		DedupeStrategy:  "session_token",
+		Channel:         "codex",
+		SourceAgent:     "codex",
+		SourceProduct:   "codex-cli",
+		Provider:        "openai",
+		ModelRaw:        "gpt-5-codex",
+		ModelNormalized: "gpt-5-codex",
+		TimestampMs:     1,
+		InputTokens:     40,
+		OutputTokens:    10,
+		TotalTokens:     50,
+		TTFTMs:          &ttft,
+		ImportedAtMs:    1,
+		UpdatedAtMs:     1,
+	}
+	if status, err := database.UpsertEvent(base); err != nil || status != "inserted" {
+		t.Fatalf("insert base status=%s err=%v", status, err)
+	}
+
+	candidate := *base
+	candidate.InputTokens = 15
+	candidate.OutputTokens = 5
+	candidate.TotalTokens = 20
+	candidate.TTFTMs = nil
+	candidate.SourceTotalTokens = int64PtrForTest(20)
+	candidate.RawInputTokens = int64PtrForTest(15)
+	candidate.TokenAccountingMethod = model.AccCodexTotalDelta
+	candidate.AccountingProfile = "ccusage_compatible"
+	candidate.UpdatedAtMs = 2
+	status, err := database.UpsertEvent(&candidate)
+	if err != nil || status != "skipped" {
+		t.Fatalf("less complete candidate status=%s err=%v", status, err)
+	}
+
+	var sourceTotal, rawInput sql.NullInt64
+	var accounting, profile sql.NullString
+	if err := database.Conn().QueryRow(`
+        SELECT source_total_tokens, raw_input_tokens,
+            token_accounting_method, accounting_profile
+        FROM usage_events
+        WHERE event_id = ?
+    `, base.EventID).Scan(&sourceTotal, &rawInput, &accounting, &profile); err != nil {
+		t.Fatalf("select accounting metadata: %v", err)
+	}
+	if sourceTotal.Valid || rawInput.Valid || accounting.Valid || profile.Valid {
+		t.Fatalf("different usage leaked candidate accounting metadata source_total=%v raw_input=%v accounting=%v profile=%v", sourceTotal, rawInput, accounting, profile)
+	}
+}
+
 func TestUpsertCorrectsOpenCoworkSourceProductToClaudeCode(t *testing.T) {
 	database, err := Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
 	if err != nil {
@@ -509,56 +784,103 @@ func TestUpsertUpgradesProjectPathToMoreSpecificPath(t *testing.T) {
 	}
 }
 
-func TestMoreCompleteReplacementPreservesExistingSourceMetadata(t *testing.T) {
-	database, err := Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	defer database.Close()
+func TestMoreCompleteReplacementKeepsCandidateUsageMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		changeEventID bool
+	}{
+		{name: "same event id"},
+		{name: "changed event id", changeEventID: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			database, err := Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
+			if err != nil {
+				t.Fatalf("open: %v", err)
+			}
+			defer database.Close()
 
-	sourceTotal := int64(15)
-	base := &model.UsageEvent{
-		EventID:               "event-replace-meta",
-		DedupeKey:             "event-replace-meta",
-		DedupeStrategy:        "message_id",
-		Channel:               "copilot",
-		SourceAgent:           "copilot",
-		SourceProduct:         "copilot-otel",
-		ObservabilityLevel:    "full",
-		SourceTotalTokens:     &sourceTotal,
-		TokenAccountingMethod: model.AccCopilotOtelParts,
-		Provider:              "github",
-		TimestampMs:           1,
-		InputTokens:           10,
-		OutputTokens:          5,
-		TotalTokens:           15,
-		ImportedAtMs:          1,
-		UpdatedAtMs:           1,
-	}
-	if status, err := database.UpsertEvent(base); err != nil || status != "inserted" {
-		t.Fatalf("insert base status=%s err=%v", status, err)
-	}
+			sourceTotal := int64(15)
+			rawInput := int64(10)
+			base := &model.UsageEvent{
+				EventID:               "event-replace-meta",
+				DedupeKey:             "event-replace-meta",
+				DedupeStrategy:        "session_token",
+				Channel:               "codex",
+				SourceAgent:           "codex",
+				SourceProduct:         "codex-cli",
+				ObservabilityLevel:    "full",
+				ModelRaw:              "fallback-model",
+				ModelNormalized:       "fallback-model",
+				ModelIsFallback:       true,
+				SourceTotalTokens:     &sourceTotal,
+				RawInputTokens:        &rawInput,
+				TokenAccountingMethod: model.AccCodexLastTokenUsage,
+				AccountingProfile:     "ledger",
+				Provider:              "openai",
+				TimestampMs:           1,
+				SourceFile:            "/synthetic/codex.jsonl",
+				LineNumber:            4,
+				RawSHA256:             "raw-hash-metadata",
+				InputTokens:           10,
+				OutputTokens:          5,
+				TotalTokens:           15,
+				ImportedAtMs:          1,
+				UpdatedAtMs:           1,
+			}
+			if status, err := database.UpsertEvent(base); err != nil || status != "inserted" {
+				t.Fatalf("insert base status=%s err=%v", status, err)
+			}
 
-	ttft := int64(100)
-	candidate := *base
-	candidate.SourceProduct = "wrong"
-	candidate.ObservabilityLevel = "inferred"
-	candidate.SourceTotalTokens = int64PtrForTest(99)
-	candidate.TokenAccountingMethod = model.AccCopilotOtelTotalFallback
-	candidate.TotalTokens = 20
-	candidate.TTFTMs = &ttft
-	candidate.UpdatedAtMs = 2
-	if status, err := database.UpsertEvent(&candidate); err != nil || status != "updated" {
-		t.Fatalf("replace candidate status=%s err=%v", status, err)
-	}
+			ttft := int64(100)
+			candidateSourceTotal := int64(20)
+			candidateRawInput := int64(15)
+			candidate := *base
+			if tc.changeEventID {
+				candidate.EventID = "corrected-event-replace-meta"
+				candidate.DedupeKey = candidate.EventID
+			}
+			candidate.SourceProduct = "candidate-product"
+			candidate.ObservabilityLevel = "inferred"
+			candidate.ModelRaw = "gpt-4.1"
+			candidate.ModelNormalized = "gpt-4.1"
+			candidate.ModelIsFallback = false
+			candidate.SourceTotalTokens = &candidateSourceTotal
+			candidate.RawInputTokens = &candidateRawInput
+			candidate.TokenAccountingMethod = model.AccCodexTotalDelta
+			candidate.AccountingProfile = "ccusage_compatible"
+			candidate.InputTokens = 15
+			candidate.TotalTokens = 20
+			candidate.TTFTMs = &ttft
+			candidate.UpdatedAtMs = 2
+			if status, err := database.UpsertEvent(&candidate); err != nil || status != "updated" {
+				t.Fatalf("replace candidate status=%s err=%v", status, err)
+			}
 
-	var sourceProduct, observability, accounting string
-	var storedSourceTotal, total int64
-	if err := database.Conn().QueryRow(`SELECT source_product, observability_level, source_total_tokens, token_accounting_method, total_tokens FROM usage_events WHERE event_id='event-replace-meta'`).Scan(&sourceProduct, &observability, &storedSourceTotal, &accounting, &total); err != nil {
-		t.Fatalf("select replacement: %v", err)
-	}
-	if sourceProduct != "copilot-otel" || observability != "full" || storedSourceTotal != 15 || accounting != model.AccCopilotOtelParts || total != 20 {
-		t.Fatalf("replacement metadata/total mismatch product=%s obs=%s source_total=%d accounting=%s total=%d", sourceProduct, observability, storedSourceTotal, accounting, total)
+			var sourceProduct, observability, accounting, profile string
+			var fallback int
+			var storedSourceTotal, storedRawInput, total int64
+			if err := database.Conn().QueryRow(`
+                    SELECT source_product, observability_level, model_is_fallback,
+                        source_total_tokens, raw_input_tokens,
+                        token_accounting_method, accounting_profile, total_tokens
+                    FROM usage_events
+                    WHERE event_id = ?
+                `, candidate.EventID).Scan(
+				&sourceProduct,
+				&observability,
+				&fallback,
+				&storedSourceTotal,
+				&storedRawInput,
+				&accounting,
+				&profile,
+				&total,
+			); err != nil {
+				t.Fatalf("select replacement: %v", err)
+			}
+			if sourceProduct != "codex-cli" || observability != "full" || fallback != 0 || storedSourceTotal != candidateSourceTotal || storedRawInput != candidateRawInput || accounting != model.AccCodexTotalDelta || profile != "ccusage_compatible" || total != 20 {
+				t.Fatalf("replacement metadata/total mismatch product=%s obs=%s fallback=%d source_total=%d raw_input=%d accounting=%s profile=%s total=%d", sourceProduct, observability, fallback, storedSourceTotal, storedRawInput, accounting, profile, total)
+			}
+		})
 	}
 }
 
