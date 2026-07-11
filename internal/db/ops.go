@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 
+	"github.com/BlueSkyXN/AgentLedger/internal/fingerprint"
 	"github.com/BlueSkyXN/AgentLedger/internal/model"
 )
 
@@ -77,12 +79,16 @@ func (d *Database) UpsertEvent(ev *model.UsageEvent) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	sourceReconciled := false
-	if len(sourceMatches) > 0 && (!exactMatch || (len(sourceMatches) > 1 && containsEventID(sourceMatches, ev.EventID))) {
-		existing, sourceReconciled, err = reconcileSourceIdentityMatches(tx, ev, sourceMatches)
+	if hasDifferentEventID(sourceMatches, ev.EventID) {
+		var status string
+		status, err = reconcileSourceIdentityMatches(tx, ev, existing, sourceMatches)
 		if err != nil {
 			return "", err
 		}
+		if err = tx.Commit(); err != nil {
+			return "", err
+		}
+		return status, nil
 	}
 
 	if existing == nil {
@@ -108,9 +114,6 @@ func (d *Database) UpsertEvent(ev *model.UsageEvent) (string, error) {
 		if err = tx.Commit(); err != nil {
 			return "", err
 		}
-		if sourceReconciled {
-			return "updated", nil
-		}
 		return "skipped", nil
 	}
 
@@ -125,19 +128,20 @@ func (d *Database) UpsertEvent(ev *model.UsageEvent) (string, error) {
 	return "updated", nil
 }
 
+const eventComparisonColumns = `
+    event_id, dedupe_key, dedupe_strategy,
+    channel, COALESCE(provider, ''), COALESCE(model_raw, ''), COALESCE(model_normalized, ''),
+    COALESCE(source_agent, ''), COALESCE(source_product, ''), COALESCE(observability_level, ''), model_is_fallback,
+    source_total_tokens, raw_input_tokens, COALESCE(token_accounting_method, ''), COALESCE(accounting_profile, ''),
+    timestamp_ms, COALESCE(session_id, ''), COALESCE(session_path_id, ''), COALESCE(turn_id, ''), COALESCE(project_path, ''),
+	COALESCE(message_id, ''), COALESCE(request_id, ''), COALESCE(source_file, ''), COALESCE(line_number, 0), COALESCE(raw_sha256, ''),
+	input_tokens, output_tokens, reasoning_tokens, cache_creation_tokens, cache_read_tokens, total_tokens,
+	request_started_at_ms, first_token_at_ms, completed_at_ms, total_duration_ms, ttft_ms, output_duration_ms, output_tps,
+	recorded_cost_usd, imported_at_ms, updated_at_ms
+`
+
 func selectEventForComparison(tx *sql.Tx, eventID string) (*model.UsageEvent, error) {
-	row := tx.QueryRow(`
-        SELECT event_id, channel, provider, model_raw, model_normalized,
-            input_tokens, output_tokens, reasoning_tokens,
-            cache_creation_tokens, cache_read_tokens, total_tokens,
-            request_started_at_ms, first_token_at_ms, completed_at_ms,
-            total_duration_ms, ttft_ms, output_duration_ms, output_tps,
-            recorded_cost_usd, imported_at_ms, updated_at_ms,
-            source_agent, source_product, observability_level, model_is_fallback,
-            source_total_tokens, raw_input_tokens, token_accounting_method,
-            accounting_profile, session_path_id, turn_id, project_path
-        FROM usage_events WHERE event_id = ?
-    `, eventID)
+	row := tx.QueryRow(`SELECT `+eventComparisonColumns+` FROM usage_events WHERE event_id = ?`, eventID)
 	return scanEventForComparison(row)
 }
 
@@ -145,20 +149,11 @@ func selectEventsForComparisonBySourceIdentity(tx *sql.Tx, ev *model.UsageEvent)
 	if ev.Channel != "codex" || strings.TrimSpace(ev.SourceFile) == "" || ev.LineNumber <= 0 || strings.TrimSpace(ev.RawSHA256) == "" {
 		return nil, nil
 	}
-	rows, err := tx.Query(`
-        SELECT event_id, channel, provider, model_raw, model_normalized,
-            input_tokens, output_tokens, reasoning_tokens,
-            cache_creation_tokens, cache_read_tokens, total_tokens,
-            request_started_at_ms, first_token_at_ms, completed_at_ms,
-            total_duration_ms, ttft_ms, output_duration_ms, output_tps,
-            recorded_cost_usd, imported_at_ms, updated_at_ms,
-            source_agent, source_product, observability_level, model_is_fallback,
-            source_total_tokens, raw_input_tokens, token_accounting_method,
-            accounting_profile, session_path_id, turn_id, project_path
-        FROM usage_events
-        WHERE source_file = ? AND line_number = ? AND raw_sha256 = ? AND channel = ?
-        ORDER BY imported_at_ms ASC, event_id ASC
-    `, ev.SourceFile, ev.LineNumber, ev.RawSHA256, ev.Channel)
+	rows, err := tx.Query(`SELECT `+eventComparisonColumns+`
+		FROM usage_events
+		WHERE source_file = ? AND line_number = ? AND raw_sha256 = ? AND channel = ?
+		ORDER BY imported_at_ms ASC, event_id ASC
+	`, ev.SourceFile, ev.LineNumber, ev.RawSHA256, ev.Channel)
 	if err != nil {
 		return nil, err
 	}
@@ -178,6 +173,60 @@ func selectEventsForComparisonBySourceIdentity(tx *sql.Tx, ev *model.UsageEvent)
 	return matches, nil
 }
 
+func hasDifferentEventID(events []*model.UsageEvent, eventID string) bool {
+	for _, event := range events {
+		if event.EventID != eventID {
+			return true
+		}
+	}
+	return false
+}
+
+func reconcileSourceIdentityMatches(tx *sql.Tx, incoming, exact *model.UsageEvent, sourceMatches []*model.UsageEvent) (string, error) {
+	var stored []*model.UsageEvent
+	for _, match := range sourceMatches {
+		stored = appendUniqueEvent(stored, match)
+	}
+	stored = appendUniqueEvent(stored, exact)
+
+	var canonical *model.UsageEvent
+	for {
+		canonical = buildCanonicalReconciledEvent(incoming, stored)
+		canonicalMatch, err := selectEventForComparison(tx, canonical.EventID)
+		if err == sql.ErrNoRows {
+			break
+		}
+		if err != nil {
+			return "", err
+		}
+		if containsEventID(stored, canonicalMatch.EventID) {
+			break
+		}
+		stored = append(stored, canonicalMatch)
+	}
+
+	if len(stored) == 1 && sameEventContent(canonical, stored[0]) {
+		return "skipped", nil
+	}
+
+	for _, match := range stored {
+		if err := deleteEventByID(tx, match.EventID); err != nil {
+			return "", err
+		}
+	}
+	if err := insertEvent(tx, canonical); err != nil {
+		return "", err
+	}
+	return "updated", nil
+}
+
+func appendUniqueEvent(events []*model.UsageEvent, candidate *model.UsageEvent) []*model.UsageEvent {
+	if candidate == nil || containsEventID(events, candidate.EventID) {
+		return events
+	}
+	return append(events, candidate)
+}
+
 func containsEventID(events []*model.UsageEvent, eventID string) bool {
 	for _, event := range events {
 		if event.EventID == eventID {
@@ -187,55 +236,127 @@ func containsEventID(events []*model.UsageEvent, eventID string) bool {
 	return false
 }
 
-func reconcileSourceIdentityMatches(tx *sql.Tx, ev *model.UsageEvent, matches []*model.UsageEvent) (*model.UsageEvent, bool, error) {
-	winner := matches[0]
-	earliestImportedAt := winner.ImportedAtMs
-	latestUpdatedAt := ev.UpdatedAtMs
-	if winner.UpdatedAtMs > latestUpdatedAt {
-		latestUpdatedAt = winner.UpdatedAtMs
-	}
-	for _, match := range matches[1:] {
-		if match.ImportedAtMs < earliestImportedAt {
-			earliestImportedAt = match.ImportedAtMs
-		}
-		if match.UpdatedAtMs > latestUpdatedAt {
-			latestUpdatedAt = match.UpdatedAtMs
-		}
-		if isMoreComplete(match, winner) {
-			winner = match
+func buildCanonicalReconciledEvent(incoming *model.UsageEvent, stored []*model.UsageEvent) *model.UsageEvent {
+	usageWinner := *incoming
+	for _, candidate := range stored {
+		if isMoreComplete(candidate, &usageWinner) {
+			usageWinner = *candidate
 		}
 	}
-	ev.UpdatedAtMs = latestUpdatedAt
-
-	for _, match := range matches {
-		if match.EventID == winner.EventID {
-			continue
-		}
-		if err := deleteEventByID(tx, match.EventID); err != nil {
-			return nil, false, err
-		}
+	mergeMissingAccountingMetadata(&usageWinner, incoming)
+	for _, candidate := range stored {
+		mergeMissingAccountingMetadata(&usageWinner, candidate)
 	}
 
-	reconciled := len(matches) > 1 || winner.EventID != ev.EventID
-	if winner.EventID != ev.EventID {
-		migrated := *ev
-		migrated.ImportedAtMs = earliestImportedAt
-		preserveExistingClassification(&migrated, winner)
-		preserveExistingUsageMetadata(&migrated, winner)
-		if err := updateEventIdentityAndMetadataByID(tx, winner.EventID, &migrated); err != nil {
-			return nil, false, err
+	canonical := *incoming
+	if len(stored) > 0 {
+		sourceMetadataWinner := stored[0]
+		for _, candidate := range stored[1:] {
+			if isMoreComplete(candidate, sourceMetadataWinner) {
+				sourceMetadataWinner = candidate
+			}
 		}
-	} else if reconciled {
-		if err := updateEventReconciliationTimestamps(tx, winner.EventID, earliestImportedAt, latestUpdatedAt); err != nil {
-			return nil, false, err
+		preserveExistingSourceMetadata(&canonical, sourceMetadataWinner)
+	}
+	applyUsageWinner(&canonical, &usageWinner)
+	for _, candidate := range stored {
+		if canonical.ImportedAtMs <= 0 || (candidate.ImportedAtMs > 0 && candidate.ImportedAtMs < canonical.ImportedAtMs) {
+			canonical.ImportedAtMs = candidate.ImportedAtMs
+		}
+		if candidate.UpdatedAtMs > canonical.UpdatedAtMs {
+			canonical.UpdatedAtMs = candidate.UpdatedAtMs
 		}
 	}
 
-	stored, err := selectEventForComparison(tx, ev.EventID)
-	if err != nil {
-		return nil, false, err
+	eventID, strategy := computeEventFingerprint(&canonical)
+	canonical.EventID = eventID
+	canonical.DedupeKey = eventID
+	canonical.DedupeStrategy = string(strategy)
+	return &canonical
+}
+
+func mergeMissingAccountingMetadata(target, candidate *model.UsageEvent) bool {
+	if !sameTokenUsage(target, candidate) {
+		return false
 	}
-	return stored, reconciled, nil
+	changed := false
+	if target.SourceTotalTokens == nil && candidate.SourceTotalTokens != nil {
+		target.SourceTotalTokens = candidate.SourceTotalTokens
+		changed = true
+	}
+	if target.RawInputTokens == nil && candidate.RawInputTokens != nil {
+		target.RawInputTokens = candidate.RawInputTokens
+		changed = true
+	}
+	if target.TokenAccountingMethod == "" && candidate.TokenAccountingMethod != "" {
+		target.TokenAccountingMethod = candidate.TokenAccountingMethod
+		changed = true
+	}
+	if target.AccountingProfile == "" && candidate.AccountingProfile != "" {
+		target.AccountingProfile = candidate.AccountingProfile
+		changed = true
+	}
+	return changed
+}
+
+func applyUsageWinner(target, winner *model.UsageEvent) {
+	target.InputTokens = winner.InputTokens
+	target.OutputTokens = winner.OutputTokens
+	target.ReasoningTokens = winner.ReasoningTokens
+	target.CacheCreationTokens = winner.CacheCreationTokens
+	target.CacheReadTokens = winner.CacheReadTokens
+	target.TotalTokens = winner.TotalTokens
+	target.RequestStartedAtMs = winner.RequestStartedAtMs
+	target.FirstTokenAtMs = winner.FirstTokenAtMs
+	target.CompletedAtMs = winner.CompletedAtMs
+	target.TotalDurationMs = winner.TotalDurationMs
+	target.TTFTMs = winner.TTFTMs
+	target.OutputDurationMs = winner.OutputDurationMs
+	target.OutputTPS = winner.OutputTPS
+	target.RecordedCostUSD = winner.RecordedCostUSD
+	target.SourceTotalTokens = winner.SourceTotalTokens
+	target.RawInputTokens = winner.RawInputTokens
+	target.TokenAccountingMethod = winner.TokenAccountingMethod
+	target.AccountingProfile = winner.AccountingProfile
+}
+
+func computeEventFingerprint(ev *model.UsageEvent) (string, fingerprint.Strategy) {
+	agent := ev.SourceAgent
+	if agent == "" {
+		agent = ev.Channel
+	}
+	return fingerprint.Compute(&fingerprint.ParsedRecord{
+		Agent:               agent,
+		Provider:            ev.Provider,
+		Model:               ev.ModelRaw,
+		TimestampMs:         ev.TimestampMs,
+		SessionID:           ev.SessionID,
+		MessageID:           ev.MessageID,
+		RequestID:           ev.RequestID,
+		InputTokens:         ev.InputTokens,
+		OutputTokens:        ev.OutputTokens,
+		CacheCreationTokens: ev.CacheCreationTokens,
+		CacheReadTokens:     ev.CacheReadTokens,
+		ReasoningTokens:     ev.ReasoningTokens,
+		TotalTokens:         ev.TotalTokens,
+		SourceTotalTokens:   ev.SourceTotalTokens,
+		RawJSON:             ev.RawUsageJSON,
+		SourceFile:          ev.SourceFile,
+		LineNumber:          ev.LineNumber,
+		RawSHA256:           ev.RawSHA256,
+	})
+}
+
+func sameEventContent(left, right *model.UsageEvent) bool {
+	leftCopy := *left
+	rightCopy := *right
+	leftCopy.ImportedAtMs = 0
+	leftCopy.UpdatedAtMs = 0
+	leftCopy.RawUsageJSON = ""
+	rightCopy.ImportedAtMs = 0
+	rightCopy.UpdatedAtMs = 0
+	rightCopy.RawUsageJSON = ""
+	return reflect.DeepEqual(leftCopy, rightCopy)
 }
 
 type eventComparisonScanner interface {
@@ -247,14 +368,34 @@ func scanEventForComparison(row eventComparisonScanner) (*model.UsageEvent, erro
 	var requestStarted, firstToken, completed, totalDuration, ttft, outputDuration sql.NullInt64
 	var sourceTotal, rawInput sql.NullInt64
 	var outputTPS, recordedCost sql.NullFloat64
-	var sourceAgent, sourceProduct, observabilityLevel, accountingMethod, accountingProfile, sessionPathID, turnID, projectPath sql.NullString
+	var lineNumber int64
 	var modelIsFallback int
 	if err := row.Scan(
 		&ev.EventID,
+		&ev.DedupeKey,
+		&ev.DedupeStrategy,
 		&ev.Channel,
 		&ev.Provider,
 		&ev.ModelRaw,
 		&ev.ModelNormalized,
+		&ev.SourceAgent,
+		&ev.SourceProduct,
+		&ev.ObservabilityLevel,
+		&modelIsFallback,
+		&sourceTotal,
+		&rawInput,
+		&ev.TokenAccountingMethod,
+		&ev.AccountingProfile,
+		&ev.TimestampMs,
+		&ev.SessionID,
+		&ev.SessionPathID,
+		&ev.TurnID,
+		&ev.ProjectPath,
+		&ev.MessageID,
+		&ev.RequestID,
+		&ev.SourceFile,
+		&lineNumber,
+		&ev.RawSHA256,
 		&ev.InputTokens,
 		&ev.OutputTokens,
 		&ev.ReasoningTokens,
@@ -271,17 +412,6 @@ func scanEventForComparison(row eventComparisonScanner) (*model.UsageEvent, erro
 		&recordedCost,
 		&ev.ImportedAtMs,
 		&ev.UpdatedAtMs,
-		&sourceAgent,
-		&sourceProduct,
-		&observabilityLevel,
-		&modelIsFallback,
-		&sourceTotal,
-		&rawInput,
-		&accountingMethod,
-		&accountingProfile,
-		&sessionPathID,
-		&turnID,
-		&projectPath,
 	); err != nil {
 		return nil, err
 	}
@@ -293,17 +423,10 @@ func scanEventForComparison(row eventComparisonScanner) (*model.UsageEvent, erro
 	ev.OutputDurationMs = nullInt64Ptr(outputDuration)
 	ev.OutputTPS = nullFloat64Ptr(outputTPS)
 	ev.RecordedCostUSD = nullFloat64Ptr(recordedCost)
-	ev.SourceAgent = nullStringValue(sourceAgent)
-	ev.SourceProduct = nullStringValue(sourceProduct)
-	ev.ObservabilityLevel = nullStringValue(observabilityLevel)
 	ev.ModelIsFallback = modelIsFallback != 0
 	ev.SourceTotalTokens = nullInt64Ptr(sourceTotal)
 	ev.RawInputTokens = nullInt64Ptr(rawInput)
-	ev.TokenAccountingMethod = nullStringValue(accountingMethod)
-	ev.AccountingProfile = nullStringValue(accountingProfile)
-	ev.SessionPathID = nullStringValue(sessionPathID)
-	ev.TurnID = nullStringValue(turnID)
-	ev.ProjectPath = nullStringValue(projectPath)
+	ev.LineNumber = int(lineNumber)
 	return &ev, nil
 }
 
@@ -430,66 +553,6 @@ func updateEventMetadata(tx *sql.Tx, ev *model.UsageEvent) error {
 
 func deleteEventByID(tx *sql.Tx, eventID string) error {
 	_, err := tx.Exec(`DELETE FROM usage_events WHERE event_id = ?`, eventID)
-	return err
-}
-
-func updateEventReconciliationTimestamps(tx *sql.Tx, eventID string, importedAtMs, updatedAtMs int64) error {
-	_, err := tx.Exec(`
-        UPDATE usage_events
-        SET imported_at_ms = ?,
-            updated_at_ms = CASE WHEN updated_at_ms < ? THEN ? ELSE updated_at_ms END
-        WHERE event_id = ?
-    `, importedAtMs, updatedAtMs, updatedAtMs, eventID)
-	return err
-}
-
-func updateEventIdentityAndMetadataByID(tx *sql.Tx, existingEventID string, ev *model.UsageEvent) error {
-	_, err := tx.Exec(`
-        UPDATE usage_events SET
-            event_id = ?,
-            dedupe_key = ?,
-            dedupe_strategy = ?,
-            channel = ?,
-            provider = ?,
-            model_raw = ?,
-            model_normalized = ?,
-            source_agent = ?,
-            source_product = ?,
-            observability_level = ?,
-            model_is_fallback = ?,
-            source_total_tokens = ?,
-            raw_input_tokens = ?,
-            token_accounting_method = ?,
-            accounting_profile = ?,
-            session_path_id = ?,
-            turn_id = ?,
-            project_path = ?,
-            imported_at_ms = ?,
-            updated_at_ms = ?
-        WHERE event_id = ?
-    `,
-		ev.EventID,
-		ev.DedupeKey,
-		ev.DedupeStrategy,
-		ev.Channel,
-		ev.Provider,
-		nullIfEmpty(ev.ModelRaw),
-		nullIfEmpty(ev.ModelNormalized),
-		nullIfEmpty(ev.SourceAgent),
-		nullIfEmpty(ev.SourceProduct),
-		nullIfEmpty(ev.ObservabilityLevel),
-		boolToInt(ev.ModelIsFallback),
-		nullableInt64(ev.SourceTotalTokens),
-		nullableInt64(ev.RawInputTokens),
-		nullIfEmpty(ev.TokenAccountingMethod),
-		nullIfEmpty(ev.AccountingProfile),
-		nullIfEmpty(ev.SessionPathID),
-		nullIfEmpty(ev.TurnID),
-		nullIfEmpty(ev.ProjectPath),
-		ev.ImportedAtMs,
-		ev.UpdatedAtMs,
-		existingEventID,
-	)
 	return err
 }
 
@@ -793,29 +856,6 @@ func preserveExistingSourceMetadata(target, existing *model.UsageEvent) {
 	}
 }
 
-func preserveExistingUsageMetadata(target, existing *model.UsageEvent) {
-	preserveExistingSourceMetadata(target, existing)
-	target.SourceTotalTokens = existing.SourceTotalTokens
-	target.RawInputTokens = existing.RawInputTokens
-	target.TokenAccountingMethod = existing.TokenAccountingMethod
-	target.AccountingProfile = existing.AccountingProfile
-}
-
-func preserveExistingClassification(target, existing *model.UsageEvent) {
-	if target.Channel == "" {
-		target.Channel = existing.Channel
-	}
-	if target.Provider == "" {
-		target.Provider = existing.Provider
-	}
-	if target.ModelRaw == "" {
-		target.ModelRaw = existing.ModelRaw
-	}
-	if target.ModelNormalized == "" {
-		target.ModelNormalized = existing.ModelNormalized
-	}
-}
-
 func shouldCorrectSourceProduct(existing, candidate *model.UsageEvent) bool {
 	if existing == nil || candidate == nil {
 		return false
@@ -861,13 +901,6 @@ func nullFloat64Ptr(value sql.NullFloat64) *float64 {
 		return nil
 	}
 	return &value.Float64
-}
-
-func nullStringValue(value sql.NullString) string {
-	if !value.Valid {
-		return ""
-	}
-	return value.String
 }
 
 func nullIfEmpty(value string) any {

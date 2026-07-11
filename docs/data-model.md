@@ -151,7 +151,9 @@ output_tps = output_tokens / (output_duration_ms / 1000.0)
 
 ## Upsert 完整度规则
 
-`import` 不再使用 `INSERT OR IGNORE`。重复事件会按完整度决定是否覆盖旧记录；对于 Codex，如果 parser 或 fingerprint 规则修正导致 `event_id` 改变，但 `source_file + line_number + raw_sha256` 仍指向同一原始 JSONL 行，upsert 会把已存在的同来源行收敛为一条 corrected `event_id` 记录。来源行兼容更新只有在新记录更完整时才覆盖 token、timing、cost 等用量字段，并让 token accounting metadata 跟随同一个用量 winner；否则只迁移 identity / provider / model / metadata，保留旧行已有用量和对应 accounting metadata。只有两条记录的 token 分项完全一致时，才会用重复记录补齐 winner 缺失的 accounting metadata。其他 adapter 的单行日志可能拆出多个合法事件，因此不使用这一 Codex 专用兼容身份。
+`import` 不再使用 `INSERT OR IGNORE`。重复事件会按完整度决定是否覆盖旧记录；对于 Codex，如果 parser 或 fingerprint 规则修正导致 `event_id` 改变，但 `source_file + line_number + raw_sha256` 仍指向同一原始 JSONL 行，upsert 会把当前 `event_id` 精确匹配行和同来源历史 sibling 放进同一个候选集合。即使精确匹配行来自默认脱敏导出（`source_file = NULL`）或另一条绝对路径，也不会妨碍当前本地来源行参与收敛。
+
+收敛时，incoming candidate 和候选集合共同选择最完整的 token、timing、cost 用量 winner；删除 sibling 前，还会从 token 六分项完全相同的候选中补齐 winner 缺失的 `source_total_tokens`、`raw_input_tokens`、`token_accounting_method` 和 `accounting_profile`，已有值不会被冲突值覆盖。最终记录使用当前解析得到的 identity、provider、model 和本地 source envelope，保留获胜的用量 bundle，并根据最终实际落库字段重新计算 `event_id`、`dedupe_key` 和 `dedupe_strategy`。因此在 `session_token` 策略下，如果保留了历史上更完整的 token 用量，最终 ID 可能不同于 incoming candidate 最初计算的 ID；重复导入同一 canonical 内容会返回 `skipped`。其他 adapter 的单行日志可能拆出多个合法事件，因此不使用这一 Codex 专用兼容身份。
 
 优先级：
 

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/BlueSkyXN/AgentLedger/internal/fingerprint"
 	"github.com/BlueSkyXN/AgentLedger/internal/model"
 )
 
@@ -98,11 +99,10 @@ func TestUpsertEventMigratesChangedFingerprintBySourceIdentity(t *testing.T) {
 	}
 
 	corrected := *legacy
-	corrected.EventID = "corrected-event"
-	corrected.DedupeKey = corrected.EventID
 	corrected.ModelRaw = "gpt-5-codex"
 	corrected.ModelNormalized = "gpt-5-codex"
 	corrected.UpdatedAtMs = 2
+	setUsageEventFingerprintForTest(&corrected)
 	status, err := database.UpsertEvent(&corrected)
 	if err != nil || status != "updated" {
 		t.Fatalf("corrected upsert status=%s err=%v", status, err)
@@ -161,8 +161,6 @@ func TestUpsertEventSourceIdentityMigrationPreservesMoreCompleteUsage(t *testing
 	}
 
 	corrected := *legacy
-	corrected.EventID = "corrected-provider-event"
-	corrected.DedupeKey = corrected.EventID
 	corrected.Provider = "openai"
 	corrected.ModelRaw = "gpt-5-codex"
 	corrected.ModelNormalized = "gpt-5-codex"
@@ -175,6 +173,7 @@ func TestUpsertEventSourceIdentityMigrationPreservesMoreCompleteUsage(t *testing
 	corrected.AccountingProfile = "ccusage_compatible"
 	corrected.TTFTMs = nil
 	corrected.UpdatedAtMs = 2
+	setUsageEventFingerprintForTest(&corrected)
 	status, err := database.UpsertEvent(&corrected)
 	if err != nil || status != "updated" {
 		t.Fatalf("corrected upsert status=%s err=%v", status, err)
@@ -192,7 +191,17 @@ func TestUpsertEventSourceIdentityMigrationPreservesMoreCompleteUsage(t *testing
     `).Scan(&eventID, &provider, &modelName, &total, &storedTTFT, &storedSourceTotal, &storedRawInput, &accounting, &profile); err != nil {
 		t.Fatalf("select migrated event: %v", err)
 	}
-	if eventID != corrected.EventID || provider != "openai" || modelName != "gpt-5-codex" || total != 50 || storedTTFT != ttft || storedSourceTotal.Valid || storedRawInput.Valid || accounting.Valid || profile.Valid {
+	expected := corrected
+	expected.InputTokens = legacy.InputTokens
+	expected.OutputTokens = legacy.OutputTokens
+	expected.TotalTokens = legacy.TotalTokens
+	expected.TTFTMs = legacy.TTFTMs
+	expected.SourceTotalTokens = legacy.SourceTotalTokens
+	expected.RawInputTokens = legacy.RawInputTokens
+	expected.TokenAccountingMethod = legacy.TokenAccountingMethod
+	expected.AccountingProfile = legacy.AccountingProfile
+	setUsageEventFingerprintForTest(&expected)
+	if eventID != expected.EventID || provider != "openai" || modelName != "gpt-5-codex" || total != 50 || storedTTFT != ttft || storedSourceTotal.Valid || storedRawInput.Valid || accounting.Valid || profile.Valid {
 		t.Fatalf("unexpected migrated event id=%s provider=%s model=%s total=%d ttft=%d source_total=%v raw_input=%v accounting=%v profile=%v", eventID, provider, modelName, total, storedTTFT, storedSourceTotal, storedRawInput, accounting, profile)
 	}
 }
@@ -258,8 +267,6 @@ func TestUpsertEventReconcilesPreexistingSourceIdentityDuplicates(t *testing.T) 
 	correctedSourceTotal := int64(20)
 	correctedRawInput := int64(15)
 	corrected := *legacy
-	corrected.EventID = "corrected-provider-event"
-	corrected.DedupeKey = corrected.EventID
 	corrected.Provider = "openai"
 	corrected.ModelRaw = "gpt-5-codex"
 	corrected.ModelNormalized = "gpt-5-codex"
@@ -273,6 +280,7 @@ func TestUpsertEventReconcilesPreexistingSourceIdentityDuplicates(t *testing.T) 
 	corrected.TTFTMs = nil
 	corrected.ImportedAtMs = 3
 	corrected.UpdatedAtMs = 3
+	setUsageEventFingerprintForTest(&corrected)
 	if err := insertEvent(database.Conn(), &corrected); err != nil {
 		t.Fatalf("insert corrected duplicate: %v", err)
 	}
@@ -322,13 +330,293 @@ func TestUpsertEventReconcilesPreexistingSourceIdentityDuplicates(t *testing.T) 
 	); err != nil {
 		t.Fatalf("select reconciled event: %v", err)
 	}
-	if eventID != corrected.EventID || provider != "openai" || modelName != "gpt-5-codex" || fallback != 0 || total != 50 || storedTTFT != ttft || importedAt != 1 || updatedAt != 5 || storedSourceTotal != sourceTotal || storedRawInput != rawInput || accounting != model.AccCodexLastTokenUsage || profile != "ledger" {
+	expected := corrected
+	expected.InputTokens = legacy.InputTokens
+	expected.OutputTokens = legacy.OutputTokens
+	expected.TotalTokens = legacy.TotalTokens
+	expected.TTFTMs = legacy.TTFTMs
+	expected.SourceTotalTokens = legacy.SourceTotalTokens
+	expected.RawInputTokens = legacy.RawInputTokens
+	expected.TokenAccountingMethod = legacy.TokenAccountingMethod
+	expected.AccountingProfile = legacy.AccountingProfile
+	setUsageEventFingerprintForTest(&expected)
+	if eventID != expected.EventID || provider != "openai" || modelName != "gpt-5-codex" || fallback != 0 || total != 50 || storedTTFT != ttft || importedAt != 1 || updatedAt != 5 || storedSourceTotal != sourceTotal || storedRawInput != rawInput || accounting != model.AccCodexLastTokenUsage || profile != "ledger" {
 		t.Fatalf("unexpected reconciled event id=%s provider=%s model=%s fallback=%d total=%d ttft=%d imported=%d updated=%d source_total=%d raw_input=%d accounting=%s profile=%s", eventID, provider, modelName, fallback, total, storedTTFT, importedAt, updatedAt, storedSourceTotal, storedRawInput, accounting, profile)
 	}
 
 	status, err = database.UpsertEvent(&candidate)
 	if err != nil || status != "skipped" {
 		t.Fatalf("second reconciliation should be idempotent, status=%s err=%v", status, err)
+	}
+}
+
+func TestUpsertEventReconcilesExactMatchOutsideCurrentSourceIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name                string
+		correctedSourceFile string
+		legacyTotal         int64
+		correctedTotal      int64
+		expectedTotal       int64
+	}{
+		{
+			name:                "redacted corrected row with legacy usage winner",
+			correctedSourceFile: "",
+			legacyTotal:         50,
+			correctedTotal:      20,
+			expectedTotal:       50,
+		},
+		{
+			name:                "different corrected path with corrected usage winner",
+			correctedSourceFile: "/synthetic/export/session.jsonl",
+			legacyTotal:         20,
+			correctedTotal:      50,
+			expectedTotal:       50,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			database, err := Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
+			if err != nil {
+				t.Fatalf("open: %v", err)
+			}
+			defer database.Close()
+
+			ttft := int64(300)
+			legacy := &model.UsageEvent{
+				EventID:         "legacy-source-event",
+				DedupeKey:       "legacy-source-event",
+				DedupeStrategy:  "session_token",
+				Channel:         "codex",
+				SourceAgent:     "codex",
+				SourceProduct:   "codex-cli",
+				Provider:        "legacy-provider",
+				ModelRaw:        "gpt-5",
+				ModelNormalized: "gpt-5",
+				TimestampMs:     1,
+				SessionID:       "session-source-union",
+				SourceFile:      "/synthetic/local/session.jsonl",
+				LineNumber:      11,
+				RawSHA256:       "source-union-hash",
+				RawUsageJSON:    `{"type":"synthetic-token-count"}`,
+				InputTokens:     tc.legacyTotal - 10,
+				OutputTokens:    10,
+				TotalTokens:     tc.legacyTotal,
+				ImportedAtMs:    1,
+				UpdatedAtMs:     1,
+			}
+			if tc.legacyTotal == tc.expectedTotal {
+				legacy.TTFTMs = &ttft
+			}
+			if err := insertEvent(database.Conn(), legacy); err != nil {
+				t.Fatalf("insert legacy row: %v", err)
+			}
+
+			corrected := *legacy
+			corrected.Provider = "openai"
+			corrected.ModelRaw = "gpt-5-codex"
+			corrected.ModelNormalized = "gpt-5-codex"
+			corrected.MessageID = "message-source-union"
+			corrected.SourceFile = tc.correctedSourceFile
+			if corrected.SourceFile == "" {
+				corrected.RawUsageJSON = ""
+			}
+			corrected.InputTokens = tc.correctedTotal - 10
+			corrected.OutputTokens = 10
+			corrected.TotalTokens = tc.correctedTotal
+			corrected.TTFTMs = nil
+			if tc.correctedTotal == tc.expectedTotal {
+				corrected.TTFTMs = &ttft
+			}
+			corrected.ImportedAtMs = 2
+			corrected.UpdatedAtMs = 2
+			setUsageEventFingerprintForTest(&corrected)
+			if err := insertEvent(database.Conn(), &corrected); err != nil {
+				t.Fatalf("insert corrected row: %v", err)
+			}
+
+			candidate := corrected
+			candidate.SourceFile = legacy.SourceFile
+			candidate.RawUsageJSON = legacy.RawUsageJSON
+			candidate.ImportedAtMs = 3
+			candidate.UpdatedAtMs = 3
+			status, err := database.UpsertEvent(&candidate)
+			if err != nil {
+				t.Fatalf("reconcile source union: %v", err)
+			}
+
+			var count int
+			var eventID, sourceFile, rawUsage string
+			var total int64
+			if err := database.Conn().QueryRow(`
+				SELECT COUNT(*), event_id, source_file, raw_usage_json, total_tokens
+				FROM usage_events
+			`).Scan(&count, &eventID, &sourceFile, &rawUsage, &total); err != nil {
+				t.Fatalf("select reconciled row: %v", err)
+			}
+			if status != "updated" || count != 1 || eventID != candidate.EventID || sourceFile != candidate.SourceFile || rawUsage != candidate.RawUsageJSON || total != tc.expectedTotal {
+				t.Fatalf("unexpected reconciliation status=%s rows=%d event_id=%s source=%q raw=%q total=%d", status, count, eventID, sourceFile, rawUsage, total)
+			}
+		})
+	}
+}
+
+func TestUpsertEventReconciliationFoldsEquivalentSiblingAccountingMetadata(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer database.Close()
+
+	ttft := int64(300)
+	corrected := &model.UsageEvent{
+		Channel:         "codex",
+		SourceAgent:     "codex",
+		SourceProduct:   "codex-cli",
+		Provider:        "openai",
+		ModelRaw:        "gpt-5-codex",
+		ModelNormalized: "gpt-5-codex",
+		TimestampMs:     1,
+		SessionID:       "session-accounting-fold",
+		MessageID:       "message-accounting-fold",
+		SourceFile:      "/synthetic/accounting/session.jsonl",
+		LineNumber:      12,
+		RawSHA256:       "accounting-fold-hash",
+		InputTokens:     40,
+		OutputTokens:    10,
+		TotalTokens:     50,
+		TTFTMs:          &ttft,
+		ImportedAtMs:    1,
+		UpdatedAtMs:     1,
+	}
+	setUsageEventFingerprintForTest(corrected)
+	if err := insertEvent(database.Conn(), corrected); err != nil {
+		t.Fatalf("insert corrected usage winner: %v", err)
+	}
+
+	sourceTotal := int64(50)
+	rawInput := int64(40)
+	sibling := *corrected
+	sibling.EventID = "legacy-accounting-sibling"
+	sibling.DedupeKey = sibling.EventID
+	sibling.SourceTotalTokens = &sourceTotal
+	sibling.RawInputTokens = &rawInput
+	sibling.TokenAccountingMethod = model.AccCodexLastTokenUsage
+	sibling.AccountingProfile = "ledger"
+	sibling.ImportedAtMs = 2
+	sibling.UpdatedAtMs = 2
+	if err := insertEvent(database.Conn(), &sibling); err != nil {
+		t.Fatalf("insert accounting sibling: %v", err)
+	}
+
+	candidate := *corrected
+	candidate.InputTokens = 15
+	candidate.OutputTokens = 5
+	candidate.TotalTokens = 20
+	candidate.TTFTMs = nil
+	candidate.ImportedAtMs = 3
+	candidate.UpdatedAtMs = 3
+	status, err := database.UpsertEvent(&candidate)
+	if err != nil {
+		t.Fatalf("reconcile accounting sibling: %v", err)
+	}
+
+	var count int
+	var total, storedSourceTotal, storedRawInput int64
+	var accounting, profile string
+	if err := database.Conn().QueryRow(`
+		SELECT COUNT(*), total_tokens, source_total_tokens, raw_input_tokens,
+			token_accounting_method, accounting_profile
+		FROM usage_events
+	`).Scan(&count, &total, &storedSourceTotal, &storedRawInput, &accounting, &profile); err != nil {
+		t.Fatalf("select accounting fold result: %v", err)
+	}
+	if status != "updated" || count != 1 || total != 50 || storedSourceTotal != sourceTotal || storedRawInput != rawInput || accounting != model.AccCodexLastTokenUsage || profile != "ledger" {
+		t.Fatalf("accounting metadata was not folded status=%s rows=%d total=%d source_total=%d raw_input=%d accounting=%s profile=%s", status, count, total, storedSourceTotal, storedRawInput, accounting, profile)
+	}
+
+	status, err = database.UpsertEvent(&candidate)
+	if err != nil || status != "skipped" {
+		t.Fatalf("second accounting reconciliation should be idempotent, status=%s err=%v", status, err)
+	}
+}
+
+func TestUpsertEventReconciliationStoresRecomputableIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		messageID string
+	}{
+		{name: "session token identity"},
+		{name: "message identity", messageID: "message-identity-current"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			database, err := Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
+			if err != nil {
+				t.Fatalf("open: %v", err)
+			}
+			defer database.Close()
+
+			ttft := int64(300)
+			legacy := &model.UsageEvent{
+				EventID:         "legacy-identity-event",
+				DedupeKey:       "legacy-identity-event",
+				DedupeStrategy:  "session_token",
+				Channel:         "codex",
+				SourceAgent:     "codex",
+				SourceProduct:   "codex-cli",
+				Provider:        "legacy-provider",
+				ModelRaw:        "gpt-5",
+				ModelNormalized: "gpt-5",
+				TimestampMs:     1,
+				SessionID:       "session-identity-current",
+				SourceFile:      "/synthetic/identity/session.jsonl",
+				LineNumber:      13,
+				RawSHA256:       "identity-consistency-hash",
+				InputTokens:     40,
+				OutputTokens:    10,
+				TotalTokens:     50,
+				TTFTMs:          &ttft,
+				ImportedAtMs:    1,
+				UpdatedAtMs:     1,
+			}
+			if err := insertEvent(database.Conn(), legacy); err != nil {
+				t.Fatalf("insert legacy identity row: %v", err)
+			}
+
+			candidate := *legacy
+			candidate.Provider = "openai"
+			candidate.ModelRaw = "gpt-5-codex"
+			candidate.ModelNormalized = "gpt-5-codex"
+			candidate.MessageID = tc.messageID
+			candidate.InputTokens = 15
+			candidate.OutputTokens = 5
+			candidate.TotalTokens = 20
+			candidate.TTFTMs = nil
+			candidate.ImportedAtMs = 2
+			candidate.UpdatedAtMs = 2
+			setUsageEventFingerprintForTest(&candidate)
+			incomingEventID := candidate.EventID
+
+			status, err := database.UpsertEvent(&candidate)
+			if err != nil || status != "updated" {
+				t.Fatalf("identity reconciliation status=%s err=%v", status, err)
+			}
+
+			stored := selectOnlyUsageEventForTest(t, database)
+			recomputed, strategy := computeUsageEventFingerprintForTest(stored)
+			if stored.EventID != recomputed || stored.DedupeKey != recomputed || stored.DedupeStrategy != strategy {
+				t.Fatalf("stored identity is not recomputable event_id=%s dedupe=%s strategy=%s recomputed=%s recomputed_strategy=%s", stored.EventID, stored.DedupeKey, stored.DedupeStrategy, recomputed, strategy)
+			}
+			if stored.Provider != candidate.Provider || stored.ModelRaw != candidate.ModelRaw || stored.SessionID != candidate.SessionID || stored.MessageID != candidate.MessageID || stored.TotalTokens != legacy.TotalTokens {
+				t.Fatalf("unexpected canonical row provider=%s model=%s session=%s message=%s total=%d", stored.Provider, stored.ModelRaw, stored.SessionID, stored.MessageID, stored.TotalTokens)
+			}
+			if tc.messageID == "" && stored.EventID == incomingEventID {
+				t.Fatalf("session-token identity should be recomputed after retaining different usage")
+			}
+
+			status, err = database.UpsertEvent(&candidate)
+			if err != nil || status != "skipped" {
+				t.Fatalf("second identity reconciliation should be idempotent, status=%s err=%v", status, err)
+			}
+		})
 	}
 }
 
@@ -835,10 +1123,6 @@ func TestMoreCompleteReplacementKeepsCandidateUsageMetadata(t *testing.T) {
 			candidateSourceTotal := int64(20)
 			candidateRawInput := int64(15)
 			candidate := *base
-			if tc.changeEventID {
-				candidate.EventID = "corrected-event-replace-meta"
-				candidate.DedupeKey = candidate.EventID
-			}
 			candidate.SourceProduct = "candidate-product"
 			candidate.ObservabilityLevel = "inferred"
 			candidate.ModelRaw = "gpt-4.1"
@@ -852,6 +1136,9 @@ func TestMoreCompleteReplacementKeepsCandidateUsageMetadata(t *testing.T) {
 			candidate.TotalTokens = 20
 			candidate.TTFTMs = &ttft
 			candidate.UpdatedAtMs = 2
+			if tc.changeEventID {
+				setUsageEventFingerprintForTest(&candidate)
+			}
 			if status, err := database.UpsertEvent(&candidate); err != nil || status != "updated" {
 				t.Fatalf("replace candidate status=%s err=%v", status, err)
 			}
@@ -1029,4 +1316,64 @@ func dbColumnExists(conn *sql.DB, table, column string) (bool, error) {
 
 func int64PtrForTest(value int64) *int64 {
 	return &value
+}
+
+func setUsageEventFingerprintForTest(ev *model.UsageEvent) {
+	eventID, strategy := computeUsageEventFingerprintForTest(ev)
+	ev.EventID = eventID
+	ev.DedupeKey = eventID
+	ev.DedupeStrategy = strategy
+}
+
+func computeUsageEventFingerprintForTest(ev *model.UsageEvent) (string, string) {
+	agent := ev.SourceAgent
+	if agent == "" {
+		agent = ev.Channel
+	}
+	eventID, strategy := fingerprint.Compute(&fingerprint.ParsedRecord{
+		Agent:               agent,
+		Provider:            ev.Provider,
+		Model:               ev.ModelRaw,
+		TimestampMs:         ev.TimestampMs,
+		SessionID:           ev.SessionID,
+		MessageID:           ev.MessageID,
+		RequestID:           ev.RequestID,
+		InputTokens:         ev.InputTokens,
+		OutputTokens:        ev.OutputTokens,
+		CacheCreationTokens: ev.CacheCreationTokens,
+		CacheReadTokens:     ev.CacheReadTokens,
+		ReasoningTokens:     ev.ReasoningTokens,
+		TotalTokens:         ev.TotalTokens,
+		SourceTotalTokens:   ev.SourceTotalTokens,
+		RawJSON:             ev.RawUsageJSON,
+		SourceFile:          ev.SourceFile,
+		LineNumber:          ev.LineNumber,
+		RawSHA256:           ev.RawSHA256,
+	})
+	return eventID, string(strategy)
+}
+
+func selectOnlyUsageEventForTest(t *testing.T, database *Database) *model.UsageEvent {
+	t.Helper()
+	var count int
+	if err := database.Conn().QueryRow(`SELECT COUNT(*) FROM usage_events`).Scan(&count); err != nil {
+		t.Fatalf("count usage events: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected one usage event, got %d", count)
+	}
+	var eventID string
+	if err := database.Conn().QueryRow(`SELECT event_id FROM usage_events`).Scan(&eventID); err != nil {
+		t.Fatalf("select only event id: %v", err)
+	}
+	tx, err := database.Conn().Begin()
+	if err != nil {
+		t.Fatalf("begin select transaction: %v", err)
+	}
+	defer tx.Rollback()
+	event, err := selectEventForComparison(tx, eventID)
+	if err != nil {
+		t.Fatalf("select only event: %v", err)
+	}
+	return event
 }
