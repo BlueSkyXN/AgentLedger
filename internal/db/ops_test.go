@@ -540,8 +540,9 @@ func TestUpsertEventReconcilesFullyRedactedSourceIdentityDuplicates(t *testing.T
 	}
 }
 
-func TestUpsertEventReconcilesRedactedLegacyAfterLocalCanonical(t *testing.T) {
-	database, err := Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
+func TestUpsertEventReconcilesRedactedLegacyMergedByAnotherHandleAfterLocalCanonical(t *testing.T) {
+	targetPath := filepath.Join(t.TempDir(), "agent-ledger.db")
+	database, err := Open(targetPath)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -581,15 +582,31 @@ func TestUpsertEventReconcilesRedactedLegacyAfterLocalCanonical(t *testing.T) {
 	legacy.MessageID = ""
 	legacy.ImportedAtMs = 2
 	legacy.UpdatedAtMs = 2
-	if err := insertEvent(database.Conn(), &legacy); err != nil {
+	incomingPath := filepath.Join(t.TempDir(), "redacted-incoming.db")
+	incomingDatabase, err := Open(incomingPath)
+	if err != nil {
+		t.Fatalf("open incoming database: %v", err)
+	}
+	if err := insertEvent(incomingDatabase.Conn(), &legacy); err != nil {
 		t.Fatalf("insert legacy row: %v", err)
 	}
-	if _, err := database.Conn().Exec(`
+	if _, err := incomingDatabase.Conn().Exec(`
 		UPDATE usage_events
 		SET source_file = NULL, raw_usage_json = NULL
 		WHERE event_id = ?
 	`, legacy.EventID); err != nil {
 		t.Fatalf("simulate merged redacted legacy row: %v", err)
+	}
+	if err := incomingDatabase.Close(); err != nil {
+		t.Fatalf("close incoming database: %v", err)
+	}
+	mergeDatabase, err := Open(targetPath)
+	if err != nil {
+		t.Fatalf("open merge database handle: %v", err)
+	}
+	defer mergeDatabase.Close()
+	if inserted, skipped, err := mergeDatabase.MergeFrom(incomingPath); err != nil || inserted != 1 || skipped != 0 {
+		t.Fatalf("merge redacted legacy inserted=%d skipped=%d err=%v", inserted, skipped, err)
 	}
 
 	incoming := *corrected
@@ -682,7 +699,6 @@ func TestUpsertEventDoesNotReconcileRedactedCodexNearMatches(t *testing.T) {
 			`, nearMatch.EventID); err != nil {
 				t.Fatalf("redact near-match row: %v", err)
 			}
-
 			incoming := *corrected
 			incoming.ImportedAtMs = 3
 			incoming.UpdatedAtMs = 3

@@ -132,6 +132,44 @@ func TestRedactedSourceIdentityLookupUsesCompositeIndex(t *testing.T) {
 	}
 }
 
+func TestCodexExactLookupUsesIndexesForEventAndRedactedExistence(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer database.Close()
+
+	rows, err := database.Conn().Query(
+		`EXPLAIN QUERY PLAN `+codexEventComparisonQuery,
+		`{}`, 1, 7, "raw-hash", "codex", "session-a", 1, "event-a",
+	)
+	if err != nil {
+		t.Fatalf("explain Codex exact lookup: %v", err)
+	}
+	defer rows.Close()
+
+	var details []string
+	for rows.Next() {
+		var id, parent, notUsed int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notUsed, &detail); err != nil {
+			t.Fatalf("scan query plan: %v", err)
+		}
+		details = append(details, detail)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("query plan rows: %v", err)
+	}
+
+	plan := strings.Join(details, "\n")
+	if !strings.Contains(plan, "SEARCH usage_events") ||
+		!strings.Contains(plan, "event_id=?") ||
+		!strings.Contains(plan, "SEARCH redacted USING INDEX idx_usage_source_identity (source_file=? AND line_number=? AND raw_sha256=? AND channel=?)") ||
+		strings.Contains(plan, "SCAN ") {
+		t.Fatalf("Codex exact lookup is not using both indexes:\n%s", plan)
+	}
+}
+
 func TestOpenRejectsSchemaV1(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "agent-ledger.db")
 	conn, err := sql.Open("sqlite3", path)

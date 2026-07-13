@@ -66,7 +66,14 @@ func (d *Database) UpsertEvent(ev *model.UsageEvent) (string, error) {
 		}
 	}()
 
-	existing, err := selectEventForComparison(tx, ev.EventID)
+	var existingRawUsageMatches bool
+	var redactedSourceMatchesExist bool
+	var existing *model.UsageEvent
+	if ev.Channel == "codex" {
+		existing, existingRawUsageMatches, redactedSourceMatchesExist, err = selectCodexEventForComparison(tx, ev)
+	} else {
+		existing, err = selectEventForComparison(tx, ev.EventID)
+	}
 	if err != nil && err != sql.ErrNoRows {
 		return "", err
 	}
@@ -79,7 +86,7 @@ func (d *Database) UpsertEvent(ev *model.UsageEvent) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if existing != nil {
+	if existing != nil && (strings.TrimSpace(existing.SourceFile) == "" || redactedSourceMatchesExist) {
 		redactedMatches, err := selectRedactedEventsForComparisonBySourceIdentity(tx, ev)
 		if err != nil {
 			return "", err
@@ -88,10 +95,7 @@ func (d *Database) UpsertEvent(ev *model.UsageEvent) (string, error) {
 			sourceMatches = appendUniqueEvent(sourceMatches, match)
 		}
 	}
-	refreshSourceEnvelope, err := codexSourceEnvelopeNeedsRefresh(tx, existing, ev)
-	if err != nil {
-		return "", err
-	}
+	refreshSourceEnvelope := codexSourceEnvelopeNeedsRefresh(existing, ev, existingRawUsageMatches)
 	if hasDifferentEventID(sourceMatches, ev.EventID) || refreshSourceEnvelope {
 		var status string
 		status, err = reconcileSourceIdentityMatches(tx, ev, existing, sourceMatches)
@@ -156,6 +160,34 @@ const eventComparisonColumns = `
 func selectEventForComparison(tx *sql.Tx, eventID string) (*model.UsageEvent, error) {
 	row := tx.QueryRow(`SELECT `+eventComparisonColumns+` FROM usage_events WHERE event_id = ?`, eventID)
 	return scanEventForComparison(row)
+}
+
+const codexEventComparisonQuery = `
+	SELECT ` + eventComparisonColumns + `,
+		CASE WHEN COALESCE(raw_usage_json, '') = ? THEN 1 ELSE 0 END,
+		EXISTS(
+			SELECT 1
+			FROM usage_events AS redacted INDEXED BY idx_usage_source_identity
+			WHERE ? = 1
+				AND redacted.source_file IS NULL
+				AND redacted.line_number = ? AND redacted.raw_sha256 = ? AND redacted.channel = ?
+				AND redacted.session_id = ? AND redacted.timestamp_ms = ?
+			LIMIT 1
+		)
+	FROM usage_events
+	WHERE event_id = ?
+`
+
+func selectCodexEventForComparison(tx *sql.Tx, ev *model.UsageEvent) (*model.UsageEvent, bool, bool, error) {
+	redactedIdentityValid := ev.LineNumber > 0 && strings.TrimSpace(ev.RawSHA256) != "" && strings.TrimSpace(ev.SessionID) != ""
+	var rawUsageMatches, redactedMatchesExist int
+	row := tx.QueryRow(
+		codexEventComparisonQuery,
+		ev.RawUsageJSON, boolToInt(redactedIdentityValid), ev.LineNumber, ev.RawSHA256,
+		ev.Channel, ev.SessionID, ev.TimestampMs, ev.EventID,
+	)
+	existing, err := scanEventForComparison(row, &rawUsageMatches, &redactedMatchesExist)
+	return existing, rawUsageMatches == 1, redactedMatchesExist == 1, err
 }
 
 func selectEventsForComparisonBySourceIdentity(tx *sql.Tx, ev *model.UsageEvent) ([]*model.UsageEvent, error) {
@@ -502,35 +534,31 @@ func eventRawUsageMatches(tx *sql.Tx, eventID, rawUsageJSON string) (bool, error
 	return matches == 1, nil
 }
 
-func codexSourceEnvelopeNeedsRefresh(tx *sql.Tx, existing, incoming *model.UsageEvent) (bool, error) {
+func codexSourceEnvelopeNeedsRefresh(existing, incoming *model.UsageEvent, rawUsageMatches bool) bool {
 	if existing == nil || incoming.Channel != "codex" {
-		return false, nil
+		return false
 	}
 	if strings.TrimSpace(existing.SourceFile) == "" && strings.TrimSpace(incoming.SourceFile) != "" {
-		return true, nil
+		return true
 	}
 	if incoming.RawUsageJSON == "" {
-		return false, nil
+		return false
 	}
-	sameRawUsage, err := eventRawUsageMatches(tx, existing.EventID, incoming.RawUsageJSON)
-	if err != nil {
-		return false, err
-	}
-	return !sameRawUsage, nil
+	return !rawUsageMatches
 }
 
 type eventComparisonScanner interface {
 	Scan(dest ...any) error
 }
 
-func scanEventForComparison(row eventComparisonScanner) (*model.UsageEvent, error) {
+func scanEventForComparison(row eventComparisonScanner, additionalDestinations ...any) (*model.UsageEvent, error) {
 	var ev model.UsageEvent
 	var requestStarted, firstToken, completed, totalDuration, ttft, outputDuration sql.NullInt64
 	var sourceTotal, rawInput sql.NullInt64
 	var outputTPS, recordedCost sql.NullFloat64
 	var lineNumber int64
 	var modelIsFallback int
-	if err := row.Scan(
+	destinations := []any{
 		&ev.EventID,
 		&ev.DedupeKey,
 		&ev.DedupeStrategy,
@@ -572,7 +600,9 @@ func scanEventForComparison(row eventComparisonScanner) (*model.UsageEvent, erro
 		&recordedCost,
 		&ev.ImportedAtMs,
 		&ev.UpdatedAtMs,
-	); err != nil {
+	}
+	destinations = append(destinations, additionalDestinations...)
+	if err := row.Scan(destinations...); err != nil {
 		return nil, err
 	}
 	ev.RequestStartedAtMs = nullInt64Ptr(requestStarted)
