@@ -151,9 +151,9 @@ output_tps = output_tokens / (output_duration_ms / 1000.0)
 
 ## Upsert 完整度规则
 
-`import` 不再使用 `INSERT OR IGNORE`。重复事件会按完整度决定是否覆盖旧记录；对于 Codex，如果 parser 或 fingerprint 规则修正导致 `event_id` 改变，但 `source_file + line_number + raw_sha256` 仍指向同一原始 JSONL 行，upsert 会把当前 `event_id` 精确匹配行和同来源历史 sibling 放进同一个候选集合。即使精确匹配行来自默认脱敏导出（`source_file = NULL`）或另一条绝对路径，也不会妨碍当前本地来源行参与收敛。
+`import` 不再使用 `INSERT OR IGNORE`。重复事件会按完整度决定是否覆盖旧记录；对于 Codex，如果 parser 或 fingerprint 规则修正导致 `event_id` 改变，但 `source_file + line_number + raw_sha256` 仍指向同一原始 JSONL 行，upsert 会把当前 `event_id` 精确匹配行和同来源历史 sibling 放进同一个候选集合。存在 exact match 时，还会把 session、timestamp、line、raw hash 和 channel 都一致的脱敏行加入候选；无论 legacy/corrected sibling 全部来自默认脱敏导出，还是 legacy 脱敏行后 merge 到已有本地 canonical row，都能在真实本地来源再次 import 时收敛。
 
-收敛时，incoming candidate 和候选集合共同选择最完整的 token、timing、cost 用量 winner；删除 sibling 前，还会从 token 六分项完全相同的候选中补齐 winner 缺失的 `source_total_tokens`、`raw_input_tokens`、`token_accounting_method` 和 `accounting_profile`，已有值不会被冲突值覆盖。`session_path_id`、`turn_id`、`project_path` 等 source metadata 则遍历全部候选，按原有 missing、稳定性和路径具体度规则保留互补字段，不与 usage winner 绑定。最终记录使用当前解析得到的 identity、provider、model 和本地 source envelope，保留获胜的用量 bundle，并根据最终实际落库字段重新计算 `event_id`、`dedupe_key` 和 `dedupe_strategy`。因此在 `session_token` 策略下，如果保留了历史上更完整的 token 用量，最终 ID 可能不同于 incoming candidate 最初计算的 ID；重复导入同一 canonical 内容会返回 `skipped`。其他 adapter 的单行日志可能拆出多个合法事件，因此不使用这一 Codex 专用兼容身份。
+收敛时，incoming candidate 和候选集合共同选择最完整的 token、timing、cost 用量 winner。删除 sibling 前，只从 token 六分项相同、并包含 winner 已有 accounting 字段相同值的单一最佳 donor 补齐 `source_total_tokens`、`raw_input_tokens`、`token_accounting_method` 和 `accounting_profile`，避免跨冲突 profile 或 method 拼出来源中不存在的 bundle。`session_path_id`、`turn_id`、`project_path` 等 source metadata 不使用 usage score 决定冲突赢家：最早历史候选提供稳定基准，其余候选只做 missing、已知纠正和路径具体度升级。最终记录使用当前解析得到的 identity、provider、model、本地 source 和 raw envelope，保留获胜的用量 bundle，并根据最终实际落库字段重新计算 `event_id`、`dedupe_key` 和 `dedupe_strategy`；若唯一差异是当前 raw envelope，也会更新而不是误报 `skipped`。因此在 `session_token` 策略下，如果保留了历史上更完整的 token 用量，最终 ID 可能不同于 incoming candidate 最初计算的 ID；重复导入同一 canonical 内容会返回 `skipped`。其他 adapter 的单行日志可能拆出多个合法事件，因此不使用这一 Codex 专用兼容身份。
 
 优先级：
 

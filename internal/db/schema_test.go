@@ -92,6 +92,46 @@ func TestSourceIdentityLookupUsesCompositeIndex(t *testing.T) {
 	}
 }
 
+func TestRedactedSourceIdentityLookupUsesCompositeIndex(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer database.Close()
+
+	rows, err := database.Conn().Query(`
+		EXPLAIN QUERY PLAN
+		SELECT event_id, total_tokens
+		FROM usage_events
+		WHERE source_file IS NULL
+			AND line_number = ? AND raw_sha256 = ? AND channel = ?
+			AND session_id = ? AND timestamp_ms = ?
+		ORDER BY imported_at_ms ASC, event_id ASC
+	`, 7, "raw-hash", "codex", "session-a", 1)
+	if err != nil {
+		t.Fatalf("explain redacted source identity lookup: %v", err)
+	}
+	defer rows.Close()
+
+	var details []string
+	for rows.Next() {
+		var id, parent, notUsed int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notUsed, &detail); err != nil {
+			t.Fatalf("scan query plan: %v", err)
+		}
+		details = append(details, detail)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("query plan rows: %v", err)
+	}
+
+	plan := strings.Join(details, "\n")
+	if !strings.Contains(plan, "idx_usage_source_identity") || strings.Contains(plan, "SCAN usage_events") || strings.Contains(plan, "USE TEMP B-TREE") {
+		t.Fatalf("redacted source identity lookup is not using the composite index:\n%s", plan)
+	}
+}
+
 func TestOpenRejectsSchemaV1(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "agent-ledger.db")
 	conn, err := sql.Open("sqlite3", path)

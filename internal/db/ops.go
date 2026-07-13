@@ -79,7 +79,20 @@ func (d *Database) UpsertEvent(ev *model.UsageEvent) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if hasDifferentEventID(sourceMatches, ev.EventID) {
+	if existing != nil {
+		redactedMatches, err := selectRedactedEventsForComparisonBySourceIdentity(tx, ev)
+		if err != nil {
+			return "", err
+		}
+		for _, match := range redactedMatches {
+			sourceMatches = appendUniqueEvent(sourceMatches, match)
+		}
+	}
+	refreshSourceEnvelope, err := codexSourceEnvelopeNeedsRefresh(tx, existing, ev)
+	if err != nil {
+		return "", err
+	}
+	if hasDifferentEventID(sourceMatches, ev.EventID) || refreshSourceEnvelope {
 		var status string
 		status, err = reconcileSourceIdentityMatches(tx, ev, existing, sourceMatches)
 		if err != nil {
@@ -173,6 +186,36 @@ func selectEventsForComparisonBySourceIdentity(tx *sql.Tx, ev *model.UsageEvent)
 	return matches, nil
 }
 
+func selectRedactedEventsForComparisonBySourceIdentity(tx *sql.Tx, ev *model.UsageEvent) ([]*model.UsageEvent, error) {
+	if ev.Channel != "codex" || ev.LineNumber <= 0 || strings.TrimSpace(ev.RawSHA256) == "" || strings.TrimSpace(ev.SessionID) == "" {
+		return nil, nil
+	}
+	rows, err := tx.Query(`SELECT `+eventComparisonColumns+`
+		FROM usage_events
+		WHERE source_file IS NULL
+			AND line_number = ? AND raw_sha256 = ? AND channel = ?
+			AND session_id = ? AND timestamp_ms = ?
+		ORDER BY imported_at_ms ASC, event_id ASC
+	`, ev.LineNumber, ev.RawSHA256, ev.Channel, ev.SessionID, ev.TimestampMs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var matches []*model.UsageEvent
+	for rows.Next() {
+		match, err := scanEventForComparison(rows)
+		if err != nil {
+			return nil, err
+		}
+		matches = append(matches, match)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return matches, nil
+}
+
 func hasDifferentEventID(events []*model.UsageEvent, eventID string) bool {
 	for _, event := range events {
 		if event.EventID != eventID {
@@ -205,8 +248,14 @@ func reconcileSourceIdentityMatches(tx *sql.Tx, incoming, exact *model.UsageEven
 		stored = append(stored, canonicalMatch)
 	}
 
-	if len(stored) == 1 && sameEventContent(canonical, stored[0]) {
-		return "skipped", nil
+	if len(stored) == 1 && sameEventContentExceptRawUsage(canonical, stored[0]) {
+		sameRawUsage, err := eventRawUsageMatches(tx, stored[0].EventID, canonical.RawUsageJSON)
+		if err != nil {
+			return "", err
+		}
+		if sameRawUsage {
+			return "skipped", nil
+		}
 	}
 
 	for _, match := range stored {
@@ -243,10 +292,10 @@ func buildCanonicalReconciledEvent(incoming *model.UsageEvent, stored []*model.U
 			usageWinner = *candidate
 		}
 	}
-	mergeMissingAccountingMetadata(&usageWinner, incoming)
-	for _, candidate := range stored {
-		mergeMissingAccountingMetadata(&usageWinner, candidate)
-	}
+	accountingCandidates := make([]*model.UsageEvent, 0, len(stored)+1)
+	accountingCandidates = append(accountingCandidates, incoming)
+	accountingCandidates = append(accountingCandidates, stored...)
+	mergeMissingAccountingMetadataFromBestDonor(&usageWinner, accountingCandidates)
 
 	canonical := *incoming
 	preserveReconciledSourceMetadata(&canonical, stored)
@@ -272,13 +321,14 @@ func preserveReconciledSourceMetadata(target *model.UsageEvent, stored []*model.
 		return
 	}
 
-	sourceMetadataWinner := stored[0]
+	sourceMetadataBaseline := stored[0]
 	for _, candidate := range stored[1:] {
-		if isMoreComplete(candidate, sourceMetadataWinner) {
-			sourceMetadataWinner = candidate
+		if candidate.ImportedAtMs < sourceMetadataBaseline.ImportedAtMs ||
+			(candidate.ImportedAtMs == sourceMetadataBaseline.ImportedAtMs && candidate.EventID < sourceMetadataBaseline.EventID) {
+			sourceMetadataBaseline = candidate
 		}
 	}
-	preserveExistingSourceMetadata(target, sourceMetadataWinner)
+	preserveExistingSourceMetadata(target, sourceMetadataBaseline)
 
 	for _, candidate := range stored {
 		mergeMissingSourceMetadata(target, candidate)
@@ -306,6 +356,54 @@ func mergeMissingSourceMetadata(target, candidate *model.UsageEvent) {
 	if target.ProjectPath == "" || shouldUpgradeProjectPath(target.ProjectPath, candidate.ProjectPath) {
 		target.ProjectPath = candidate.ProjectPath
 	}
+}
+
+func mergeMissingAccountingMetadataFromBestDonor(target *model.UsageEvent, candidates []*model.UsageEvent) {
+	var donor *model.UsageEvent
+	bestScore := -1
+	for _, candidate := range candidates {
+		if candidate == nil || !sameTokenUsage(target, candidate) || !accountingMetadataCompatible(target, candidate) {
+			continue
+		}
+		score := accountingMetadataScore(candidate)
+		if score > bestScore {
+			donor = candidate
+			bestScore = score
+		}
+	}
+	if donor != nil {
+		mergeMissingAccountingMetadata(target, donor)
+	}
+}
+
+func accountingMetadataCompatible(target, candidate *model.UsageEvent) bool {
+	if target.SourceTotalTokens != nil && (candidate.SourceTotalTokens == nil || *target.SourceTotalTokens != *candidate.SourceTotalTokens) {
+		return false
+	}
+	if target.RawInputTokens != nil && (candidate.RawInputTokens == nil || *target.RawInputTokens != *candidate.RawInputTokens) {
+		return false
+	}
+	if target.TokenAccountingMethod != "" && target.TokenAccountingMethod != candidate.TokenAccountingMethod {
+		return false
+	}
+	return target.AccountingProfile == "" || target.AccountingProfile == candidate.AccountingProfile
+}
+
+func accountingMetadataScore(ev *model.UsageEvent) int {
+	score := 0
+	if ev.SourceTotalTokens != nil {
+		score++
+	}
+	if ev.RawInputTokens != nil {
+		score++
+	}
+	if ev.TokenAccountingMethod != "" {
+		score += 2
+	}
+	if ev.AccountingProfile != "" {
+		score += 2
+	}
+	return score
 }
 
 func mergeMissingAccountingMetadata(target, candidate *model.UsageEvent) bool {
@@ -380,7 +478,7 @@ func computeEventFingerprint(ev *model.UsageEvent) (string, fingerprint.Strategy
 	})
 }
 
-func sameEventContent(left, right *model.UsageEvent) bool {
+func sameEventContentExceptRawUsage(left, right *model.UsageEvent) bool {
 	leftCopy := *left
 	rightCopy := *right
 	leftCopy.ImportedAtMs = 0
@@ -390,6 +488,35 @@ func sameEventContent(left, right *model.UsageEvent) bool {
 	rightCopy.UpdatedAtMs = 0
 	rightCopy.RawUsageJSON = ""
 	return reflect.DeepEqual(leftCopy, rightCopy)
+}
+
+func eventRawUsageMatches(tx *sql.Tx, eventID, rawUsageJSON string) (bool, error) {
+	var matches int
+	if err := tx.QueryRow(`
+		SELECT CASE WHEN COALESCE(raw_usage_json, '') = ? THEN 1 ELSE 0 END
+		FROM usage_events
+		WHERE event_id = ?
+	`, rawUsageJSON, eventID).Scan(&matches); err != nil {
+		return false, err
+	}
+	return matches == 1, nil
+}
+
+func codexSourceEnvelopeNeedsRefresh(tx *sql.Tx, existing, incoming *model.UsageEvent) (bool, error) {
+	if existing == nil || incoming.Channel != "codex" {
+		return false, nil
+	}
+	if strings.TrimSpace(existing.SourceFile) == "" && strings.TrimSpace(incoming.SourceFile) != "" {
+		return true, nil
+	}
+	if incoming.RawUsageJSON == "" {
+		return false, nil
+	}
+	sameRawUsage, err := eventRawUsageMatches(tx, existing.EventID, incoming.RawUsageJSON)
+	if err != nil {
+		return false, err
+	}
+	return !sameRawUsage, nil
 }
 
 type eventComparisonScanner interface {

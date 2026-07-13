@@ -459,6 +459,309 @@ func TestUpsertEventReconcilesExactMatchOutsideCurrentSourceIdentity(t *testing.
 	}
 }
 
+func TestUpsertEventReconcilesFullyRedactedSourceIdentityDuplicates(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer database.Close()
+
+	ttft := int64(300)
+	legacy := &model.UsageEvent{
+		EventID:         "legacy-redacted-event",
+		DedupeKey:       "legacy-redacted-event",
+		DedupeStrategy:  "session_token",
+		Channel:         "codex",
+		SourceAgent:     "codex",
+		SourceProduct:   "codex-cli",
+		Provider:        "legacy-provider",
+		ModelRaw:        "gpt-5",
+		ModelNormalized: "gpt-5",
+		TimestampMs:     0,
+		SessionID:       "session-fully-redacted",
+		LineNumber:      15,
+		RawSHA256:       "fully-redacted-hash",
+		InputTokens:     40,
+		OutputTokens:    10,
+		TotalTokens:     50,
+		TTFTMs:          &ttft,
+		ImportedAtMs:    1,
+		UpdatedAtMs:     1,
+	}
+	if err := insertEvent(database.Conn(), legacy); err != nil {
+		t.Fatalf("insert redacted legacy row: %v", err)
+	}
+
+	corrected := *legacy
+	corrected.Provider = "openai"
+	corrected.ModelRaw = "gpt-5-codex"
+	corrected.ModelNormalized = "gpt-5-codex"
+	corrected.MessageID = "message-fully-redacted"
+	corrected.InputTokens = 15
+	corrected.OutputTokens = 5
+	corrected.TotalTokens = 20
+	corrected.TTFTMs = nil
+	corrected.ImportedAtMs = 2
+	corrected.UpdatedAtMs = 2
+	setUsageEventFingerprintForTest(&corrected)
+	if err := insertEvent(database.Conn(), &corrected); err != nil {
+		t.Fatalf("insert redacted corrected row: %v", err)
+	}
+	if _, err := database.Conn().Exec(`UPDATE usage_events SET source_file = NULL, raw_usage_json = NULL`); err != nil {
+		t.Fatalf("simulate default redacted export: %v", err)
+	}
+
+	incoming := corrected
+	incoming.SourceFile = "/synthetic/local/fully-redacted.jsonl"
+	incoming.RawUsageJSON = `{"type":"event_msg","payload":{"type":"token_count"}}`
+	incoming.ImportedAtMs = 3
+	incoming.UpdatedAtMs = 3
+
+	status, err := database.UpsertEvent(&incoming)
+	if err != nil || status != "updated" {
+		t.Fatalf("reconcile fully redacted rows status=%s err=%v", status, err)
+	}
+
+	var count int
+	var sourceFile, rawUsage string
+	if err := database.Conn().QueryRow(`
+		SELECT COUNT(*), COALESCE(source_file, ''), COALESCE(raw_usage_json, '')
+		FROM usage_events
+	`).Scan(&count, &sourceFile, &rawUsage); err != nil {
+		t.Fatalf("select fully redacted reconciliation: %v", err)
+	}
+	if count != 1 || sourceFile != incoming.SourceFile || rawUsage != incoming.RawUsageJSON {
+		t.Fatalf("fully redacted rows did not converge rows=%d source=%q raw=%q", count, sourceFile, rawUsage)
+	}
+
+	status, err = database.UpsertEvent(&incoming)
+	if err != nil || status != "skipped" {
+		t.Fatalf("second fully redacted reconciliation should be idempotent, status=%s err=%v", status, err)
+	}
+}
+
+func TestUpsertEventReconcilesRedactedLegacyAfterLocalCanonical(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer database.Close()
+
+	corrected := &model.UsageEvent{
+		Channel:         "codex",
+		SourceAgent:     "codex",
+		SourceProduct:   "codex-cli",
+		Provider:        "openai",
+		ModelRaw:        "gpt-5-codex",
+		ModelNormalized: "gpt-5-codex",
+		TimestampMs:     1,
+		SessionID:       "session-redacted-after-local",
+		MessageID:       "message-redacted-after-local",
+		SourceFile:      "/synthetic/local/redacted-after-local.jsonl",
+		LineNumber:      19,
+		RawSHA256:       "redacted-after-local-hash",
+		RawUsageJSON:    `{"type":"event_msg","payload":{"type":"token_count"}}`,
+		InputTokens:     15,
+		OutputTokens:    5,
+		TotalTokens:     20,
+		ImportedAtMs:    1,
+		UpdatedAtMs:     1,
+	}
+	setUsageEventFingerprintForTest(corrected)
+	if err := insertEvent(database.Conn(), corrected); err != nil {
+		t.Fatalf("insert local corrected row: %v", err)
+	}
+
+	legacy := *corrected
+	legacy.EventID = "redacted-legacy-after-local"
+	legacy.DedupeKey = legacy.EventID
+	legacy.Provider = "legacy-provider"
+	legacy.ModelRaw = "gpt-5"
+	legacy.ModelNormalized = "gpt-5"
+	legacy.MessageID = ""
+	legacy.ImportedAtMs = 2
+	legacy.UpdatedAtMs = 2
+	if err := insertEvent(database.Conn(), &legacy); err != nil {
+		t.Fatalf("insert legacy row: %v", err)
+	}
+	if _, err := database.Conn().Exec(`
+		UPDATE usage_events
+		SET source_file = NULL, raw_usage_json = NULL
+		WHERE event_id = ?
+	`, legacy.EventID); err != nil {
+		t.Fatalf("simulate merged redacted legacy row: %v", err)
+	}
+
+	incoming := *corrected
+	incoming.ImportedAtMs = 3
+	incoming.UpdatedAtMs = 3
+	status, err := database.UpsertEvent(&incoming)
+	if err != nil || status != "updated" {
+		t.Fatalf("reconcile redacted legacy after local canonical status=%s err=%v", status, err)
+	}
+
+	var count int
+	if err := database.Conn().QueryRow(`SELECT COUNT(*) FROM usage_events`).Scan(&count); err != nil {
+		t.Fatalf("count reconciled rows: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("redacted legacy remained after local import: rows=%d", count)
+	}
+
+	status, err = database.UpsertEvent(&incoming)
+	if err != nil || status != "skipped" {
+		t.Fatalf("second redacted legacy import should be idempotent, status=%s err=%v", status, err)
+	}
+}
+
+func TestUpsertEventDoesNotReconcileRedactedCodexNearMatches(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		sessionID   string
+		timestampMs int64
+		lineNumber  int
+		rawSHA256   string
+	}{
+		{name: "different session", sessionID: "other-session", timestampMs: 1, lineNumber: 21, rawSHA256: "near-match-hash"},
+		{name: "different timestamp", sessionID: "session-near-match", timestampMs: 2, lineNumber: 21, rawSHA256: "near-match-hash"},
+		{name: "different line", sessionID: "session-near-match", timestampMs: 1, lineNumber: 22, rawSHA256: "near-match-hash"},
+		{name: "different raw hash", sessionID: "session-near-match", timestampMs: 1, lineNumber: 21, rawSHA256: "other-near-match-hash"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			database, err := Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
+			if err != nil {
+				t.Fatalf("open: %v", err)
+			}
+			defer database.Close()
+
+			corrected := &model.UsageEvent{
+				Channel:         "codex",
+				SourceAgent:     "codex",
+				SourceProduct:   "codex-cli",
+				Provider:        "openai",
+				ModelRaw:        "gpt-5-codex",
+				ModelNormalized: "gpt-5-codex",
+				TimestampMs:     1,
+				SessionID:       "session-near-match",
+				MessageID:       "message-near-match",
+				SourceFile:      "/synthetic/local/near-match.jsonl",
+				LineNumber:      21,
+				RawSHA256:       "near-match-hash",
+				RawUsageJSON:    `{"type":"event_msg","payload":{"type":"token_count"}}`,
+				InputTokens:     15,
+				OutputTokens:    5,
+				TotalTokens:     20,
+				ImportedAtMs:    1,
+				UpdatedAtMs:     1,
+			}
+			setUsageEventFingerprintForTest(corrected)
+			if err := insertEvent(database.Conn(), corrected); err != nil {
+				t.Fatalf("insert corrected row: %v", err)
+			}
+
+			nearMatch := *corrected
+			nearMatch.EventID = "redacted-near-match"
+			nearMatch.DedupeKey = nearMatch.EventID
+			nearMatch.Provider = "legacy-provider"
+			nearMatch.ModelRaw = "gpt-5"
+			nearMatch.ModelNormalized = "gpt-5"
+			nearMatch.MessageID = ""
+			nearMatch.SessionID = tc.sessionID
+			nearMatch.TimestampMs = tc.timestampMs
+			nearMatch.LineNumber = tc.lineNumber
+			nearMatch.RawSHA256 = tc.rawSHA256
+			nearMatch.ImportedAtMs = 2
+			nearMatch.UpdatedAtMs = 2
+			if err := insertEvent(database.Conn(), &nearMatch); err != nil {
+				t.Fatalf("insert near-match row: %v", err)
+			}
+			if _, err := database.Conn().Exec(`
+				UPDATE usage_events
+				SET source_file = NULL, raw_usage_json = NULL
+				WHERE event_id = ?
+			`, nearMatch.EventID); err != nil {
+				t.Fatalf("redact near-match row: %v", err)
+			}
+
+			incoming := *corrected
+			incoming.ImportedAtMs = 3
+			incoming.UpdatedAtMs = 3
+			status, err := database.UpsertEvent(&incoming)
+			if err != nil || status != "skipped" {
+				t.Fatalf("near-match import status=%s err=%v", status, err)
+			}
+
+			var count int
+			if err := database.Conn().QueryRow(`SELECT COUNT(*) FROM usage_events`).Scan(&count); err != nil {
+				t.Fatalf("count near-match rows: %v", err)
+			}
+			if count != 2 {
+				t.Fatalf("redacted near-match was incorrectly reconciled: rows=%d", count)
+			}
+		})
+	}
+}
+
+func TestUpsertEventExactMatchRestoresRedactedCodexSourceEnvelope(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer database.Close()
+
+	event := &model.UsageEvent{
+		Channel:         "codex",
+		SourceAgent:     "codex",
+		SourceProduct:   "codex-cli",
+		Provider:        "openai",
+		ModelRaw:        "gpt-5-codex",
+		ModelNormalized: "gpt-5-codex",
+		TimestampMs:     1,
+		SessionID:       "session-exact-redacted-envelope",
+		MessageID:       "message-exact-redacted-envelope",
+		SourceFile:      "/synthetic/local/exact-redacted-envelope.jsonl",
+		LineNumber:      20,
+		RawSHA256:       "exact-redacted-envelope-hash",
+		RawUsageJSON:    `{"type":"event_msg","payload":{"type":"token_count"}}`,
+		InputTokens:     15,
+		OutputTokens:    5,
+		TotalTokens:     20,
+		ImportedAtMs:    1,
+		UpdatedAtMs:     1,
+	}
+	setUsageEventFingerprintForTest(event)
+	if err := insertEvent(database.Conn(), event); err != nil {
+		t.Fatalf("insert exact row: %v", err)
+	}
+	if _, err := database.Conn().Exec(`UPDATE usage_events SET source_file = NULL, raw_usage_json = NULL`); err != nil {
+		t.Fatalf("redact exact source envelope: %v", err)
+	}
+
+	incoming := *event
+	incoming.ImportedAtMs = 2
+	incoming.UpdatedAtMs = 2
+	status, err := database.UpsertEvent(&incoming)
+	if err != nil || status != "updated" {
+		t.Fatalf("restore exact source envelope status=%s err=%v", status, err)
+	}
+
+	var sourceFile, rawUsage string
+	if err := database.Conn().QueryRow(`
+		SELECT COALESCE(source_file, ''), COALESCE(raw_usage_json, '')
+		FROM usage_events
+	`).Scan(&sourceFile, &rawUsage); err != nil {
+		t.Fatalf("select restored source envelope: %v", err)
+	}
+	if sourceFile != incoming.SourceFile || rawUsage != incoming.RawUsageJSON {
+		t.Fatalf("exact source envelope was not restored source=%q raw=%q", sourceFile, rawUsage)
+	}
+
+	status, err = database.UpsertEvent(&incoming)
+	if err != nil || status != "skipped" {
+		t.Fatalf("second exact source envelope import should be idempotent, status=%s err=%v", status, err)
+	}
+}
+
 func TestUpsertEventReconciliationFoldsEquivalentSiblingAccountingMetadata(t *testing.T) {
 	database, err := Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
 	if err != nil {
@@ -536,6 +839,92 @@ func TestUpsertEventReconciliationFoldsEquivalentSiblingAccountingMetadata(t *te
 	status, err = database.UpsertEvent(&candidate)
 	if err != nil || status != "skipped" {
 		t.Fatalf("second accounting reconciliation should be idempotent, status=%s err=%v", status, err)
+	}
+}
+
+func TestUpsertEventReconciliationKeepsAccountingBundleCoherent(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer database.Close()
+
+	ttft := int64(300)
+	winner := &model.UsageEvent{
+		Channel:           "codex",
+		SourceAgent:       "codex",
+		SourceProduct:     "codex-cli",
+		Provider:          "openai",
+		ModelRaw:          "gpt-5-codex",
+		ModelNormalized:   "gpt-5-codex",
+		TimestampMs:       1,
+		SessionID:         "session-accounting-coherence",
+		MessageID:         "message-accounting-coherence",
+		SourceFile:        "/synthetic/accounting/coherence.jsonl",
+		LineNumber:        16,
+		RawSHA256:         "accounting-coherence-hash",
+		InputTokens:       40,
+		OutputTokens:      10,
+		TotalTokens:       50,
+		TTFTMs:            &ttft,
+		AccountingProfile: "ledger",
+		ImportedAtMs:      1,
+		UpdatedAtMs:       1,
+	}
+	setUsageEventFingerprintForTest(winner)
+	if err := insertEvent(database.Conn(), winner); err != nil {
+		t.Fatalf("insert accounting winner: %v", err)
+	}
+
+	sourceTotal := int64(50)
+	ledgerSibling := *winner
+	ledgerSibling.EventID = "ledger-accounting-sibling"
+	ledgerSibling.DedupeKey = ledgerSibling.EventID
+	ledgerSibling.SourceTotalTokens = &sourceTotal
+	ledgerSibling.AccountingProfile = "ledger"
+	ledgerSibling.ImportedAtMs = 2
+	ledgerSibling.UpdatedAtMs = 2
+	if err := insertEvent(database.Conn(), &ledgerSibling); err != nil {
+		t.Fatalf("insert ledger accounting sibling: %v", err)
+	}
+
+	rawInput := int64(40)
+	compatibleSibling := *winner
+	compatibleSibling.EventID = "compatible-accounting-sibling"
+	compatibleSibling.DedupeKey = compatibleSibling.EventID
+	compatibleSibling.RawInputTokens = &rawInput
+	compatibleSibling.TokenAccountingMethod = model.AccCodexLastTokenUsage
+	compatibleSibling.AccountingProfile = "ccusage_compatible"
+	compatibleSibling.ImportedAtMs = 3
+	compatibleSibling.UpdatedAtMs = 3
+	if err := insertEvent(database.Conn(), &compatibleSibling); err != nil {
+		t.Fatalf("insert compatible accounting sibling: %v", err)
+	}
+
+	incoming := *winner
+	incoming.InputTokens = 15
+	incoming.OutputTokens = 5
+	incoming.TotalTokens = 20
+	incoming.TTFTMs = nil
+	incoming.ImportedAtMs = 4
+	incoming.UpdatedAtMs = 4
+
+	status, err := database.UpsertEvent(&incoming)
+	if err != nil || status != "updated" {
+		t.Fatalf("reconcile accounting bundle status=%s err=%v", status, err)
+	}
+
+	var storedSourceTotal, storedRawInput sql.NullInt64
+	var accountingMethod, accountingProfile sql.NullString
+	if err := database.Conn().QueryRow(`
+		SELECT source_total_tokens, raw_input_tokens,
+			token_accounting_method, accounting_profile
+		FROM usage_events
+	`).Scan(&storedSourceTotal, &storedRawInput, &accountingMethod, &accountingProfile); err != nil {
+		t.Fatalf("select coherent accounting bundle: %v", err)
+	}
+	if !storedSourceTotal.Valid || storedSourceTotal.Int64 != sourceTotal || storedRawInput.Valid || accountingMethod.Valid || accountingProfile.String != "ledger" {
+		t.Fatalf("accounting bundle was mixed source_total=%v raw_input=%v method=%v profile=%v", storedSourceTotal, storedRawInput, accountingMethod, accountingProfile)
 	}
 }
 
@@ -620,6 +1009,152 @@ func TestUpsertEventReconciliationPreservesComplementarySourceMetadata(t *testin
 	status, err = database.UpsertEvent(&incoming)
 	if err != nil || status != "skipped" {
 		t.Fatalf("second source metadata reconciliation should be idempotent, status=%s err=%v", status, err)
+	}
+}
+
+func TestUpsertEventReconciliationKeepsSourceMetadataIndependentFromUsageWinner(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer database.Close()
+
+	stable := &model.UsageEvent{
+		EventID:            "stable-source-metadata",
+		DedupeKey:          "stable-source-metadata",
+		DedupeStrategy:     "session_token",
+		Channel:            "codex",
+		SourceAgent:        "codex",
+		SourceProduct:      "codex-cli",
+		ObservabilityLevel: "full",
+		Provider:           "legacy-provider",
+		ModelRaw:           "gpt-5",
+		ModelNormalized:    "gpt-5",
+		TimestampMs:        1,
+		SessionID:          "session-source-stability",
+		SessionPathID:      "stable/session/path",
+		TurnID:             "stable-turn",
+		ProjectPath:        "project-label",
+		SourceFile:         "/synthetic/source-stability.jsonl",
+		LineNumber:         17,
+		RawSHA256:          "source-stability-hash",
+		InputTokens:        15,
+		OutputTokens:       5,
+		TotalTokens:        20,
+		ImportedAtMs:       1,
+		UpdatedAtMs:        1,
+	}
+	if err := insertEvent(database.Conn(), stable); err != nil {
+		t.Fatalf("insert stable source metadata: %v", err)
+	}
+
+	ttft := int64(100)
+	richerUsage := *stable
+	richerUsage.EventID = "richer-usage-stale-metadata"
+	richerUsage.DedupeKey = richerUsage.EventID
+	richerUsage.SourceProduct = "stale-product"
+	richerUsage.ObservabilityLevel = "inferred"
+	richerUsage.SessionPathID = "stale/session/path"
+	richerUsage.TurnID = "stale-turn"
+	richerUsage.ProjectPath = "/synthetic/project"
+	richerUsage.InputTokens = 40
+	richerUsage.OutputTokens = 10
+	richerUsage.TotalTokens = 50
+	richerUsage.TTFTMs = &ttft
+	richerUsage.ImportedAtMs = 2
+	richerUsage.UpdatedAtMs = 2
+	if err := insertEvent(database.Conn(), &richerUsage); err != nil {
+		t.Fatalf("insert richer usage with stale metadata: %v", err)
+	}
+
+	incoming := *stable
+	incoming.Provider = "openai"
+	incoming.ModelRaw = "gpt-5-codex"
+	incoming.ModelNormalized = "gpt-5-codex"
+	incoming.SessionPathID = "incoming/session/path"
+	incoming.TurnID = "incoming-turn"
+	incoming.ProjectPath = ""
+	incoming.ImportedAtMs = 3
+	incoming.UpdatedAtMs = 3
+	setUsageEventFingerprintForTest(&incoming)
+
+	status, err := database.UpsertEvent(&incoming)
+	if err != nil || status != "updated" {
+		t.Fatalf("reconcile stable source metadata status=%s err=%v", status, err)
+	}
+
+	var sourceProduct, observability, sessionPathID, turnID, projectPath string
+	var total int64
+	if err := database.Conn().QueryRow(`
+		SELECT source_product, observability_level, session_path_id, turn_id,
+			project_path, total_tokens
+		FROM usage_events
+	`).Scan(&sourceProduct, &observability, &sessionPathID, &turnID, &projectPath, &total); err != nil {
+		t.Fatalf("select stable source metadata: %v", err)
+	}
+	if sourceProduct != stable.SourceProduct || observability != stable.ObservabilityLevel || sessionPathID != stable.SessionPathID || turnID != stable.TurnID || projectPath != richerUsage.ProjectPath || total != richerUsage.TotalTokens {
+		t.Fatalf("source metadata followed usage winner product=%q observability=%q session_path=%q turn=%q project=%q total=%d", sourceProduct, observability, sessionPathID, turnID, projectPath, total)
+	}
+}
+
+func TestUpsertEventReconciliationRefreshesCurrentRawEnvelope(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer database.Close()
+
+	ttft := int64(100)
+	stored := &model.UsageEvent{
+		Channel:         "codex",
+		SourceAgent:     "codex",
+		SourceProduct:   "codex-cli",
+		Provider:        "openai",
+		ModelRaw:        "gpt-5-codex",
+		ModelNormalized: "gpt-5-codex",
+		TimestampMs:     1,
+		SessionID:       "session-raw-refresh",
+		SourceFile:      "/synthetic/raw-refresh.jsonl",
+		LineNumber:      18,
+		RawSHA256:       "raw-refresh-hash",
+		InputTokens:     40,
+		OutputTokens:    10,
+		TotalTokens:     50,
+		TTFTMs:          &ttft,
+		ImportedAtMs:    1,
+		UpdatedAtMs:     1,
+	}
+	setUsageEventFingerprintForTest(stored)
+	if err := insertEvent(database.Conn(), stored); err != nil {
+		t.Fatalf("insert stored canonical row: %v", err)
+	}
+
+	incoming := *stored
+	incoming.InputTokens = 15
+	incoming.OutputTokens = 5
+	incoming.TotalTokens = 20
+	incoming.TTFTMs = nil
+	incoming.RawUsageJSON = `{"type":"event_msg","payload":{"type":"token_count"}}`
+	incoming.ImportedAtMs = 2
+	incoming.UpdatedAtMs = 2
+	setUsageEventFingerprintForTest(&incoming)
+
+	status, err := database.UpsertEvent(&incoming)
+	if err != nil || status != "updated" {
+		t.Fatalf("refresh raw envelope status=%s err=%v", status, err)
+	}
+
+	var rawUsage string
+	if err := database.Conn().QueryRow(`SELECT COALESCE(raw_usage_json, '') FROM usage_events`).Scan(&rawUsage); err != nil {
+		t.Fatalf("select refreshed raw envelope: %v", err)
+	}
+	if rawUsage != incoming.RawUsageJSON {
+		t.Fatalf("current raw envelope was not persisted: %q", rawUsage)
+	}
+
+	status, err = database.UpsertEvent(&incoming)
+	if err != nil || status != "skipped" {
+		t.Fatalf("second raw envelope reconciliation should be idempotent, status=%s err=%v", status, err)
 	}
 }
 

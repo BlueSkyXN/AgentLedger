@@ -100,7 +100,7 @@ _foreign_keys=ON
 3. `raw_hash`: canonical raw JSON
 4. `fallback`: source file + line number + raw sha256
 
-这些策略用于让同一事件在重复导入或 v2 数据库合并时保持稳定主键。对于一行只产生一个 usage event 的 Codex 日志，`import` 还会用 `source_file + line_number + raw_sha256` 识别同一原始 JSONL 行，并把当前 `event_id` 精确匹配行与同来源 sibling 联合收敛；因此 merge 进来的脱敏行或不同路径行也能在后续本地 import 时参与去重。收敛先选择最完整的用量 bundle，再从 token 完全相同的 sibling 补齐缺失 accounting metadata，并按原有稳定性和路径具体度规则合并全部候选中的互补 source metadata，最后按实际落库字段重新计算 fingerprint。其他 adapter 可能从一行拆出多个合法事件，不使用这一兼容身份。
+这些策略用于让同一事件在重复导入或 v2 数据库合并时保持稳定主键。对于一行只产生一个 usage event 的 Codex 日志，`import` 还会用 `source_file + line_number + raw_sha256` 识别同一原始 JSONL 行，并把当前 `event_id` 精确匹配行与同来源 sibling 联合收敛；存在 exact match 时，默认脱敏导出中 `source_file = NULL` 的候选会额外用 session、timestamp、line 和 raw hash 受限匹配，因此无论脱敏 sibling 在本地 canonical row 前后 merge，都能在后续本地 import 时参与去重。收敛先选择最完整的用量 bundle，再从 token 完全相同且与 winner 已有 accounting 字段相容的单一 donor 补齐缺失 accounting metadata；source metadata 使用最早历史候选作为稳定基准，再按 missing 和路径具体度规则吸收全部候选中的互补字段。最终记录保留当前本地 source 和 raw envelope，并按实际落库字段重新计算 fingerprint。其他 adapter 可能从一行拆出多个合法事件，不使用这一兼容身份。
 
 ## Token 和 timing
 
