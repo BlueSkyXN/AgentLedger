@@ -147,12 +147,17 @@ func TestOpenReadOnlyDoesNotRunSchemaMaintenance(t *testing.T) {
 		t.Fatalf("raw close: %v", err)
 	}
 
-	reader, err := OpenReadOnly(path)
-	if err != nil {
-		t.Fatalf("open read-only: %v", err)
-	}
-	if err := reader.Close(); err != nil {
-		t.Fatalf("close read-only: %v", err)
+	for name, opener := range map[string]func(string) (*Database, error){
+		"sqlite": OpenReadOnly,
+		"v2":     OpenReadOnlyV2,
+	} {
+		reader, err := opener(path)
+		if err != nil {
+			t.Fatalf("open %s read-only: %v", name, err)
+		}
+		if err := reader.Close(); err != nil {
+			t.Fatalf("close %s read-only: %v", name, err)
+		}
 	}
 
 	conn, err = sql.Open("sqlite3", path)
@@ -188,7 +193,7 @@ func TestOpenReadOnlyRejectsMissingDatabaseWithoutCreatingPath(t *testing.T) {
 	}
 }
 
-func TestOpenReadOnlyRejectsIncompleteV2WithoutRepairingIt(t *testing.T) {
+func TestOpenReadOnlyV2RejectsIncompleteSchemaWithoutRepairingIt(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "agent-ledger.db")
 	database, err := Open(path)
 	if err != nil {
@@ -210,6 +215,14 @@ func TestOpenReadOnlyRejectsIncompleteV2WithoutRepairingIt(t *testing.T) {
 	}
 
 	reader, err := OpenReadOnly(path)
+	if err != nil {
+		t.Fatalf("open physical read-only: %v", err)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatalf("close physical read-only: %v", err)
+	}
+
+	reader, err = OpenReadOnlyV2(path)
 	if err == nil {
 		_ = reader.Close()
 		t.Fatal("expected incomplete v2 schema error")
@@ -243,7 +256,46 @@ func TestOpenReadOnlyRejectsIncompleteV2WithoutRepairingIt(t *testing.T) {
 		t.Fatalf("close rows: %v", err)
 	}
 	if turnIDColumns != 0 {
-		t.Fatal("read-only open repaired the missing compatibility column")
+		t.Fatal("v2 read-only open repaired the missing compatibility column")
+	}
+}
+
+func TestOpenReadOnlyV2RejectsMissingRequiredTable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agent-ledger.db")
+	database, err := Open(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	conn, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatalf("raw open: %v", err)
+	}
+	if _, err := conn.Exec(`DROP TABLE import_runs`); err != nil {
+		t.Fatalf("drop table: %v", err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatalf("raw close: %v", err)
+	}
+
+	reader, err := OpenReadOnly(path)
+	if err != nil {
+		t.Fatalf("open physical read-only: %v", err)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatalf("close physical read-only: %v", err)
+	}
+
+	reader, err = OpenReadOnlyV2(path)
+	if err == nil {
+		_ = reader.Close()
+		t.Fatal("expected missing table error")
+	}
+	if !errors.Is(err, ErrIncompatibleSchema) {
+		t.Fatalf("expected ErrIncompatibleSchema, got %v", err)
 	}
 }
 
@@ -386,11 +438,26 @@ func TestOpenRejectsSchemaV1(t *testing.T) {
 	}
 
 	database, err = OpenReadOnly(path)
+	if err != nil {
+		t.Fatalf("open physical read-only v1: %v", err)
+	}
+	var integrity string
+	if err := database.Conn().QueryRow(`PRAGMA integrity_check`).Scan(&integrity); err != nil {
+		t.Fatalf("v1 integrity check: %v", err)
+	}
+	if integrity != "ok" {
+		t.Fatalf("v1 integrity = %q", integrity)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("close physical read-only v1: %v", err)
+	}
+
+	database, err = OpenReadOnlyV2(path)
 	if err == nil {
 		_ = database.Close()
-		t.Fatal("expected read-only incompatible schema error")
+		t.Fatal("expected v2 read-only incompatible schema error")
 	}
 	if !errors.Is(err, ErrIncompatibleSchema) {
-		t.Fatalf("expected read-only ErrIncompatibleSchema, got %v", err)
+		t.Fatalf("expected v2 read-only ErrIncompatibleSchema, got %v", err)
 	}
 }

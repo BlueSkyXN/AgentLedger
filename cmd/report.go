@@ -90,7 +90,7 @@ func init() {
 
 func runReport(reportType string) func(cmd *cobra.Command, args []string) error {
 	return func(cmd *cobra.Command, args []string) error {
-		cfg, database, err := openReadOnlyConfiguredDatabase()
+		cfg, database, err := openReadOnlyV2ConfiguredDatabase()
 		if err != nil {
 			return err
 		}

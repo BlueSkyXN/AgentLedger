@@ -159,6 +159,8 @@ agent-ledger doctor codex
 
 输出 Codex 本地日志诊断：raw `token_count` / `task_complete` 覆盖、当前 `duplicate_policy`、ledger 与 `ccusage_compatible` 两种口径的事件数和 token 差异，以及模型分布。
 
+`doctor` 和 `doctor codex` 不创建配置或数据库目录；配置不存在时使用内存默认值完成诊断。
+
 ## `verify`
 
 ```bash
@@ -170,6 +172,8 @@ agent-ledger verify
 ```sql
 PRAGMA integrity_check;
 ```
+
+`verify` 使用基础只读 SQLite 连接，不要求数据库已经具备当前完整 v2 schema，因此可在 additive migration 前检查旧版或待升级数据库。它不会初始化、升级或替换数据库。
 
 ## `vacuum`
 

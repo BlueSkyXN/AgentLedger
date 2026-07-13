@@ -24,9 +24,8 @@ var verifyCmd = &cobra.Command{
 
 		if result == "ok" {
 			fmt.Println("✓ Database integrity check passed")
-		} else {
-			fmt.Printf("✗ Integrity issues: %s\n", result)
+			return nil
 		}
-		return nil
+		return fmt.Errorf("database integrity check failed: %s", result)
 	},
 }

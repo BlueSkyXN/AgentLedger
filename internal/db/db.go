@@ -50,7 +50,7 @@ func Open(path string) (*Database, error) {
 	return db, nil
 }
 
-// OpenReadOnly opens an existing current-v2 database without creating or migrating it.
+// OpenReadOnly opens an existing SQLite database without creating or migrating it.
 func OpenReadOnly(path string) (*Database, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -79,8 +79,21 @@ func OpenReadOnly(path string) (*Database, error) {
 	conn.SetMaxOpenConns(1)
 
 	db := &Database{conn: conn, path: path}
-	if err := db.validateReadOnlySchema(); err != nil {
+	if err := conn.Ping(); err != nil {
 		_ = conn.Close()
+		return nil, fmt.Errorf("failed to open database: %w", err)
+	}
+	return db, nil
+}
+
+// OpenReadOnlyV2 opens an existing current-v2 database without creating or migrating it.
+func OpenReadOnlyV2(path string) (*Database, error) {
+	db, err := OpenReadOnly(path)
+	if err != nil {
+		return nil, err
+	}
+	if err := db.validateReadOnlySchema(); err != nil {
+		_ = db.Close()
 		return nil, fmt.Errorf("failed to validate database: %w", err)
 	}
 	return db, nil

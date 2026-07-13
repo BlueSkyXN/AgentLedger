@@ -10,7 +10,7 @@ var statusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show database statistics",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		cfg, database, err := openReadOnlyConfiguredDatabase()
+		cfg, database, err := openReadOnlyV2ConfiguredDatabase()
 		if err != nil {
 			return err
 		}

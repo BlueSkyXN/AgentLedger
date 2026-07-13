@@ -46,15 +46,17 @@ agent-ledger doctor
 
 用途：检查配置路径、数据库是否存在，以及每个启用 adapter 能发现多少源文件。该命令会扫描 configured paths，但不会导入事件。
 
+`doctor` 和 `doctor codex` 使用现有配置或内存默认值；配置不存在时不会创建 `config.toml` 或数据库目录。
+
 ### `verify`
 
 ```bash
 agent-ledger verify
 ```
 
-用途：运行 SQLite `PRAGMA integrity_check`。适合在 merge、备份、迁移前后执行。
+用途：运行 SQLite `PRAGMA integrity_check`。适合在 merge、备份、迁移前后执行，也可以检查 schema v1 或缺少 additive compatibility column 的待升级数据库。
 
-`verify` 使用真正的只读连接，不执行 schema 初始化、compatibility UPDATE 或索引创建。
+`verify` 使用基础只读 SQLite 连接，不执行 AgentLedger schema validation、schema 初始化、compatibility UPDATE 或索引创建。数据库文件损坏或不是 SQLite 时会返回错误，但不会替换原文件。
 
 ### `vacuum`
 
