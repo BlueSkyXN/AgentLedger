@@ -97,10 +97,10 @@ _foreign_keys=ON
 
 1. `message_id`: `agent + provider + message_id`
 2. `session_token`: `agent + provider + session_id + model + timestamp + canonical token fields + optional source_total_tokens`
-3. `raw_hash`: canonical raw JSON
+3. `raw_hash`: agent + provider + canonical raw JSON
 4. `fallback`: source file + line number + raw sha256
 
-这些策略用于让同一事件在重复导入或 v2 数据库合并时保持稳定主键。对于一行只产生一个 usage event 的 Codex 日志，`import` 还会用 `source_file + line_number + raw_sha256` 识别同一原始 JSONL 行，并把当前 `event_id` 精确匹配行与同来源 sibling 联合收敛；存在 exact match 时，默认脱敏导出中 `source_file = NULL` 的候选会额外用 session、timestamp、line 和 raw hash 受限匹配，因此无论脱敏 sibling 在本地 canonical row 前后 merge，都能在后续本地 import 时参与去重。exact-row 查询会在同一事务快照中同时比较 raw envelope，并用同一组受限 identity 检查是否真的存在脱敏候选；只有该快照确认无匹配候选时才跳过额外的 redacted lookup，不缓存可能被其他数据库连接或进程写旧的状态。收敛先选择最完整的用量 bundle，再从 token 完全相同且与 winner 已有 accounting 字段相容的单一 donor 补齐缺失 accounting metadata；source metadata 使用最早历史候选作为稳定基准，再按 missing 和路径具体度规则吸收全部候选中的互补字段。最终记录保留当前本地 source 和 raw envelope，并按实际落库字段重新计算 fingerprint。其他 adapter 可能从一行拆出多个合法事件，不使用这一兼容身份。
+这些策略用于让同一事件在重复导入或 v2 数据库合并时保持稳定主键。对于一行只产生一个 usage event 的 Codex 日志，`import` 还会用 `source_file + line_number + raw_sha256` 识别同一原始 JSONL 行，并把当前 `event_id` 精确匹配行与同来源 sibling 联合收敛；存在 exact match 时，默认脱敏导出中 `source_file = NULL` 的候选会额外用 session、timestamp、line 和 raw hash 受限匹配，因此无论脱敏 sibling 在本地 canonical row 前后 merge，都能在后续本地 import 时参与去重。exact-row 查询会在同一事务快照中同时比较 raw envelope，并用同一组受限 identity 检查是否真的存在脱敏候选；只有该快照确认无匹配候选时才跳过额外的 redacted lookup，不缓存可能被其他数据库连接或进程写旧的状态。对于当前 source identity 可证明一致的 exact row，provider 或 model classification bundle 即使没有改变 fingerprint，也会触发同一 canonical reconciliation；当前明确解析出的 Codex classification 可以修正历史值，stored `openai` 和 explicit model 优先于 legacy/fallback/`unknown`。weak incoming 如果遇到多个冲突 explicit model，会保留全部 sibling 并等待后续明确 model，而不是使用 `imported_at_ms` / `updated_at_ms` 猜测赢家后删除数据。没有 exact event anchor、也不匹配当前非空 `source_file` 的 changed-fingerprint 跨路径记录不会仅凭弱 identity 主动折叠。收敛先选择最完整的用量 bundle，再从 token 完全相同且与 winner 已有 accounting 字段相容的单一 donor 补齐缺失 accounting metadata；source metadata 使用最早历史候选作为稳定基准，再按 missing 和路径具体度规则吸收全部候选中的互补字段。最终记录保留当前本地 source 和 raw envelope，并按实际落库字段重新计算 fingerprint。其他 adapter 可能从一行拆出多个合法事件，不使用这一兼容身份。
 
 ## Token 和 timing
 

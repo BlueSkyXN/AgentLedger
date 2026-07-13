@@ -81,6 +81,9 @@ func (d *Database) UpsertEvent(ev *model.UsageEvent) (string, error) {
 	if !exactMatch {
 		existing = nil
 	}
+	incoming := ev
+	var protectExactClassification bool
+	ev, protectExactClassification = preserveStrongerExactCodexClassification(existing, ev)
 
 	sourceMatches, err := selectEventsForComparisonBySourceIdentity(tx, ev)
 	if err != nil {
@@ -96,9 +99,10 @@ func (d *Database) UpsertEvent(ev *model.UsageEvent) (string, error) {
 		}
 	}
 	refreshSourceEnvelope := codexSourceEnvelopeNeedsRefresh(existing, ev, existingRawUsageMatches)
-	if hasDifferentEventID(sourceMatches, ev.EventID) || refreshSourceEnvelope {
+	refreshClassification := codexClassificationNeedsReconciliation(existing, ev, sourceMatches)
+	if hasDifferentEventID(sourceMatches, ev.EventID) || refreshSourceEnvelope || refreshClassification || protectExactClassification {
 		var status string
-		status, err = reconcileSourceIdentityMatches(tx, ev, existing, sourceMatches)
+		status, err = reconcileSourceIdentityMatches(tx, incoming, existing, sourceMatches)
 		if err != nil {
 			return "", err
 		}
@@ -107,7 +111,6 @@ func (d *Database) UpsertEvent(ev *model.UsageEvent) (string, error) {
 		}
 		return status, nil
 	}
-
 	if existing == nil {
 		if err = insertEvent(tx, ev); err != nil {
 			return "", err
@@ -263,10 +266,13 @@ func reconcileSourceIdentityMatches(tx *sql.Tx, incoming, exact *model.UsageEven
 		stored = appendUniqueEvent(stored, match)
 	}
 	stored = appendUniqueEvent(stored, exact)
+	if hasConflictingExplicitCodexModels(incoming, stored) {
+		return "skipped", nil
+	}
 
 	var canonical *model.UsageEvent
 	for {
-		canonical = buildCanonicalReconciledEvent(incoming, stored)
+		canonical = buildCanonicalReconciledEvent(incoming, exact, stored)
 		canonicalMatch, err := selectEventForComparison(tx, canonical.EventID)
 		if err == sql.ErrNoRows {
 			break
@@ -278,6 +284,9 @@ func reconcileSourceIdentityMatches(tx *sql.Tx, incoming, exact *model.UsageEven
 			break
 		}
 		stored = append(stored, canonicalMatch)
+		if hasConflictingExplicitCodexModels(incoming, stored) {
+			return "skipped", nil
+		}
 	}
 
 	if len(stored) == 1 && sameEventContentExceptRawUsage(canonical, stored[0]) {
@@ -317,7 +326,7 @@ func containsEventID(events []*model.UsageEvent, eventID string) bool {
 	return false
 }
 
-func buildCanonicalReconciledEvent(incoming *model.UsageEvent, stored []*model.UsageEvent) *model.UsageEvent {
+func buildCanonicalReconciledEvent(incoming, exact *model.UsageEvent, stored []*model.UsageEvent) *model.UsageEvent {
 	usageWinner := *incoming
 	for _, candidate := range stored {
 		if isMoreComplete(candidate, &usageWinner) {
@@ -331,6 +340,7 @@ func buildCanonicalReconciledEvent(incoming *model.UsageEvent, stored []*model.U
 
 	canonical := *incoming
 	preserveReconciledSourceMetadata(&canonical, stored)
+	preserveStrongerCodexClassification(&canonical, incoming, exact, stored)
 	applyUsageWinner(&canonical, &usageWinner)
 	for _, candidate := range stored {
 		if canonical.ImportedAtMs <= 0 || (candidate.ImportedAtMs > 0 && candidate.ImportedAtMs < canonical.ImportedAtMs) {
@@ -545,6 +555,158 @@ func codexSourceEnvelopeNeedsRefresh(existing, incoming *model.UsageEvent, rawUs
 		return false
 	}
 	return !rawUsageMatches
+}
+
+func codexClassificationNeedsReconciliation(existing, incoming *model.UsageEvent, sourceMatches []*model.UsageEvent) bool {
+	if existing == nil || incoming.Channel != "codex" || !containsEventID(sourceMatches, existing.EventID) {
+		return false
+	}
+	classificationChanged := existing.Provider != incoming.Provider ||
+		existing.ModelRaw != incoming.ModelRaw ||
+		existing.ModelNormalized != incoming.ModelNormalized ||
+		existing.ModelIsFallback != incoming.ModelIsFallback
+	if !classificationChanged {
+		return false
+	}
+	recomputedEventID, strategy := computeEventFingerprint(incoming)
+	return incoming.EventID == recomputedEventID &&
+		incoming.DedupeKey == recomputedEventID &&
+		incoming.DedupeStrategy == string(strategy)
+}
+
+// preserveStrongerCodexClassification lets current explicit parser output win,
+// while retaining stored explicit values over fallback or unknown input.
+func preserveStrongerCodexClassification(target, incoming, exact *model.UsageEvent, stored []*model.UsageEvent) {
+	target.Provider = selectCodexProvider(incoming, exact, stored)
+	modelSource := selectCodexModel(incoming, exact, stored)
+	target.ModelRaw = modelSource.ModelRaw
+	target.ModelNormalized = modelSource.ModelNormalized
+	target.ModelIsFallback = modelSource.ModelIsFallback
+}
+
+func selectCodexProvider(incoming, exact *model.UsageEvent, stored []*model.UsageEvent) string {
+	if incoming.Provider == "openai" {
+		return incoming.Provider
+	}
+	if exact != nil && exact.Provider == "openai" {
+		return exact.Provider
+	}
+	for _, candidate := range stored {
+		if candidate.Provider == "openai" {
+			return candidate.Provider
+		}
+	}
+	if exact != nil && isKnownClassificationValue(exact.Provider) {
+		return exact.Provider
+	}
+	if candidate := selectBestStoredCodexClassification(exact, stored, func(candidate *model.UsageEvent) bool {
+		return isKnownClassificationValue(candidate.Provider)
+	}); candidate != nil {
+		return candidate.Provider
+	}
+	return incoming.Provider
+}
+
+func selectCodexModel(incoming, exact *model.UsageEvent, stored []*model.UsageEvent) *model.UsageEvent {
+	if hasCompleteExplicitCodexModel(incoming) {
+		return incoming
+	}
+	if candidate := selectBestStoredCodexClassification(exact, stored, hasExplicitCodexModel); candidate != nil {
+		return candidate
+	}
+	if hasExplicitCodexModel(incoming) {
+		return incoming
+	}
+	if candidate := selectBestStoredCodexClassification(exact, stored, hasKnownCodexModel); candidate != nil {
+		return candidate
+	}
+	return incoming
+}
+
+func selectBestStoredCodexClassification(exact *model.UsageEvent, stored []*model.UsageEvent, eligible func(*model.UsageEvent) bool) *model.UsageEvent {
+	if exact != nil && eligible(exact) {
+		return exact
+	}
+	var best *model.UsageEvent
+	for _, candidate := range stored {
+		if !eligible(candidate) {
+			continue
+		}
+		if best == nil || candidate.EventID < best.EventID {
+			best = candidate
+		}
+	}
+	return best
+}
+
+func hasConflictingExplicitCodexModels(incoming *model.UsageEvent, stored []*model.UsageEvent) bool {
+	if hasCompleteExplicitCodexModel(incoming) {
+		return false
+	}
+	var modelRaw, modelNormalized string
+	found := false
+	for _, candidate := range stored {
+		if !hasExplicitCodexModel(candidate) {
+			continue
+		}
+		candidateRaw := strings.TrimSpace(candidate.ModelRaw)
+		candidateNormalized := strings.TrimSpace(candidate.ModelNormalized)
+		if !found {
+			modelRaw = candidateRaw
+			modelNormalized = candidateNormalized
+			found = true
+			continue
+		}
+		if candidateRaw != modelRaw || candidateNormalized != modelNormalized {
+			return true
+		}
+	}
+	return false
+}
+
+func preserveStrongerExactCodexClassification(existing, incoming *model.UsageEvent) (*model.UsageEvent, bool) {
+	if existing == nil || incoming.Channel != "codex" ||
+		(incoming.Provider == "openai" && hasCompleteExplicitCodexModel(incoming)) {
+		return incoming, false
+	}
+	incomingEventID, incomingStrategy := computeEventFingerprint(incoming)
+	if incoming.EventID != incomingEventID ||
+		incoming.DedupeKey != incomingEventID ||
+		incoming.DedupeStrategy != string(incomingStrategy) {
+		return incoming, false
+	}
+	candidate := *incoming
+	preserveStrongerCodexClassification(&candidate, incoming, existing, []*model.UsageEvent{existing})
+	if candidate.Provider == incoming.Provider &&
+		candidate.ModelRaw == incoming.ModelRaw &&
+		candidate.ModelNormalized == incoming.ModelNormalized &&
+		candidate.ModelIsFallback == incoming.ModelIsFallback {
+		return incoming, false
+	}
+	recomputedEventID, strategy := computeEventFingerprint(&candidate)
+	needsReconciliation := incoming.EventID != recomputedEventID ||
+		incoming.DedupeKey != recomputedEventID ||
+		incoming.DedupeStrategy != string(strategy)
+	return &candidate, needsReconciliation
+}
+
+func hasCompleteExplicitCodexModel(ev *model.UsageEvent) bool {
+	return ev != nil && !ev.ModelIsFallback &&
+		isKnownClassificationValue(ev.ModelRaw) &&
+		isKnownClassificationValue(ev.ModelNormalized)
+}
+
+func hasExplicitCodexModel(ev *model.UsageEvent) bool {
+	return ev != nil && !ev.ModelIsFallback && hasKnownCodexModel(ev)
+}
+
+func hasKnownCodexModel(ev *model.UsageEvent) bool {
+	return ev != nil && (isKnownClassificationValue(ev.ModelRaw) || isKnownClassificationValue(ev.ModelNormalized))
+}
+
+func isKnownClassificationValue(value string) bool {
+	value = strings.TrimSpace(value)
+	return value != "" && !strings.EqualFold(value, "unknown")
 }
 
 type eventComparisonScanner interface {

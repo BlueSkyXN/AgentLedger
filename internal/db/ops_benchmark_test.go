@@ -8,14 +8,18 @@ import (
 )
 
 func BenchmarkRepeatedExactCodexUpsert(b *testing.B) {
-	benchmarkRepeatedExactCodexUpsert(b, false)
+	benchmarkRepeatedExactCodexUpsert(b, false, false)
 }
 
 func BenchmarkRepeatedExactCodexUpsertWithUnrelatedRedactedRow(b *testing.B) {
-	benchmarkRepeatedExactCodexUpsert(b, true)
+	benchmarkRepeatedExactCodexUpsert(b, true, false)
 }
 
-func benchmarkRepeatedExactCodexUpsert(b *testing.B, seedRedactedRow bool) {
+func BenchmarkRepeatedExactCodexUpsertWithFallbackMismatch(b *testing.B) {
+	benchmarkRepeatedExactCodexUpsert(b, false, true)
+}
+
+func benchmarkRepeatedExactCodexUpsert(b *testing.B, seedRedactedRow, useFallbackMismatch bool) {
 	database, err := Open(filepath.Join(b.TempDir(), "agent-ledger.db"))
 	if err != nil {
 		b.Fatalf("open: %v", err)
@@ -63,11 +67,23 @@ func benchmarkRepeatedExactCodexUpsert(b *testing.B, seedRedactedRow bool) {
 			b.Fatalf("redact unrelated row: %v", err)
 		}
 	}
+	repeatedEvent := event
+	if useFallbackMismatch {
+		fallback := *event
+		fallback.ModelRaw = "gpt-5"
+		fallback.ModelNormalized = "gpt-5"
+		fallback.ModelIsFallback = true
+		setUsageEventFingerprintForTest(&fallback)
+		if fallback.EventID != event.EventID {
+			b.Fatalf("fallback mismatch changed exact fingerprint: %s != %s", fallback.EventID, event.EventID)
+		}
+		repeatedEvent = &fallback
+	}
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if status, err := database.UpsertEvent(event); err != nil || status != "skipped" {
+		if status, err := database.UpsertEvent(repeatedEvent); err != nil || status != "skipped" {
 			b.Fatalf("repeated upsert status=%s err=%v", status, err)
 		}
 	}
