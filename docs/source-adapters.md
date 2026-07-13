@@ -27,6 +27,8 @@ Claude Code 日志会把同一次 assistant message 以多条流式行写出。A
 
 Codex 默认只扫描 `~/.codex/sessions/**/*.jsonl`，与 ccusage 的默认范围保持一致；当配置路径写成 Codex home 根目录（例如 `~/.codex`）时，adapter 会优先收敛到其 `sessions` 子目录，避免把 history、临时文件或其他 JSONL 混入 usage。`~/.codex/archived_sessions` 不会自动导入。需要统计归档历史时，可以在 config 的 `agents.codex.paths` 中显式加入归档目录，或用符号链接把归档文件纳入扫描路径。
 
+Codex 的 provider 归一为 `openai` 做合并统计，不按 session 级 `model_provider` 拆账；`model_provider` 可能反映本机路由或兼容网关，不作为事件身份或默认报表拆分维度。
+
 Codex 的 `total_token_usage` 是 session 级 cumulative counter，是最权威的用量来源。两个观测事实决定了计量口径：(1) 每次真实调用后，日志通常会**冗余重发**一条内容相同的 `token_count`（累计 total 不变）；(2) `last_token_usage` 只记录最后一次 API 调用，当同一区间内发生多次调用时会**漏记**中间的量。
 
 默认 `duplicate_policy = "ledger"` 据此采用最准口径：以 `total_token_usage` 做 per-session **望远镜 delta**——累计不变时 delta 为 0、自动跳过冗余重发；累计回落（compact 压缩上下文导致 counter reset）时整段计入、不丢量；`last_token_usage` 缺失（无累计）的旧记录才回退为单条直接计入。本机 1151 个 session 实测，该口径与「逐 session 累计值金标准」一致到 99.96%。

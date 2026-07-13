@@ -92,6 +92,7 @@ CREATE INDEX IF NOT EXISTS idx_usage_output_tps ON usage_events(output_tps);
 CREATE INDEX IF NOT EXISTS idx_usage_total_duration ON usage_events(total_duration_ms);
 CREATE INDEX IF NOT EXISTS idx_usage_channel_time ON usage_events(channel, timestamp_ms);
 CREATE INDEX IF NOT EXISTS idx_usage_model_time ON usage_events(model_normalized, timestamp_ms);
+CREATE INDEX IF NOT EXISTS idx_usage_source_identity ON usage_events(source_file, line_number, raw_sha256, channel, imported_at_ms, event_id);
 `
 
 func (d *Database) initSchema() error {

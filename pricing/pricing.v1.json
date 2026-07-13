@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "id": "agentledger-pricing-2026-06-25",
+  "id": "agentledger-pricing-2026-07-01",
   "currency": "USD",
   "unit": "usd_per_1m_tokens",
-  "checked_at": "2026-06-25",
+  "checked_at": "2026-07-01",
   "defaults": {
     "unknown_model_policy": "missing",
     "reasoning_policy": "included_in_output",
@@ -18,8 +18,8 @@
     },
     {
       "provider": "user_supplied",
-      "name": "User supplied model list prices for Claude Fable, Kimi K2.5, and Doubao Seed",
-      "checked_at": "2026-06-25"
+      "name": "User supplied model list prices for Claude Fable, Kimi K2.5, Doubao Seed, and Grok Composer",
+      "checked_at": "2026-07-01"
     }
   ],
   "rules": [
@@ -253,6 +253,25 @@
       "confidence": "estimated",
       "notes": "User supplied CNY prices divided by 6.8: input 9.6 CNY, cache hit 1.92 CNY, output 48 CNY per 1M tokens.",
       "model_id": "doubao-seed-2.0-pro"
+    },
+    {
+      "id": "grok-composer-2.5-fast",
+      "model_patterns": [
+        "grok-composer-2.5-fast",
+        "grok-composer-2.5-fast-*"
+      ],
+      "priority": 10,
+      "basis": "user_provided_list_price",
+      "rates": {
+        "input": 3.0,
+        "cached_input": 0.5,
+        "output": 15.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "User supplied input 3.00, cached input 0.50, output 15.00 USD per 1M tokens.",
+      "model_id": "grok-composer-2.5-fast"
     },
     {
       "id": "gemini-3.1-pro",

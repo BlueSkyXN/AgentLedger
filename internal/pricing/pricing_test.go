@@ -65,6 +65,17 @@ func TestDefaultProfilePricesUserSuppliedModels(t *testing.T) {
 			wantRuleID:   "doubao-seed-2.0-pro",
 			wantMicroUSD: 744,
 		},
+		{
+			name: "grok composer uses user supplied cached input price",
+			event: Event{
+				Model:           "grok-composer-2.5-fast",
+				InputTokens:     1_000_000,
+				OutputTokens:    1_000_000,
+				CacheReadTokens: 1_000_000,
+			},
+			wantRuleID:   "grok-composer-2.5-fast",
+			wantMicroUSD: 18_500_000,
+		},
 	}
 
 	for _, tt := range tests {
