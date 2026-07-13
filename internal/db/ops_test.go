@@ -539,6 +539,90 @@ func TestUpsertEventReconciliationFoldsEquivalentSiblingAccountingMetadata(t *te
 	}
 }
 
+func TestUpsertEventReconciliationPreservesComplementarySourceMetadata(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer database.Close()
+
+	ttft := int64(100)
+	usageWinner := &model.UsageEvent{
+		EventID:         "legacy-usage-winner",
+		DedupeKey:       "legacy-usage-winner",
+		DedupeStrategy:  "session_token",
+		Channel:         "codex",
+		SourceAgent:     "codex",
+		SourceProduct:   "codex-cli",
+		Provider:        "legacy-provider",
+		ModelRaw:        "gpt-5",
+		ModelNormalized: "gpt-5",
+		TimestampMs:     1,
+		SessionID:       "session-source-metadata",
+		SessionPathID:   "2026/07/13/rollout-source-metadata",
+		SourceFile:      "/synthetic/source-metadata.jsonl",
+		LineNumber:      14,
+		RawSHA256:       "source-metadata-hash",
+		InputTokens:     40,
+		OutputTokens:    10,
+		TotalTokens:     50,
+		TTFTMs:          &ttft,
+		ImportedAtMs:    1,
+		UpdatedAtMs:     1,
+	}
+	if err := insertEvent(database.Conn(), usageWinner); err != nil {
+		t.Fatalf("insert usage winner: %v", err)
+	}
+
+	metadataSibling := *usageWinner
+	metadataSibling.EventID = "legacy-metadata-sibling"
+	metadataSibling.DedupeKey = metadataSibling.EventID
+	metadataSibling.SessionPathID = ""
+	metadataSibling.TurnID = "turn-from-sibling"
+	metadataSibling.ProjectPath = "/synthetic/project"
+	metadataSibling.InputTokens = 15
+	metadataSibling.OutputTokens = 5
+	metadataSibling.TotalTokens = 20
+	metadataSibling.TTFTMs = nil
+	metadataSibling.ImportedAtMs = 2
+	metadataSibling.UpdatedAtMs = 2
+	if err := insertEvent(database.Conn(), &metadataSibling); err != nil {
+		t.Fatalf("insert metadata sibling: %v", err)
+	}
+
+	incoming := metadataSibling
+	incoming.Provider = "openai"
+	incoming.ModelRaw = "gpt-5-codex"
+	incoming.ModelNormalized = "gpt-5-codex"
+	incoming.TurnID = ""
+	incoming.ProjectPath = ""
+	incoming.ImportedAtMs = 3
+	incoming.UpdatedAtMs = 3
+	setUsageEventFingerprintForTest(&incoming)
+
+	status, err := database.UpsertEvent(&incoming)
+	if err != nil || status != "updated" {
+		t.Fatalf("reconcile source metadata status=%s err=%v", status, err)
+	}
+
+	var count int
+	var sessionPathID, turnID, projectPath string
+	if err := database.Conn().QueryRow(`
+		SELECT COUNT(*), COALESCE(session_path_id, ''), COALESCE(turn_id, ''), COALESCE(project_path, '')
+		FROM usage_events
+	`).Scan(&count, &sessionPathID, &turnID, &projectPath); err != nil {
+		t.Fatalf("select reconciled source metadata: %v", err)
+	}
+	if count != 1 || sessionPathID != usageWinner.SessionPathID || turnID != metadataSibling.TurnID || projectPath != metadataSibling.ProjectPath {
+		t.Fatalf("complementary source metadata was not preserved rows=%d session_path=%q turn=%q project=%q", count, sessionPathID, turnID, projectPath)
+	}
+
+	status, err = database.UpsertEvent(&incoming)
+	if err != nil || status != "skipped" {
+		t.Fatalf("second source metadata reconciliation should be idempotent, status=%s err=%v", status, err)
+	}
+}
+
 func TestUpsertEventReconciliationStoresRecomputableIdentity(t *testing.T) {
 	for _, tc := range []struct {
 		name      string

@@ -249,15 +249,7 @@ func buildCanonicalReconciledEvent(incoming *model.UsageEvent, stored []*model.U
 	}
 
 	canonical := *incoming
-	if len(stored) > 0 {
-		sourceMetadataWinner := stored[0]
-		for _, candidate := range stored[1:] {
-			if isMoreComplete(candidate, sourceMetadataWinner) {
-				sourceMetadataWinner = candidate
-			}
-		}
-		preserveExistingSourceMetadata(&canonical, sourceMetadataWinner)
-	}
+	preserveReconciledSourceMetadata(&canonical, stored)
 	applyUsageWinner(&canonical, &usageWinner)
 	for _, candidate := range stored {
 		if canonical.ImportedAtMs <= 0 || (candidate.ImportedAtMs > 0 && candidate.ImportedAtMs < canonical.ImportedAtMs) {
@@ -273,6 +265,47 @@ func buildCanonicalReconciledEvent(incoming *model.UsageEvent, stored []*model.U
 	canonical.DedupeKey = eventID
 	canonical.DedupeStrategy = string(strategy)
 	return &canonical
+}
+
+func preserveReconciledSourceMetadata(target *model.UsageEvent, stored []*model.UsageEvent) {
+	if len(stored) == 0 {
+		return
+	}
+
+	sourceMetadataWinner := stored[0]
+	for _, candidate := range stored[1:] {
+		if isMoreComplete(candidate, sourceMetadataWinner) {
+			sourceMetadataWinner = candidate
+		}
+	}
+	preserveExistingSourceMetadata(target, sourceMetadataWinner)
+
+	for _, candidate := range stored {
+		mergeMissingSourceMetadata(target, candidate)
+	}
+}
+
+func mergeMissingSourceMetadata(target, candidate *model.UsageEvent) {
+	if target.SourceAgent == "" && candidate.SourceAgent != "" {
+		target.SourceAgent = candidate.SourceAgent
+	}
+	if target.SourceProduct == "" && candidate.SourceProduct != "" {
+		target.SourceProduct = candidate.SourceProduct
+	} else if shouldCorrectSourceProduct(target, candidate) {
+		target.SourceProduct = candidate.SourceProduct
+	}
+	if (target.ObservabilityLevel == "" || target.ObservabilityLevel == "unknown") && candidate.ObservabilityLevel != "" {
+		target.ObservabilityLevel = candidate.ObservabilityLevel
+	}
+	if target.SessionPathID == "" && candidate.SessionPathID != "" {
+		target.SessionPathID = candidate.SessionPathID
+	}
+	if target.TurnID == "" && candidate.TurnID != "" {
+		target.TurnID = candidate.TurnID
+	}
+	if target.ProjectPath == "" || shouldUpgradeProjectPath(target.ProjectPath, candidate.ProjectPath) {
+		target.ProjectPath = candidate.ProjectPath
+	}
 }
 
 func mergeMissingAccountingMetadata(target, candidate *model.UsageEvent) bool {
