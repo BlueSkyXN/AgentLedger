@@ -6,9 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/BlueSkyXN/AgentLedger/internal/config"
 	"github.com/BlueSkyXN/AgentLedger/internal/control"
-	"github.com/BlueSkyXN/AgentLedger/internal/db"
 	"github.com/spf13/cobra"
 )
 
@@ -23,14 +21,9 @@ var serveCmd = &cobra.Command{
 			return err
 		}
 
-		cfg, err := config.Load()
+		cfg, database, err := openReadOnlyConfiguredDatabase()
 		if err != nil {
-			return fmt.Errorf("failed to load config: %w", err)
-		}
-
-		database, err := db.Open(cfg.DBPath())
-		if err != nil {
-			return fmt.Errorf("failed to open database: %w", err)
+			return err
 		}
 		defer database.Close()
 

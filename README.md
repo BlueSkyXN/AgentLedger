@@ -181,6 +181,8 @@ agent-ledger report slow --sort ttft_ms --limit 20
 
 `serve` 会启动一个只读本地面板，实时从当前 SQLite 数据库查询聚合结果。不提供浏览器触发 `import`、`merge`、`vacuum` 或修改配置的能力。
 
+`serve`、`status`、`verify` 和 `report *` 使用 SQLite `mode=ro` + `query_only` 打开现有数据库，不会隐式创建或升级 schema。首次使用或升级后需要补齐 additive v2 compatibility 字段时，先运行 `agent-ledger init` 或正常执行一次 `import`。
+
 ```bash
 agent-ledger serve
 # 默认监听地址：127.0.0.1:54217

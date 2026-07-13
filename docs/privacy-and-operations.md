@@ -36,6 +36,8 @@ agent-ledger status
 
 用途：快速确认数据库路径、事件量、设备量、导入次数、token 总数和成本字段汇总。
 
+`status` 使用 SQLite `mode=ro` 和 `query_only` 打开现有数据库，不会创建或升级 schema。数据库尚未初始化时，先运行 `agent-ledger init` 或 `agent-ledger import`。
+
 ### `doctor`
 
 ```bash
@@ -52,6 +54,8 @@ agent-ledger verify
 
 用途：运行 SQLite `PRAGMA integrity_check`。适合在 merge、备份、迁移前后执行。
 
+`verify` 使用真正的只读连接，不执行 schema 初始化、compatibility UPDATE 或索引创建。
+
 ### `vacuum`
 
 ```bash
@@ -67,6 +71,8 @@ agent-ledger serve
 ```
 
 用途：启动本机只读 Web 面板和 `/api/v1/*` JSON API。当前版本默认监听 `127.0.0.1:54217`（高位端口），并且只允许 loopback host。
+
+`serve` 与 `report *` 共用只读数据库打开路径；启动和查询不会创建数据库、表、列或索引。升级后的数据库若需要 additive v2 初始化，应先显式运行 `agent-ledger init`。
 
 隐私边界：
 
