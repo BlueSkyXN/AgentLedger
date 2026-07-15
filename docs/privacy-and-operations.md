@@ -36,6 +36,8 @@ agent-ledger status
 
 用途：快速确认数据库路径、事件量、设备量、导入次数、token 总数和成本字段汇总。
 
+`status` 使用 SQLite `mode=ro` 和 `query_only` 打开现有数据库，不会创建或升级 schema。数据库尚未初始化时，先运行 `agent-ledger init` 或 `agent-ledger import`。
+
 ### `doctor`
 
 ```bash
@@ -44,13 +46,17 @@ agent-ledger doctor
 
 用途：检查配置路径、数据库是否存在，以及每个启用 adapter 能发现多少源文件。该命令会扫描 configured paths，但不会导入事件。
 
+`doctor` 和 `doctor codex` 使用现有配置或内存默认值；配置不存在时不会创建 `config.toml` 或数据库目录。
+
 ### `verify`
 
 ```bash
 agent-ledger verify
 ```
 
-用途：运行 SQLite `PRAGMA integrity_check`。适合在 merge、备份、迁移前后执行。
+用途：运行 SQLite `PRAGMA integrity_check`。适合在 merge、备份、迁移前后执行，也可以检查 schema v1 或缺少 additive compatibility column 的待升级数据库。
+
+`verify` 使用基础只读 SQLite 连接，不执行 AgentLedger schema validation、schema 初始化、compatibility UPDATE 或索引创建。数据库文件损坏或不是 SQLite 时会返回错误，但不会替换原文件。
 
 ### `vacuum`
 
@@ -67,6 +73,8 @@ agent-ledger serve
 ```
 
 用途：启动本机只读 Web 面板和 `/api/v1/*` JSON API。当前版本默认监听 `127.0.0.1:54217`（高位端口），并且只允许 loopback host。
+
+`serve` 与 `report *` 共用只读数据库打开路径；启动前会校验 v2 三张核心表的全部必需列，查询过程不会创建数据库、表、列或索引。升级后的数据库若只缺 additive v2 compatibility columns，应先显式运行 `agent-ledger init` 或 `agent-ledger import`；核心列损坏或缺失时应从备份恢复，或在备份后使用 `agent-ledger init --reset` 重建。
 
 隐私边界：
 

@@ -3,6 +3,8 @@ package db
 import (
 	"database/sql"
 	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -23,6 +25,29 @@ func TestOpenInitializesSchemaV2(t *testing.T) {
 	}
 	if version != SchemaVersion {
 		t.Fatalf("version = %s, want %s", version, SchemaVersion)
+	}
+}
+
+func TestRequiredV2SchemaMatchesInitializedDatabase(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer database.Close()
+
+	for _, table := range v2RequiredTableSchemas {
+		actual, err := tableColumns(database.Conn(), table.name)
+		if err != nil {
+			t.Fatalf("read %s columns: %v", table.name, err)
+		}
+		if len(actual) != len(table.columns) {
+			t.Fatalf("%s column count = %d, required schema lists %d", table.name, len(actual), len(table.columns))
+		}
+		for _, column := range table.columns {
+			if _, ok := actual[column]; !ok {
+				t.Fatalf("required schema lists missing initialized column %s.%s", table.name, column)
+			}
+		}
 	}
 }
 
@@ -51,6 +76,257 @@ func TestOpenRegistersProjectLabelFunction(t *testing.T) {
 		if got != tc.want {
 			t.Fatalf("project label %v = %q, want %q", tc.input, got, tc.want)
 		}
+	}
+}
+
+func TestOpenReadOnlySeesWALWritesAndRejectsWrites(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agent-ledger.db")
+	writer, err := Open(path)
+	if err != nil {
+		t.Fatalf("open writer: %v", err)
+	}
+	defer writer.Close()
+
+	insertEvent := func(eventID string, timestamp int64) {
+		t.Helper()
+		_, err := writer.Conn().Exec(`INSERT INTO usage_events (
+			event_id, dedupe_key, dedupe_strategy, channel, timestamp_ms,
+			input_tokens, output_tokens, reasoning_tokens, cache_creation_tokens, cache_read_tokens, total_tokens,
+			imported_at_ms, updated_at_ms
+		) VALUES (?, ?, 'message_id', 'codex', ?, 1, 1, 0, 0, 0, 2, ?, ?)`, eventID, eventID, timestamp, timestamp, timestamp)
+		if err != nil {
+			t.Fatalf("insert %s: %v", eventID, err)
+		}
+	}
+	insertEvent("event-1", 1)
+
+	reader, err := OpenReadOnly(path)
+	if err != nil {
+		t.Fatalf("open read-only: %v", err)
+	}
+	defer reader.Close()
+
+	var queryOnly int
+	if err := reader.Conn().QueryRow(`PRAGMA query_only`).Scan(&queryOnly); err != nil {
+		t.Fatalf("query_only: %v", err)
+	}
+	if queryOnly != 1 {
+		t.Fatalf("query_only = %d, want 1", queryOnly)
+	}
+
+	var count int
+	if err := reader.Conn().QueryRow(`SELECT COUNT(*) FROM usage_events`).Scan(&count); err != nil {
+		t.Fatalf("initial count: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("initial count = %d, want 1", count)
+	}
+
+	insertEvent("event-2", 2)
+	if err := reader.Conn().QueryRow(`SELECT COUNT(*) FROM usage_events`).Scan(&count); err != nil {
+		t.Fatalf("updated count: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("updated count = %d, want 2", count)
+	}
+
+	if _, err := reader.Conn().Exec(`UPDATE meta SET value = 'changed' WHERE key = 'schema_version'`); err == nil {
+		t.Fatal("read-only connection accepted a write")
+	}
+
+	var project string
+	if err := reader.Conn().QueryRow(`SELECT agentledger_project_label(?)`, "/tmp/project-a").Scan(&project); err != nil {
+		t.Fatalf("project label: %v", err)
+	}
+	if project != "project-a" {
+		t.Fatalf("project label = %q", project)
+	}
+}
+
+func TestOpenReadOnlyDoesNotRunSchemaMaintenance(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agent-ledger.db")
+	database, err := Open(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if _, err := database.Conn().Exec(`INSERT INTO usage_events (
+		event_id, dedupe_key, dedupe_strategy, channel, timestamp_ms,
+		input_tokens, output_tokens, reasoning_tokens, cache_creation_tokens, cache_read_tokens, total_tokens,
+		imported_at_ms, updated_at_ms
+	) VALUES ('event-1', 'event-1', 'message_id', 'codex', 1, 1, 1, 0, 0, 0, 2, 1, 1)`); err != nil {
+		t.Fatalf("insert event: %v", err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	conn, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatalf("raw open: %v", err)
+	}
+	if _, err := conn.Exec(`DROP INDEX idx_usage_source_identity`); err != nil {
+		t.Fatalf("drop index: %v", err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatalf("raw close: %v", err)
+	}
+
+	for name, opener := range map[string]func(string) (*Database, error){
+		"sqlite": OpenReadOnly,
+		"v2":     OpenReadOnlyV2,
+	} {
+		reader, err := opener(path)
+		if err != nil {
+			t.Fatalf("open %s read-only: %v", name, err)
+		}
+		if err := reader.Close(); err != nil {
+			t.Fatalf("close %s read-only: %v", name, err)
+		}
+	}
+
+	conn, err = sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer conn.Close()
+	var indexCount int
+	if err := conn.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_usage_source_identity'`).Scan(&indexCount); err != nil {
+		t.Fatalf("index count: %v", err)
+	}
+	if indexCount != 0 {
+		t.Fatalf("read-only open recreated source identity index")
+	}
+	var sourceAgent, observability sql.NullString
+	if err := conn.QueryRow(`SELECT source_agent, observability_level FROM usage_events WHERE event_id = 'event-1'`).Scan(&sourceAgent, &observability); err != nil {
+		t.Fatalf("source metadata: %v", err)
+	}
+	if sourceAgent.Valid || observability.Valid {
+		t.Fatalf("read-only open backfilled source metadata: source_agent=%v observability=%v", sourceAgent, observability)
+	}
+}
+
+func TestOpenReadOnlyRejectsMissingDatabaseWithoutCreatingPath(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "missing")
+	path := filepath.Join(dir, "agent-ledger.db")
+
+	_, err := OpenReadOnly(path)
+	if err == nil {
+		t.Fatal("expected missing database error")
+	}
+	if !strings.Contains(err.Error(), "agent-ledger init") || !strings.Contains(err.Error(), "agent-ledger import") {
+		t.Fatalf("missing database error does not include initialization guidance: %v", err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("read-only open created database directory: %v", err)
+	}
+}
+
+func TestOpenReadOnlyV2RejectsIncompleteSchemaWithoutRepairingIt(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		table        string
+		column       string
+		wantGuidance string
+	}{
+		{name: "additive usage column", table: "usage_events", column: "turn_id", wantGuidance: "agent-ledger init"},
+		{name: "core usage column", table: "usage_events", column: "total_tokens", wantGuidance: "agent-ledger init --reset"},
+		{name: "import run column", table: "import_runs", column: "events_updated", wantGuidance: "agent-ledger init --reset"},
+		{name: "meta column", table: "meta", column: "value", wantGuidance: "agent-ledger init --reset"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "agent-ledger.db")
+			database, err := Open(path)
+			if err != nil {
+				t.Fatalf("open: %v", err)
+			}
+			if err := database.Close(); err != nil {
+				t.Fatalf("close: %v", err)
+			}
+
+			conn, err := sql.Open("sqlite3", path)
+			if err != nil {
+				t.Fatalf("raw open: %v", err)
+			}
+			if _, err := conn.Exec(fmt.Sprintf(`ALTER TABLE %s DROP COLUMN %s`, tc.table, tc.column)); err != nil {
+				_ = conn.Close()
+				t.Fatalf("drop %s.%s: %v", tc.table, tc.column, err)
+			}
+			if err := conn.Close(); err != nil {
+				t.Fatalf("raw close: %v", err)
+			}
+
+			reader, err := OpenReadOnly(path)
+			if err != nil {
+				t.Fatalf("open physical read-only: %v", err)
+			}
+			if err := reader.Close(); err != nil {
+				t.Fatalf("close physical read-only: %v", err)
+			}
+
+			reader, err = OpenReadOnlyV2(path)
+			if err == nil {
+				_ = reader.Close()
+				t.Fatal("expected incomplete v2 schema error")
+			}
+			if !errors.Is(err, ErrIncompatibleSchema) {
+				t.Fatalf("expected ErrIncompatibleSchema, got %v", err)
+			}
+			if !strings.Contains(err.Error(), tc.table+"."+tc.column) || !strings.Contains(err.Error(), tc.wantGuidance) {
+				t.Fatalf("incomplete schema error = %v", err)
+			}
+
+			conn, err = sql.Open("sqlite3", path)
+			if err != nil {
+				t.Fatalf("reopen: %v", err)
+			}
+			defer conn.Close()
+			exists, err := columnExists(conn, tc.table, tc.column)
+			if err != nil {
+				t.Fatalf("check missing column: %v", err)
+			}
+			if exists {
+				t.Fatalf("v2 read-only open repaired missing column %s.%s", tc.table, tc.column)
+			}
+		})
+	}
+}
+
+func TestOpenReadOnlyV2RejectsMissingRequiredTable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agent-ledger.db")
+	database, err := Open(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	conn, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatalf("raw open: %v", err)
+	}
+	if _, err := conn.Exec(`DROP TABLE import_runs`); err != nil {
+		t.Fatalf("drop table: %v", err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatalf("raw close: %v", err)
+	}
+
+	reader, err := OpenReadOnly(path)
+	if err != nil {
+		t.Fatalf("open physical read-only: %v", err)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatalf("close physical read-only: %v", err)
+	}
+
+	reader, err = OpenReadOnlyV2(path)
+	if err == nil {
+		_ = reader.Close()
+		t.Fatal("expected missing table error")
+	}
+	if !errors.Is(err, ErrIncompatibleSchema) {
+		t.Fatalf("expected ErrIncompatibleSchema, got %v", err)
 	}
 }
 
@@ -190,5 +466,29 @@ func TestOpenRejectsSchemaV1(t *testing.T) {
 	}
 	if !errors.Is(err, ErrIncompatibleSchema) {
 		t.Fatalf("expected ErrIncompatibleSchema, got %v", err)
+	}
+
+	database, err = OpenReadOnly(path)
+	if err != nil {
+		t.Fatalf("open physical read-only v1: %v", err)
+	}
+	var integrity string
+	if err := database.Conn().QueryRow(`PRAGMA integrity_check`).Scan(&integrity); err != nil {
+		t.Fatalf("v1 integrity check: %v", err)
+	}
+	if integrity != "ok" {
+		t.Fatalf("v1 integrity = %q", integrity)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("close physical read-only v1: %v", err)
+	}
+
+	database, err = OpenReadOnlyV2(path)
+	if err == nil {
+		_ = database.Close()
+		t.Fatal("expected v2 read-only incompatible schema error")
+	}
+	if !errors.Is(err, ErrIncompatibleSchema) {
+		t.Fatalf("expected v2 read-only ErrIncompatibleSchema, got %v", err)
 	}
 }

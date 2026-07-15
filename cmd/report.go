@@ -1,10 +1,6 @@
 package cmd
 
 import (
-	"fmt"
-
-	"github.com/BlueSkyXN/AgentLedger/internal/config"
-	"github.com/BlueSkyXN/AgentLedger/internal/db"
 	"github.com/BlueSkyXN/AgentLedger/internal/report"
 	"github.com/spf13/cobra"
 )
@@ -94,14 +90,9 @@ func init() {
 
 func runReport(reportType string) func(cmd *cobra.Command, args []string) error {
 	return func(cmd *cobra.Command, args []string) error {
-		cfg, err := config.Load()
+		cfg, database, err := openReadOnlyV2ConfiguredDatabase()
 		if err != nil {
-			return fmt.Errorf("failed to load config: %w", err)
-		}
-
-		database, err := db.Open(cfg.DBPath())
-		if err != nil {
-			return fmt.Errorf("failed to open database: %w", err)
+			return err
 		}
 		defer database.Close()
 

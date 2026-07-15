@@ -15,7 +15,7 @@ var doctorCmd = &cobra.Command{
 	Short: "Run diagnostics",
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		cfg, err := config.Load()
+		cfg, err := config.LoadReadOnly()
 		if err != nil {
 			return fmt.Errorf("failed to load config: %w", err)
 		}

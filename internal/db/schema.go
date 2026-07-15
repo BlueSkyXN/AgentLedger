@@ -10,6 +10,82 @@ const SchemaVersion = "2"
 
 var ErrIncompatibleSchema = errors.New("incompatible database schema")
 
+var v2CompatibilityColumns = []string{
+	"source_agent TEXT",
+	"source_product TEXT",
+	"observability_level TEXT",
+	"model_is_fallback INTEGER NOT NULL DEFAULT 0",
+	"source_total_tokens INTEGER",
+	"raw_input_tokens INTEGER",
+	"token_accounting_method TEXT",
+	"accounting_profile TEXT",
+	"session_path_id TEXT",
+	"turn_id TEXT",
+}
+
+type requiredTableSchema struct {
+	name    string
+	columns []string
+}
+
+var v2RequiredTableSchemas = []requiredTableSchema{
+	{
+		name:    "meta",
+		columns: []string{"key", "value"},
+	},
+	{
+		name: "import_runs",
+		columns: []string{
+			"id",
+			"started_at_ms",
+			"finished_at_ms",
+			"status",
+			"files_scanned",
+			"events_added",
+			"events_updated",
+			"events_skipped",
+			"error",
+		},
+	},
+	{
+		name: "usage_events",
+		columns: append([]string{
+			"event_id",
+			"dedupe_key",
+			"dedupe_strategy",
+			"channel",
+			"provider",
+			"model_raw",
+			"model_normalized",
+			"timestamp_ms",
+			"session_id",
+			"project_path",
+			"message_id",
+			"request_id",
+			"source_file",
+			"line_number",
+			"raw_sha256",
+			"input_tokens",
+			"output_tokens",
+			"reasoning_tokens",
+			"cache_creation_tokens",
+			"cache_read_tokens",
+			"total_tokens",
+			"request_started_at_ms",
+			"first_token_at_ms",
+			"completed_at_ms",
+			"total_duration_ms",
+			"ttft_ms",
+			"output_duration_ms",
+			"output_tps",
+			"recorded_cost_usd",
+			"raw_usage_json",
+			"imported_at_ms",
+			"updated_at_ms",
+		}, v2CompatibilityColumnNames()...),
+	},
+}
+
 const schemaSQLite = `
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
@@ -130,6 +206,87 @@ func (d *Database) schemaVersion() (string, bool, error) {
 	return version, true, nil
 }
 
+func (d *Database) validateReadOnlySchema() error {
+	metaExists, err := d.tableExists("meta")
+	if err != nil {
+		return err
+	}
+	if !metaExists {
+		return fmt.Errorf("%w: database is not initialized; run `agent-ledger init` or `agent-ledger import` first", ErrIncompatibleSchema)
+	}
+	if err := d.validateRequiredColumns(v2RequiredTableSchemas[0]); err != nil {
+		return err
+	}
+
+	version, exists, err := d.schemaVersion()
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf("%w: database is not initialized; run `agent-ledger init` or `agent-ledger import` first", ErrIncompatibleSchema)
+	}
+	if version != SchemaVersion {
+		return fmt.Errorf("%w: database schema version %s is not compatible with AgentLedger v2; run `agent-ledger init --reset` to rebuild the local database", ErrIncompatibleSchema, version)
+	}
+
+	for _, table := range v2RequiredTableSchemas[1:] {
+		exists, err := d.tableExists(table.name)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return fmt.Errorf("%w: database is missing required table %s; run `agent-ledger init` or `agent-ledger import` to repair the v2 schema", ErrIncompatibleSchema, table.name)
+		}
+		if err := d.validateRequiredColumns(table); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (d *Database) tableExists(table string) (bool, error) {
+	var count int
+	if err := d.conn.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&count); err != nil {
+		return false, err
+	}
+	return count == 1, nil
+}
+
+func (d *Database) validateRequiredColumns(table requiredTableSchema) error {
+	columns, err := tableColumns(d.conn, table.name)
+	if err != nil {
+		return err
+	}
+	for _, column := range table.columns {
+		if _, exists := columns[column]; exists {
+			continue
+		}
+
+		if table.name == "usage_events" && isV2CompatibilityColumn(column) {
+			return fmt.Errorf("%w: database is missing additive v2 column %s.%s; run `agent-ledger init` or `agent-ledger import` to apply compatibility updates", ErrIncompatibleSchema, table.name, column)
+		}
+		return fmt.Errorf("%w: database is missing required column %s.%s; restore a valid v2 database or back it up and run `agent-ledger init --reset`", ErrIncompatibleSchema, table.name, column)
+	}
+	return nil
+}
+
+func v2CompatibilityColumnNames() []string {
+	names := make([]string, 0, len(v2CompatibilityColumns))
+	for _, columnDef := range v2CompatibilityColumns {
+		names = append(names, columnName(columnDef))
+	}
+	return names
+}
+
+func isV2CompatibilityColumn(name string) bool {
+	for _, columnDef := range v2CompatibilityColumns {
+		if columnName(columnDef) == name {
+			return true
+		}
+	}
+	return false
+}
+
 func (d *Database) ensureV2CompatibilityColumns() error {
 	tx, err := d.conn.Begin()
 	if err != nil {
@@ -141,19 +298,7 @@ func (d *Database) ensureV2CompatibilityColumns() error {
 		}
 	}()
 
-	columns := []string{
-		"source_agent TEXT",
-		"source_product TEXT",
-		"observability_level TEXT",
-		"model_is_fallback INTEGER NOT NULL DEFAULT 0",
-		"source_total_tokens INTEGER",
-		"raw_input_tokens INTEGER",
-		"token_accounting_method TEXT",
-		"accounting_profile TEXT",
-		"session_path_id TEXT",
-		"turn_id TEXT",
-	}
-	for _, columnDef := range columns {
+	for _, columnDef := range v2CompatibilityColumns {
 		name := columnName(columnDef)
 		exists, err := columnExists(tx, "usage_events", name)
 		if err != nil {
@@ -186,12 +331,26 @@ func (d *Database) ensureV2CompatibilityColumns() error {
 	return nil
 }
 
-func columnExists(tx *sql.Tx, table, column string) (bool, error) {
-	rows, err := tx.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+type sqlQueryer interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+}
+
+func columnExists(queryer sqlQueryer, table, column string) (bool, error) {
+	columns, err := tableColumns(queryer, table)
 	if err != nil {
 		return false, err
 	}
+	_, exists := columns[column]
+	return exists, nil
+}
+
+func tableColumns(queryer sqlQueryer, table string) (map[string]struct{}, error) {
+	rows, err := queryer.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return nil, err
+	}
 	defer rows.Close()
+	columns := make(map[string]struct{})
 	for rows.Next() {
 		var cid int
 		var name string
@@ -200,13 +359,14 @@ func columnExists(tx *sql.Tx, table, column string) (bool, error) {
 		var defaultValue interface{}
 		var pk int
 		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
-			return false, err
+			return nil, err
 		}
-		if name == column {
-			return true, nil
-		}
+		columns[name] = struct{}{}
 	}
-	return false, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return columns, nil
 }
 
 func columnName(columnDef string) string {

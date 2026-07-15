@@ -140,13 +140,26 @@ func findAncestorWithGoMod(start string) string {
 }
 
 func Load() (*Config, error) {
+	return load(true)
+}
+
+// LoadReadOnly loads existing config or returns defaults without creating local files.
+func LoadReadOnly() (*Config, error) {
+	return load(false)
+}
+
+func load(createIfMissing bool) (*Config, error) {
 	path := ConfigPath()
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		cfg := Default()
-		if err := cfg.Save(); err != nil {
-			return nil, err
+		if createIfMissing {
+			if err := cfg.Save(); err != nil {
+				return nil, err
+			}
 		}
 		return cfg, nil
+	} else if err != nil {
+		return nil, fmt.Errorf("failed to access config: %w", err)
 	}
 
 	cfg := Default()

@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -46,6 +47,58 @@ func Open(path string) (*Database, error) {
 		return nil, fmt.Errorf("failed to initialize schema: %w", err)
 	}
 
+	return db, nil
+}
+
+// OpenReadOnly opens an existing SQLite database without creating or migrating it.
+func OpenReadOnly(path string) (*Database, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("database does not exist; run `agent-ledger init` to create it or `agent-ledger import` to initialize and load data: %w", err)
+		}
+		return nil, fmt.Errorf("failed to access database: %w", err)
+	}
+	if info.IsDir() {
+		return nil, fmt.Errorf("failed to open database: path is a directory")
+	}
+
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve database path: %w", err)
+	}
+	uri := &url.URL{Scheme: "file", Path: absPath}
+	query := url.Values{}
+	query.Set("mode", "ro")
+	query.Set("_query_only", "on")
+	query.Set("_busy_timeout", "5000")
+	query.Set("_foreign_keys", "on")
+	uri.RawQuery = query.Encode()
+
+	conn, err := sql.Open(sqliteDriverName, uri.String())
+	if err != nil {
+		return nil, fmt.Errorf("failed to open database: %w", err)
+	}
+	conn.SetMaxOpenConns(1)
+
+	db := &Database{conn: conn, path: path}
+	if err := conn.Ping(); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("failed to open database: %w", err)
+	}
+	return db, nil
+}
+
+// OpenReadOnlyV2 opens an existing current-v2 database without creating or migrating it.
+func OpenReadOnlyV2(path string) (*Database, error) {
+	db, err := OpenReadOnly(path)
+	if err != nil {
+		return nil, err
+	}
+	if err := db.validateReadOnlySchema(); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("failed to validate database: %w", err)
+	}
 	return db, nil
 }
 

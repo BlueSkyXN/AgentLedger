@@ -1,6 +1,6 @@
 # Data Model
 
-AgentLedger v2 使用 SQLite 保存事件级 usage 数据。当前 schema 在 `internal/db/schema.go`，初始化由 `db.Open()` 自动执行。
+AgentLedger v2 使用 SQLite 保存事件级 usage 数据。当前 schema 在 `internal/db/schema.go`；写入命令通过 `db.Open()` 初始化或补齐 schema，物理只读检查通过 `db.OpenReadOnly()` 打开现有 SQLite，需要当前完整 v2 的查询通过 `db.OpenReadOnlyV2()` 验证并读取数据库。
 
 v2 的设计目标是简单的本地统计分析，而不是多表账本或审计系统。数据库只保留三张表：
 
@@ -21,6 +21,8 @@ v1 的 `devices`、`sources`、`source_files`、`raw_records`、`merge_runs`、`
 - 空库或新库：初始化为 v2。
 - v2 库：正常打开。
 - 非 v2 库：返回 incompatible schema 错误，并提示运行 `agent-ledger init --reset`。
+
+`db.OpenReadOnly()` 不创建目录、数据库、表、列或索引，也不执行 compatibility UPDATE；它只要求数据库文件存在并能由 SQLite 只读打开，不要求 AgentLedger schema。`db.OpenReadOnlyV2()` 在此基础上要求 schema version、三张核心表及其当前全部必需列完整。缺失 additive v2 compatibility columns 时可运行 `agent-ledger init` 或 `agent-ledger import` 补齐；核心列损坏或缺失时应恢复有效 v2 备份，或在备份后运行 `agent-ledger init --reset` 重建。
 
 v2 不迁移旧本地数据。需要保留旧 `.db` / `.aldb` 时，请先手动备份，再 reset。
 
@@ -50,6 +52,17 @@ _foreign_keys=ON
 ```
 
 `db.Open(path)` 会创建数据库目录，打开连接，设置 `SetMaxOpenConns(1)`，然后执行 schema 初始化。
+
+只读连接使用：
+
+```text
+mode=ro
+_query_only=ON
+_busy_timeout=5000
+_foreign_keys=ON
+```
+
+`db.OpenReadOnly(path)` 和 `db.OpenReadOnlyV2(path)` 不设置 journal mode 或 synchronous mode，不使用 `immutable=1`，因此在另一个 AgentLedger 进程写入 WAL 时仍能读取后续已提交数据。只读命令在配置文件不存在时使用内存中的默认配置，不会为了读取操作创建 config 或数据库目录。
 
 ## Table: `meta`
 
@@ -190,9 +203,9 @@ output_tps = output_tokens / (output_duration_ms / 1000.0)
 | `import` | `import_runs`、`usage_events` | configured source paths | 遍历启用 adapter，解析 usage record，按 fingerprint upsert；Codex 同一来源行可用于兼容更新旧 fingerprint。 |
 | `export` | 无 | 当前 SQLite 数据库文件 | 直接复制数据库文件。 |
 | `merge` | `usage_events` | incoming `.aldb` 的 `usage_events` | 只接受 schema v2，插入未见事件。 |
-| `status` | 无 | `meta`、`usage_events`、`import_runs` | 输出 v2 统计。 |
-| `report *` | 无 | `usage_events` | 使用 SQLite 聚合输出 text 或 JSON。 |
-| `serve` | 无 | `meta`、`import_runs`、`usage_events` | 只读 API 和 Web 面板。 |
-| `doctor` | 无 | config 与 source paths | 扫描 configured paths 统计源文件数量；`doctor codex` 会额外输出 Codex token/timing/口径覆盖诊断。 |
-| `verify` | 无 | 当前 SQLite 数据库 | 执行 `PRAGMA integrity_check`。 |
+| `status` | 无 | `meta`、`usage_events`、`import_runs` | 通过只读连接输出 v2 统计，不初始化或升级数据库。 |
+| `report *` | 无 | `usage_events` | 通过只读连接执行 SQLite 聚合，输出 text 或 JSON。 |
+| `serve` | 无 | `meta`、`import_runs`、`usage_events` | 通过只读连接提供 API 和 Web 面板。 |
+| `doctor` | 无 | config 与 source paths | 使用内存默认值或现有配置扫描 source paths；配置缺失时不创建本地状态。 |
+| `verify` | 无 | 现有 SQLite 数据库 | 通过基础只读连接执行 `PRAGMA integrity_check`，不要求当前 AgentLedger v2 schema。 |
 | `vacuum` | SQLite 内部重写 | 当前 SQLite 数据库 | 执行 `VACUUM`。 |
