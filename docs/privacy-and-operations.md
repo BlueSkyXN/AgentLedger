@@ -74,7 +74,7 @@ agent-ledger serve
 
 用途：启动本机只读 Web 面板和 `/api/v1/*` JSON API。当前版本默认监听 `127.0.0.1:54217`（高位端口），并且只允许 loopback host。
 
-`serve` 与 `report *` 共用只读数据库打开路径；启动和查询不会创建数据库、表、列或索引。升级后的数据库若需要 additive v2 初始化，应先显式运行 `agent-ledger init`。
+`serve` 与 `report *` 共用只读数据库打开路径；启动前会校验 v2 三张核心表的全部必需列，查询过程不会创建数据库、表、列或索引。升级后的数据库若只缺 additive v2 compatibility columns，应先显式运行 `agent-ledger init` 或 `agent-ledger import`；核心列损坏或缺失时应从备份恢复，或在备份后使用 `agent-ledger init --reset` 重建。
 
 隐私边界：
 

@@ -22,7 +22,7 @@ v1 的 `devices`、`sources`、`source_files`、`raw_records`、`merge_runs`、`
 - v2 库：正常打开。
 - 非 v2 库：返回 incompatible schema 错误，并提示运行 `agent-ledger init --reset`。
 
-`db.OpenReadOnly()` 不创建目录、数据库、表、列或索引，也不执行 compatibility UPDATE；它只要求数据库文件存在并能由 SQLite 只读打开，不要求 AgentLedger schema。`db.OpenReadOnlyV2()` 在此基础上要求 schema version、核心表和当前 v2 compatibility columns 完整，缺失时会提示先运行 `agent-ledger init` 完成 additive v2 初始化。
+`db.OpenReadOnly()` 不创建目录、数据库、表、列或索引，也不执行 compatibility UPDATE；它只要求数据库文件存在并能由 SQLite 只读打开，不要求 AgentLedger schema。`db.OpenReadOnlyV2()` 在此基础上要求 schema version、三张核心表及其当前全部必需列完整。缺失 additive v2 compatibility columns 时可运行 `agent-ledger init` 或 `agent-ledger import` 补齐；核心列损坏或缺失时应恢复有效 v2 备份，或在备份后运行 `agent-ledger init --reset` 重建。
 
 v2 不迁移旧本地数据。需要保留旧 `.db` / `.aldb` 时，请先手动备份，再 reset。
 

@@ -21,9 +21,13 @@ func TestOpenReadOnlyConfiguredDatabaseDoesNotCreateMissingState(t *testing.T) {
 		"sqlite": openReadOnlyConfiguredDatabase,
 		"v2":     openReadOnlyV2ConfiguredDatabase,
 	} {
-		if _, database, err := opener(); err == nil {
+		_, database, err := opener()
+		if err == nil {
 			_ = database.Close()
 			t.Fatalf("expected %s missing database error", name)
+		}
+		if !strings.Contains(err.Error(), "agent-ledger init") || !strings.Contains(err.Error(), "agent-ledger import") {
+			t.Fatalf("%s missing database error does not include initialization guidance: %v", name, err)
 		}
 	}
 	if _, err := os.Stat(dataDir); !os.IsNotExist(err) {
@@ -175,8 +179,8 @@ func TestVerifyAcceptsIncompleteV2WhileV2CommandsRejectIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("raw open: %v", err)
 	}
-	if _, err := conn.Exec(`ALTER TABLE usage_events DROP COLUMN turn_id`); err != nil {
-		t.Fatalf("drop compatibility column: %v", err)
+	if _, err := conn.Exec(`ALTER TABLE usage_events DROP COLUMN total_tokens`); err != nil {
+		t.Fatalf("drop required column: %v", err)
 	}
 	if err := conn.Close(); err != nil {
 		t.Fatalf("raw close: %v", err)
@@ -208,7 +212,7 @@ func TestVerifyAcceptsIncompleteV2WhileV2CommandsRejectIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("table info: %v", err)
 	}
-	foundTurnID := false
+	foundTotalTokens := false
 	for rows.Next() {
 		var cid, notNull, pk int
 		var name, typ string
@@ -216,13 +220,13 @@ func TestVerifyAcceptsIncompleteV2WhileV2CommandsRejectIt(t *testing.T) {
 		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
 			t.Fatalf("scan column: %v", err)
 		}
-		foundTurnID = foundTurnID || name == "turn_id"
+		foundTotalTokens = foundTotalTokens || name == "total_tokens"
 	}
 	if err := rows.Close(); err != nil {
 		t.Fatalf("close rows: %v", err)
 	}
-	if foundTurnID {
-		t.Fatal("read-only commands repaired the missing turn_id column")
+	if foundTotalTokens {
+		t.Fatal("read-only commands repaired the missing total_tokens column")
 	}
 }
 

@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,6 +25,29 @@ func TestOpenInitializesSchemaV2(t *testing.T) {
 	}
 	if version != SchemaVersion {
 		t.Fatalf("version = %s, want %s", version, SchemaVersion)
+	}
+}
+
+func TestRequiredV2SchemaMatchesInitializedDatabase(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer database.Close()
+
+	for _, table := range v2RequiredTableSchemas {
+		actual, err := tableColumns(database.Conn(), table.name)
+		if err != nil {
+			t.Fatalf("read %s columns: %v", table.name, err)
+		}
+		if len(actual) != len(table.columns) {
+			t.Fatalf("%s column count = %d, required schema lists %d", table.name, len(actual), len(table.columns))
+		}
+		for _, column := range table.columns {
+			if _, ok := actual[column]; !ok {
+				t.Fatalf("required schema lists missing initialized column %s.%s", table.name, column)
+			}
+		}
 	}
 }
 
@@ -185,8 +209,12 @@ func TestOpenReadOnlyRejectsMissingDatabaseWithoutCreatingPath(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "missing")
 	path := filepath.Join(dir, "agent-ledger.db")
 
-	if _, err := OpenReadOnly(path); err == nil {
+	_, err := OpenReadOnly(path)
+	if err == nil {
 		t.Fatal("expected missing database error")
+	}
+	if !strings.Contains(err.Error(), "agent-ledger init") || !strings.Contains(err.Error(), "agent-ledger import") {
+		t.Fatalf("missing database error does not include initialization guidance: %v", err)
 	}
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Fatalf("read-only open created database directory: %v", err)
@@ -194,69 +222,72 @@ func TestOpenReadOnlyRejectsMissingDatabaseWithoutCreatingPath(t *testing.T) {
 }
 
 func TestOpenReadOnlyV2RejectsIncompleteSchemaWithoutRepairingIt(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "agent-ledger.db")
-	database, err := Open(path)
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	if err := database.Close(); err != nil {
-		t.Fatalf("close: %v", err)
-	}
+	for _, tc := range []struct {
+		name         string
+		table        string
+		column       string
+		wantGuidance string
+	}{
+		{name: "additive usage column", table: "usage_events", column: "turn_id", wantGuidance: "agent-ledger init"},
+		{name: "core usage column", table: "usage_events", column: "total_tokens", wantGuidance: "agent-ledger init --reset"},
+		{name: "import run column", table: "import_runs", column: "events_updated", wantGuidance: "agent-ledger init --reset"},
+		{name: "meta column", table: "meta", column: "value", wantGuidance: "agent-ledger init --reset"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "agent-ledger.db")
+			database, err := Open(path)
+			if err != nil {
+				t.Fatalf("open: %v", err)
+			}
+			if err := database.Close(); err != nil {
+				t.Fatalf("close: %v", err)
+			}
 
-	conn, err := sql.Open("sqlite3", path)
-	if err != nil {
-		t.Fatalf("raw open: %v", err)
-	}
-	if _, err := conn.Exec(`ALTER TABLE usage_events DROP COLUMN turn_id`); err != nil {
-		t.Fatalf("drop compatibility column: %v", err)
-	}
-	if err := conn.Close(); err != nil {
-		t.Fatalf("raw close: %v", err)
-	}
+			conn, err := sql.Open("sqlite3", path)
+			if err != nil {
+				t.Fatalf("raw open: %v", err)
+			}
+			if _, err := conn.Exec(fmt.Sprintf(`ALTER TABLE %s DROP COLUMN %s`, tc.table, tc.column)); err != nil {
+				_ = conn.Close()
+				t.Fatalf("drop %s.%s: %v", tc.table, tc.column, err)
+			}
+			if err := conn.Close(); err != nil {
+				t.Fatalf("raw close: %v", err)
+			}
 
-	reader, err := OpenReadOnly(path)
-	if err != nil {
-		t.Fatalf("open physical read-only: %v", err)
-	}
-	if err := reader.Close(); err != nil {
-		t.Fatalf("close physical read-only: %v", err)
-	}
+			reader, err := OpenReadOnly(path)
+			if err != nil {
+				t.Fatalf("open physical read-only: %v", err)
+			}
+			if err := reader.Close(); err != nil {
+				t.Fatalf("close physical read-only: %v", err)
+			}
 
-	reader, err = OpenReadOnlyV2(path)
-	if err == nil {
-		_ = reader.Close()
-		t.Fatal("expected incomplete v2 schema error")
-	}
-	if !errors.Is(err, ErrIncompatibleSchema) {
-		t.Fatalf("expected ErrIncompatibleSchema, got %v", err)
-	}
+			reader, err = OpenReadOnlyV2(path)
+			if err == nil {
+				_ = reader.Close()
+				t.Fatal("expected incomplete v2 schema error")
+			}
+			if !errors.Is(err, ErrIncompatibleSchema) {
+				t.Fatalf("expected ErrIncompatibleSchema, got %v", err)
+			}
+			if !strings.Contains(err.Error(), tc.table+"."+tc.column) || !strings.Contains(err.Error(), tc.wantGuidance) {
+				t.Fatalf("incomplete schema error = %v", err)
+			}
 
-	conn, err = sql.Open("sqlite3", path)
-	if err != nil {
-		t.Fatalf("reopen: %v", err)
-	}
-	defer conn.Close()
-	var turnIDColumns int
-	rows, err := conn.Query(`PRAGMA table_info(usage_events)`)
-	if err != nil {
-		t.Fatalf("table info: %v", err)
-	}
-	for rows.Next() {
-		var cid, notNull, pk int
-		var name, typ string
-		var defaultValue any
-		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
-			t.Fatalf("scan column: %v", err)
-		}
-		if name == "turn_id" {
-			turnIDColumns++
-		}
-	}
-	if err := rows.Close(); err != nil {
-		t.Fatalf("close rows: %v", err)
-	}
-	if turnIDColumns != 0 {
-		t.Fatal("v2 read-only open repaired the missing compatibility column")
+			conn, err = sql.Open("sqlite3", path)
+			if err != nil {
+				t.Fatalf("reopen: %v", err)
+			}
+			defer conn.Close()
+			exists, err := columnExists(conn, tc.table, tc.column)
+			if err != nil {
+				t.Fatalf("check missing column: %v", err)
+			}
+			if exists {
+				t.Fatalf("v2 read-only open repaired missing column %s.%s", tc.table, tc.column)
+			}
+		})
 	}
 }
 

@@ -54,6 +54,9 @@ func Open(path string) (*Database, error) {
 func OpenReadOnly(path string) (*Database, error) {
 	info, err := os.Stat(path)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("database does not exist; run `agent-ledger init` to create it or `agent-ledger import` to initialize and load data: %w", err)
+		}
 		return nil, fmt.Errorf("failed to access database: %w", err)
 	}
 	if info.IsDir() {
