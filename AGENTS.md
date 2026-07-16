@@ -45,7 +45,7 @@ If multiple nested `AGENTS.md` files exist on the path to the target file, read 
 
 ## Commands
 
-Commands below are confirmed from `README.md`, `docs/development.md`, `go.mod`, and `web/package.json`. There is no root `package.json`, no `Makefile`, and no `.github/workflows/` in the current repository snapshot.
+Commands below are confirmed from `README.md`, `docs/development.md`, `go.mod`, `web/package.json`, and `.github/workflows/ci.yml`. There is no root `package.json` and no `Makefile`.
 
 | Command | Purpose | Scope | Sandbox notes |
 |---|---|---|---|
@@ -59,7 +59,7 @@ Commands below are confirmed from `README.md`, `docs/development.md`, `go.mod`, 
 | `go run . serve` | Start local read-only panel/API | repo | Manual/runtime check; binds loopback, opens configured SQLite DB, and keeps a server process running |
 | `go run . doctor` | Inspect config paths and enabled agent source discovery | repo | Reads local config and scans configured paths; do not paste private paths/session data into public output |
 | `go run . verify` | Run SQLite integrity check on configured DB | repo | Reads configured DB; requires local database to exist |
-| `cd web && npm install` | Install Web dependencies | `web/` | Requires network unless npm cache is warm; writes `node_modules` and may touch lockfile only when dependency graph changes |
+| `cd web && npm ci` | Install locked Web dependencies | `web/` | Requires Node.js `^20.19.0` or `>=22.12.0` and network unless npm cache is warm; rewrites ignored `node_modules` from `package-lock.json` |
 | `cd web && npm run lint` | TypeScript checks for app and Vite config | `web/` | Requires dependencies installed; script is `tsc --noEmit`, not ESLint |
 | `cd web && npm run build` | TypeScript checks plus Vite production build | `web/` | Requires dependencies installed; writes ignored `web/dist/` |
 | `cd web && npm run dev` | Vite dev server with `/api` proxy to `127.0.0.1:54217` | `web/` | Manual/runtime check; requires backend server for API data |
@@ -117,5 +117,5 @@ If a validation step cannot be run because Go, CGO, npm dependencies, network, d
 
 - The docs are mostly Chinese; keep repository-facing prose in Chinese unless a specific file already uses English.
 - `web/package.json` has `lint` but no frontend test script. Do not report `npm test` as available.
-- `.github/workflows/` is absent in the current snapshot; do not claim CI coverage unless it is added later.
+- `.github/workflows/ci.yml` runs the documented Go checks plus Web audit/typecheck/build on pull requests and pushes to `main`; do not claim additional CI coverage that is not present in that workflow.
 - This repository previously had closeout work around export/import hardening and Codex token accounting. Re-verify current code before relying on those historical facts.

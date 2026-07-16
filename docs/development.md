@@ -76,9 +76,12 @@ go run . <command> --help
 
 涉及 Web 面板时再运行：
 
+Node.js 版本必须满足 `^20.19.0` 或 `>=22.12.0`。
+
 ```bash
 cd web
-npm install
+npm ci
+npm audit --audit-level=moderate
 npm run lint
 npm run build
 cd ..

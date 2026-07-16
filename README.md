@@ -59,11 +59,11 @@ go test ./...
 go build ./...
 ```
 
-前端面板构建：
+前端面板要求 Node.js `^20.19.0` 或 `>=22.12.0`。使用仓库 lockfile 构建：
 
 ```bash
 cd web
-npm install
+npm ci
 npm run build
 ```
 
@@ -199,7 +199,7 @@ agent-ledger serve --addr 127.0.0.1:54217 --static-dir web/dist
 
 ```bash
 cd web
-npm install
+npm ci
 npm run build
 ```
 
