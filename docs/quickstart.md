@@ -71,9 +71,11 @@ go build -o bin/agent-ledger .
 
 ## 6. Web panel
 
+需要 Node.js `^20.19.0` 或 `>=22.12.0`。
+
 ```bash
 cd web
-npm install
+npm ci
 npm run build
 cd ..
 ./bin/agent-ledger serve
