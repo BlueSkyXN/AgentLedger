@@ -1,10 +1,10 @@
-import { NavLink, Outlet } from "react-router-dom";
+import type { MouseEvent, ReactNode } from "react";
 
 import { FilterBar } from "@/components/FilterBar";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
 const links = [
-  { to: "/", label: "总览", end: true },
+  { to: "/", label: "总览" },
   { to: "/trends", label: "趋势" },
   { to: "/models", label: "模型" },
   { to: "/agents", label: "渠道" },
@@ -14,7 +14,21 @@ const links = [
   { to: "/settings", label: "设置" },
 ];
 
-export function Layout() {
+type LayoutProps = {
+  pathname: string;
+  onNavigate: (to: string) => void;
+  children: ReactNode;
+};
+
+export function Layout({ pathname, onNavigate, children }: LayoutProps) {
+  const handleNavigation = (event: MouseEvent<HTMLAnchorElement>, to: string) => {
+    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+      return;
+    }
+    event.preventDefault();
+    onNavigate(to);
+  };
+
   return (
     <div className="shell">
       <header className="topbar">
@@ -24,9 +38,9 @@ export function Layout() {
         </div>
         <nav aria-label="主导航">
           {links.map((link) => (
-            <NavLink key={link.to} to={link.to} end={link.end} className={({ isActive }) => isActive ? "active" : undefined}>
+            <a key={link.to} href={link.to} className={pathname === link.to ? "active" : undefined} onClick={(event) => handleNavigation(event, link.to)}>
               {link.label}
-            </NavLink>
+            </a>
           ))}
         </nav>
         <ThemeToggle />
@@ -35,7 +49,7 @@ export function Layout() {
         <FilterBar />
       </section>
       <main>
-        <Outlet />
+        {children}
       </main>
     </div>
   );
