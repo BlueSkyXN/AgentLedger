@@ -559,17 +559,23 @@ func reportEstimator(path string) (*pricing.Estimator, *pricing.Profile, error) 
 }
 
 func attachReportEstimate(row *ReportRow, estimate reportCost) {
+	row.Pricing = estimate.Summary
+	if estimate.Summary == nil || estimate.Summary.PricedEvents == 0 {
+		return
+	}
 	row.EstimatedCostMicroUSD = &estimate.MicroUSD
 	usd := pricing.MicroUSDToUSD(estimate.MicroUSD)
 	row.EstimatedCostUSD = &usd
-	row.Pricing = estimate.Summary
 }
 
 func attachTimeEstimate(row *TimeBreakdownRow, estimate reportCost) {
+	row.Pricing = estimate.Summary
+	if estimate.Summary == nil || estimate.Summary.PricedEvents == 0 {
+		return
+	}
 	row.EstimatedCostMicroUSD = &estimate.MicroUSD
 	usd := pricing.MicroUSDToUSD(estimate.MicroUSD)
 	row.EstimatedCostUSD = &usd
-	row.Pricing = estimate.Summary
 }
 
 func timeBreakdownEstimateKey(bucket, label string) string {

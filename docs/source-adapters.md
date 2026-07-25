@@ -10,6 +10,7 @@ AgentLedger v2 通过 adapter 读取本机 agent 日志，解析出统一的 `Pa
 | Codex | `~/.codex/sessions` | JSONL | `usage`、`response.usage`、`payload.info.last_token_usage`、`payload.info.total_token_usage`。 |
 | GitHub Copilot | `~/.copilot/otel`, `~/.copilot/session-state` | JSONL | 优先 OTel `gen_ai.usage.*` token telemetry；没有 OTel 文件时回退到 `session.shutdown.data.modelMetrics` session+model 汇总。 |
 | Gemini CLI | `~/.gemini` | JSON / JSONL | `usageMetadata`、`promptTokenCount`、`candidatesTokenCount`、`totalTokenCount`。 |
+| WorkBuddy | `~/.workbuddy/projects` | JSONL | `providerData.usage`、`providerData.rawUsage`、根级 source event ID、session/request/project metadata。 |
 
 ## Source-specific accounting
 
@@ -51,11 +52,21 @@ GitHub Copilot 优先读取本地 OTel JSONL telemetry：`~/.copilot/otel` 或 `
 
 `requests.cost`、`totalPremiumRequests`、`totalNanoAiu` 等 Copilot 本地指标会保留在 `raw_usage_json`，但不会写入 `recorded_cost_usd`；这些值不是可直接和 Claude/Codex 拉通的 USD 成本。`assistant.message.outputTokens`、`subagent.completed.totalTokens` 和 compaction token 字段只作为校验线索，当前不会作为主 usage 导入，避免 partial envelope 和 `session.shutdown` 汇总重复计数。
 
+### WorkBuddy
+
+WorkBuddy 只扫描 `~/.workbuddy/projects/**/*.jsonl`，包括主会话和 subagent 记录；不会读取应用日志、trace、audit、file history、SQLite、blobs 或工具输出作为 usage 来源。adapter 只接受带根级 `id`、`timestamp`、`sessionId`、`cwd` 以及完整 `providerData.usage` / `providerData.rawUsage` 的单次调用记录，并以根级事件 ID 去重。`messageId` 只用于消息关联，`conversationRequestId` 作为 turn/run 分组，不参与去重。
+
+WorkBuddy source input 包含 cache。入库时 `raw_input_tokens` 保存 `prompt_tokens`，`input_tokens` 扣除 `prompt_tokens_details.cached_tokens` 与明确的 cache write，`cache_read_tokens` / `cache_creation_tokens` 单独保存；`completion_tokens` 作为包含 reasoning 的 output，reasoning detail 仅作分析明细。`source_total_tokens` 与 `total_tokens` 使用来源明确的 `rawUsage.total_tokens`，不从 overlapping 明细重新推导。缺少 cache-write 明细的记录标记为 partial observability。
+
+`model_raw` 保存 `providerData.model`，规范化仅使用 WorkBuddy exact aliases：`deepseek-v4-pro-202606 -> deepseek-v4-pro`、`k3 -> kimi-k3`、`kimi-k3-2 -> kimi-k3`。内置路由使用 `provider = workbuddy`，`custom-local:*` 使用 `provider = custom`；两者的 `channel`、`source_agent`、`source_product` 均为 `workbuddy`。`auto` 在来源未给出 resolved model 时保持 `auto` 并按 missing pricing 处理。
+
+WorkBuddy 的 `rawUsage.credit` 不写入脱敏 raw usage envelope，也不映射为 `recorded_cost_usd`。estimated cost 只使用规范化模型、token 分项和 pricing profile；没有匹配 pricing rule 时保留 missing coverage，不输出估算 `$0`。保存的 raw envelope 是 allowlist 重建结果，不包含正文、工具参数、`cwd`、URL、API key 或完整 `providerData`；`project_path` 单独保存在本地事实表中，并继续服从默认 export path redaction。
+
 ## Parsed fields
 
 Adapter 会尽量提供：
 
-- `Agent`: 写入 `channel`，例如 `claude`、`codex`、`copilot`、`gemini`。
+- `Agent`: 写入 `channel`，例如 `claude`、`codex`、`copilot`、`gemini`、`workbuddy`。
 - `Provider`
 - `Model`
 - `TimestampMs`

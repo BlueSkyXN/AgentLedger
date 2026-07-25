@@ -50,10 +50,11 @@ var importCmd = &cobra.Command{
 
 		allAdapters := adapters.AllAdapters()
 		agentConfigs := map[string]*config.AgentConfig{
-			"claude":  &cfg.Agents.Claude,
-			"codex":   &cfg.Agents.Codex,
-			"gemini":  &cfg.Agents.Gemini,
-			"copilot": &cfg.Agents.Copilot,
+			"claude":    &cfg.Agents.Claude,
+			"codex":     &cfg.Agents.Codex,
+			"gemini":    &cfg.Agents.Gemini,
+			"copilot":   &cfg.Agents.Copilot,
+			"workbuddy": &cfg.Agents.WorkBuddy,
 		}
 
 		for _, adapter := range allAdapters {
@@ -150,11 +151,22 @@ func parseImportFile(adapter adapters.Adapter, filePath string, cutoff time.Time
 		}
 	}
 
-	records, err := adapter.ParseFile(filePath)
+	var records []*fingerprint.ParsedRecord
+	var parseWarnings []string
+	if warningAdapter, ok := adapter.(adapters.ParseWarningAdapter); ok {
+		records, parseWarnings, err = warningAdapter.ParseFileWithWarnings(filePath)
+	} else {
+		records, err = adapter.ParseFile(filePath)
+	}
 	if err != nil {
 		warning := fmt.Sprintf("failed to parse %s: %v", filePath, err)
 		fmt.Fprintf(os.Stderr, "Warning: %s\n", warning)
 		return nil, true, warning
+	}
+	if len(parseWarnings) > 0 {
+		warning := fmt.Sprintf("%s parse warning for %s: %s", adapter.Name(), filePath, strings.Join(parseWarnings, "; "))
+		fmt.Fprintf(os.Stderr, "Warning: %s\n", warning)
+		return records, true, warning
 	}
 	return records, true, ""
 }
@@ -178,6 +190,9 @@ func importParsedRecords(database *db.Database, adapterName string, records []*f
 		nowMs := time.Now().UnixMilli()
 
 		normalized, modelProvider, _ := adapters.NormalizeModelName(rec.Model)
+		if rec.ModelNormalized != "" {
+			normalized = rec.ModelNormalized
+		}
 		provider := rec.Provider
 		if provider == "" || provider == "unknown" {
 			provider = modelProvider
@@ -278,6 +293,8 @@ func sourceProductForAgent(agent string) string {
 		return "codex-cli"
 	case "copilot":
 		return "copilot-otel"
+	case "workbuddy":
+		return "workbuddy"
 	default:
 		return agent
 	}
@@ -285,7 +302,7 @@ func sourceProductForAgent(agent string) string {
 
 func defaultObservability(agent string) string {
 	switch agent {
-	case "claude", "codex", "copilot":
+	case "claude", "codex", "copilot", "workbuddy":
 		return "full"
 	default:
 		return "unknown"

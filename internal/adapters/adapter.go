@@ -11,6 +11,12 @@ type Adapter interface {
 	ParseFile(path string) ([]*fingerprint.ParsedRecord, error)
 }
 
+// ParseWarningAdapter can return non-fatal, aggregated diagnostics while still
+// importing valid records from the same file.
+type ParseWarningAdapter interface {
+	ParseFileWithWarnings(path string) ([]*fingerprint.ParsedRecord, []string, error)
+}
+
 // RecordPostProcessor can normalize or deduplicate records after all files for
 // an adapter have been parsed.
 type RecordPostProcessor interface {
@@ -24,5 +30,6 @@ func AllAdapters() []Adapter {
 		NewCodexAdapter(),
 		NewGeminiAdapter(),
 		NewCopilotAdapter(),
+		NewWorkBuddyAdapter(),
 	}
 }

@@ -102,7 +102,14 @@ func TestEventsConfigAndFilters(t *testing.T) {
 	}
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/filter-options", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/config", nil)
+	server.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"workbuddy"`) || !strings.Contains(recorder.Body.String(), `~/.workbuddy/projects`) {
+		t.Fatalf("config missing WorkBuddy snapshot: status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	recorder = httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodGet, "/api/v1/filter-options", nil)
 	server.Handler().ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("filter-options status = %d body = %s", recorder.Code, recorder.Body.String())

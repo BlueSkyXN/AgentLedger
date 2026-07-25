@@ -130,10 +130,11 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			"gracing_minutes": s.cfg.Import.GracingMinutes,
 		},
 		"agents": map[string]any{
-			"claude":  agentSnapshot(s.cfg.Agents.Claude),
-			"codex":   agentSnapshot(s.cfg.Agents.Codex),
-			"copilot": agentSnapshot(s.cfg.Agents.Copilot),
-			"gemini":  agentSnapshot(s.cfg.Agents.Gemini),
+			"claude":    agentSnapshot(s.cfg.Agents.Claude),
+			"codex":     agentSnapshot(s.cfg.Agents.Codex),
+			"copilot":   agentSnapshot(s.cfg.Agents.Copilot),
+			"gemini":    agentSnapshot(s.cfg.Agents.Gemini),
+			"workbuddy": agentSnapshot(s.cfg.Agents.WorkBuddy),
 		},
 		"privacy_note": "面板 API 只读，不返回 raw usage JSON。",
 	})

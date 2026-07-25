@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -38,5 +39,35 @@ func TestLoadReadOnlyReadsExistingConfig(t *testing.T) {
 	}
 	if loaded.Reports.Timezone != "UTC" {
 		t.Fatalf("timezone = %q, want UTC", loaded.Reports.Timezone)
+	}
+}
+
+func TestLoadReadOnlyBackfillsWorkBuddyDefaults(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENT_LEDGER_DATA_DIR", dataDir)
+
+	legacy := strings.Join([]string{
+		"[database]",
+		`path = "agent-ledger.db"`,
+		"",
+		"[agents.claude]",
+		"enabled = false",
+	}, "\n")
+	if err := os.WriteFile(ConfigPath(), []byte(legacy), 0o600); err != nil {
+		t.Fatalf("write legacy config: %v", err)
+	}
+
+	cfg, err := LoadReadOnly()
+	if err != nil {
+		t.Fatalf("load legacy config: %v", err)
+	}
+	if !cfg.Agents.WorkBuddy.Enabled {
+		t.Fatal("expected missing WorkBuddy config to retain enabled default")
+	}
+	if len(cfg.Agents.WorkBuddy.Paths) != 1 || cfg.Agents.WorkBuddy.Paths[0] != "~/.workbuddy/projects" {
+		t.Fatalf("unexpected WorkBuddy defaults: %+v", cfg.Agents.WorkBuddy)
+	}
+	if cfg.Agents.Claude.Enabled {
+		t.Fatal("expected explicit legacy Claude setting to remain disabled")
 	}
 }

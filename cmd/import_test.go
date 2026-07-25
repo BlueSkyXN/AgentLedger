@@ -9,6 +9,7 @@ import (
 
 	"github.com/BlueSkyXN/AgentLedger/internal/adapters"
 	"github.com/BlueSkyXN/AgentLedger/internal/config"
+	"github.com/BlueSkyXN/AgentLedger/internal/db"
 	"github.com/BlueSkyXN/AgentLedger/internal/fingerprint"
 	"github.com/BlueSkyXN/AgentLedger/internal/model"
 )
@@ -75,6 +76,42 @@ func TestSourceProductForClaudeRemainsClaudeCode(t *testing.T) {
 	}
 }
 
+func TestSourceProductForWorkBuddy(t *testing.T) {
+	if got := sourceProductForAgent("workbuddy"); got != "workbuddy" {
+		t.Fatalf("expected WorkBuddy source product, got %q", got)
+	}
+}
+
+func TestImportUsesParsedNormalizedModelOverride(t *testing.T) {
+	database, err := db.Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer database.Close()
+
+	records := []*fingerprint.ParsedRecord{{
+		Agent:           "workbuddy",
+		Provider:        "custom",
+		Model:           "deepseek-v4-pro-202606",
+		ModelNormalized: "deepseek-v4-pro",
+		TimestampMs:     1,
+		DedupeID:        "source-event",
+		TotalTokens:     10,
+	}}
+	added, updated, skipped, warnings := importParsedRecords(database, "workbuddy", records)
+	if added != 1 || updated != 0 || skipped != 0 || len(warnings) != 0 {
+		t.Fatalf("unexpected import result added=%d updated=%d skipped=%d warnings=%v", added, updated, skipped, warnings)
+	}
+
+	var raw, normalized, provider string
+	if err := database.Conn().QueryRow(`SELECT model_raw, model_normalized, provider FROM usage_events`).Scan(&raw, &normalized, &provider); err != nil {
+		t.Fatalf("read event: %v", err)
+	}
+	if raw != "deepseek-v4-pro-202606" || normalized != "deepseek-v4-pro" || provider != "custom" {
+		t.Fatalf("unexpected model/provider raw=%q normalized=%q provider=%q", raw, normalized, provider)
+	}
+}
+
 func TestParseImportFileProcessesStableRecentFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "recent.jsonl")
 	if err := os.WriteFile(path, []byte("{}\n"), 0o644); err != nil {
@@ -90,6 +127,23 @@ func TestParseImportFileProcessesStableRecentFile(t *testing.T) {
 	}
 }
 
+func TestParseImportFileReturnsNonFatalAdapterWarning(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "warning.jsonl")
+	if err := os.WriteFile(path, []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	records, processed, warning := parseImportFile(fakeWarningImportAdapter{}, path, time.Now().Add(time.Hour))
+	if !processed || len(records) != 1 {
+		t.Fatalf("expected valid records to survive a parse warning, processed=%v records=%d", processed, len(records))
+	}
+	for _, want := range []string{"fake-warning parse warning", path, "line 1 invalid_token_totals"} {
+		if !strings.Contains(warning, want) {
+			t.Fatalf("warning missing %q: %s", want, warning)
+		}
+	}
+}
+
 type fakeImportAdapter struct{}
 
 func (fakeImportAdapter) Name() string { return "fake" }
@@ -98,4 +152,12 @@ func (fakeImportAdapter) Discover(paths []string) ([]string, error) { return nil
 
 func (fakeImportAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, error) {
 	return []*fingerprint.ParsedRecord{{Agent: "fake", TimestampMs: 1, TotalTokens: 1}}, nil
+}
+
+type fakeWarningImportAdapter struct{ fakeImportAdapter }
+
+func (fakeWarningImportAdapter) Name() string { return "fake-warning" }
+
+func (fakeWarningImportAdapter) ParseFileWithWarnings(path string) ([]*fingerprint.ParsedRecord, []string, error) {
+	return []*fingerprint.ParsedRecord{{Agent: "fake-warning", TimestampMs: 1, TotalTokens: 1}}, []string{"line 1 invalid_token_totals"}, nil
 }

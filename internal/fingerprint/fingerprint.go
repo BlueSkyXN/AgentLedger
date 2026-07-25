@@ -10,9 +10,12 @@ import (
 
 // ParsedRecord contains the parsed fields from a source record
 type ParsedRecord struct {
-	Agent                 string
-	Provider              string
-	Model                 string
+	Agent    string
+	Provider string
+	Model    string
+	// ModelNormalized optionally overrides the generic model normalizer at import
+	// time. Adapters use it only when their source has an explicit canonical ID.
+	ModelNormalized       string
 	TimestampMs           int64
 	SessionID             string
 	ProjectPath           string

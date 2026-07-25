@@ -2,7 +2,7 @@
 
 **面向 AI Coding Agent 的本地 usage 统计分析器。**
 
-AgentLedger 把 Claude Code、Codex、GitHub Copilot、Gemini CLI 等本机日志解析为统一 usage event，写入本地 SQLite，并提供按渠道、模型、provider、时间、session 和 project 的筛选、聚合与慢请求分析。
+AgentLedger 把 Claude Code、Codex、GitHub Copilot、Gemini CLI、WorkBuddy 等本机日志解析为统一 usage event，写入本地 SQLite，并提供按渠道、模型、provider、时间、session 和 project 的筛选、聚合与慢请求分析。
 
 ## 当前定位
 
@@ -26,7 +26,7 @@ agent-ledger init --reset
 
 ## 功能特性
 
-- **多 agent 导入**：Claude Code、Codex、GitHub Copilot、Gemini CLI。
+- **多 agent 导入**：Claude Code、Codex、GitHub Copilot、Gemini CLI、WorkBuddy。
 - **三表 SQLite schema**：只保留 `meta`、`import_runs`、`usage_events`。
 - **扁平事实表**：`usage_events` 直接保存 channel、provider、model、time、session、project、token、timing、source line 和 raw usage envelope。
 - **确定性去重 + 完整度 upsert**：重复事件优先保留有 timing、有 recorded cost、有 model、token 总量更高的记录。
@@ -242,8 +242,9 @@ project=<project-path-label>
 | Codex | `~/.codex/sessions` | JSONL | 读取 token count 记录；Codex provider 归一为 `openai` 合并统计，不按 session 的 `model_provider` 拆账；默认用 `total_token_usage` 的 per-session 累计 delta 还原真实增量，`last_token_usage` 仅用于旧记录或 `ccusage_compatible` 对照；配置写 `~/.codex` 时会自动收敛到 `sessions`。 |
 | GitHub Copilot | `~/.copilot/otel`, `~/.copilot/session-state` | JSONL | 优先读取 OTel `gen_ai.usage.*`；没有 OTel 文件时回退到每条非空 `session.shutdown.data.modelMetrics` 的 segment+model 汇总。Copilot input 会拆成 `raw_input_tokens`、非缓存 `input_tokens` 和 `cache_read_tokens`。 |
 | Gemini CLI | `~/.gemini` | JSON / JSONL | 读取 `usageMetadata`。 |
+| WorkBuddy | `~/.workbuddy/projects` | JSONL | 读取带 `providerData.usage` 与 `providerData.rawUsage` 的调用记录；按根级事件 ID 去重并拆分非缓存 input、cache read/write、output 和 reasoning 明细。`credit` 不保存、不作为 USD 成本；`auto` 在来源未给出实际模型时保持未定价，没有 pricing rule 的模型保持 missing 而不显示为 `$0`。 |
 
-`channel` 固定表示 agent 来源，例如 `claude`、`codex`、`copilot`、`gemini`。
+`channel` 固定表示 agent 来源，例如 `claude`、`codex`、`copilot`、`gemini`、`workbuddy`。
 
 ## 配置
 
@@ -286,6 +287,10 @@ paths = ["~/.gemini"]
 [agents.copilot]
 enabled = true
 paths = ["~/.copilot/otel", "~/.copilot/session-state"]
+
+[agents.workbuddy]
+enabled = true
+paths = ["~/.workbuddy/projects"]
 ```
 
 数据目录选择顺序：

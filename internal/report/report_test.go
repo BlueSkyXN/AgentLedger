@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/BlueSkyXN/AgentLedger/internal/db"
+	"github.com/BlueSkyXN/AgentLedger/internal/pricing"
 )
 
 func reportTestDB(t *testing.T) *db.Database {
@@ -165,6 +166,40 @@ func TestGenerateRejectsInvalidCostMode(t *testing.T) {
 	database := reportTestDB(t)
 	if err := Generate(database.Conn(), "models", Filters{CostMode: "blended"}, true); err == nil || !strings.Contains(err.Error(), "invalid cost mode") {
 		t.Fatalf("expected invalid cost mode error, got %v", err)
+	}
+}
+
+func TestAttachReportEstimatesOmitUnpricedCostButKeepCoverage(t *testing.T) {
+	missing := &pricing.CoverageSummary{TotalEvents: 1, Confidence: "missing"}
+	estimate := reportCost{Summary: missing}
+
+	row := ReportRow{}
+	attachReportEstimate(&row, estimate)
+	if row.Pricing != missing || row.EstimatedCostUSD != nil || row.EstimatedCostMicroUSD != nil {
+		t.Fatalf("report row should keep missing coverage without a zero cost: %+v", row)
+	}
+
+	timeRow := TimeBreakdownRow{}
+	attachTimeEstimate(&timeRow, estimate)
+	if timeRow.Pricing != missing || timeRow.EstimatedCostUSD != nil || timeRow.EstimatedCostMicroUSD != nil {
+		t.Fatalf("time row should keep missing coverage without a zero cost: %+v", timeRow)
+	}
+}
+
+func TestAttachReportEstimatesPreserveExplicitZeroPrice(t *testing.T) {
+	priced := &pricing.CoverageSummary{TotalEvents: 1, PricedEvents: 1, CoverageRatio: 1, Confidence: "exact"}
+	estimate := reportCost{Summary: priced}
+
+	row := ReportRow{}
+	attachReportEstimate(&row, estimate)
+	if row.EstimatedCostUSD == nil || *row.EstimatedCostUSD != 0 || row.EstimatedCostMicroUSD == nil || *row.EstimatedCostMicroUSD != 0 {
+		t.Fatalf("report row should expose an explicit zero price: %+v", row)
+	}
+
+	timeRow := TimeBreakdownRow{}
+	attachTimeEstimate(&timeRow, estimate)
+	if timeRow.EstimatedCostUSD == nil || *timeRow.EstimatedCostUSD != 0 || timeRow.EstimatedCostMicroUSD == nil || *timeRow.EstimatedCostMicroUSD != 0 {
+		t.Fatalf("time row should expose an explicit zero price: %+v", timeRow)
 	}
 }
 

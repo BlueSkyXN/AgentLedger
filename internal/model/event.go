@@ -8,6 +8,7 @@ const (
 	AccCopilotOtelParts         = "copilot_otel_parts"
 	AccCopilotOtelTotalFallback = "copilot_otel_total_fallback"
 	AccCopilotSessionMetrics    = "copilot_session_model_metrics"
+	AccWorkBuddyRawUsage        = "workbuddy_raw_usage"
 )
 
 // UsageEvent is the v2 fact-table representation for one local agent usage event.
