@@ -5,19 +5,17 @@ import (
 	"fmt"
 
 	"github.com/BlueSkyXN/AgentLedger/internal/model"
-	"github.com/BlueSkyXN/AgentLedger/internal/usageevidence"
 )
 
 const rawEvidenceBatchSize = 1000
 
-// RawEvidenceStats is an aggregate-only compact-evidence result. It never
-// includes a raw envelope, event identifier, or source location.
+// RawEvidenceStats is aggregate-only. It never returns envelopes, event IDs,
+// source locations, or any other protected usage detail.
 type RawEvidenceStats struct {
-	Candidates          int64
-	AlreadyCompacted    int64
-	Empty               int64
-	UnknownPreserved    int64
-	IdentityProtected   int64
+	// Candidates counts raw_usage_json IS NOT NULL, including empty strings.
+	Candidates int64
+	// AlreadyNull counts rows that already comply with the storage boundary.
+	AlreadyNull         int64
 	RawBytesBefore      int64
 	RawBytesAfter       int64
 	Updated             int64
@@ -26,115 +24,40 @@ type RawEvidenceStats struct {
 }
 
 type rawEvidenceCandidate struct {
+	rowID   int64
 	eventID string
 	raw     string
-	compact string
 }
 
-func compactEvidence(channel, raw string) (usageevidence.Result, error) {
-	result := usageevidence.Compact(channel, raw)
-	if result.Status == usageevidence.StatusInternalError {
-		return result, errors.New("raw usage evidence compaction failed")
-	}
-	return result, nil
-}
-
-func sqliteCompactEvidence(channel, raw string) (any, error) {
-	result, err := compactEvidence(channel, raw)
-	if err != nil {
-		return nil, err
-	}
-	switch result.Status {
-	case usageevidence.StatusRecognizedLegacy, usageevidence.StatusAlreadyCompact:
-		return result.JSON, nil
-	case usageevidence.StatusEmpty, usageevidence.StatusUnknown:
-		return nil, nil
-	default:
-		return nil, errors.New("raw usage evidence compaction failed")
-	}
-}
-
-func sqliteEvidenceStatus(channel, raw string) (string, error) {
-	result, err := compactEvidence(channel, raw)
-	if err != nil {
-		return "", err
-	}
-	return string(result.Status), nil
-}
-
-func rawEvidenceIdentityProtected(strategy string) bool {
-	return strategy == "raw_hash" || strategy == "fallback"
-}
-
-func addRawEvidenceStats(stats *RawEvidenceStats, channel, strategy, raw string) (rawEvidenceCandidate, error) {
-	stats.RawBytesBefore += int64(len(raw))
-	if rawEvidenceIdentityProtected(strategy) {
-		stats.IdentityProtected++
-		stats.RawBytesAfter += int64(len(raw))
-		return rawEvidenceCandidate{}, nil
-	}
-
-	result, err := compactEvidence(channel, raw)
-	if err != nil {
-		return rawEvidenceCandidate{}, err
-	}
-	switch result.Status {
-	case usageevidence.StatusRecognizedLegacy:
-		stats.Candidates++
-		stats.RawBytesAfter += int64(len(result.JSON))
-		return rawEvidenceCandidate{raw: raw, compact: result.JSON}, nil
-	case usageevidence.StatusAlreadyCompact:
-		stats.AlreadyCompacted++
-		stats.RawBytesAfter += int64(len(raw))
-	case usageevidence.StatusEmpty:
-		stats.Empty++
-	case usageevidence.StatusUnknown:
-		stats.UnknownPreserved++
-		stats.RawBytesAfter += int64(len(raw))
-	default:
-		return rawEvidenceCandidate{}, errors.New("raw usage evidence compaction failed")
-	}
-	return rawEvidenceCandidate{}, nil
-}
-
-// InspectRawEvidence computes a no-write compact-evidence plan. It is safe to
-// call through OpenReadOnlyV2 for a CLI dry-run.
+// InspectRawEvidence computes the no-write cleanup plan. It is safe through
+// OpenReadOnlyV2 and considers every non-NULL value stale, regardless of its
+// channel, dedupe strategy, or evidence format.
 func (d *Database) InspectRawEvidence() (RawEvidenceStats, error) {
 	var stats RawEvidenceStats
-	rows, err := d.conn.Query(`
-		SELECT channel, dedupe_strategy, COALESCE(raw_usage_json, '')
+	if err := d.conn.QueryRow(`
+		SELECT
+			COUNT(CASE WHEN raw_usage_json IS NOT NULL THEN 1 END),
+			COUNT(CASE WHEN raw_usage_json IS NULL THEN 1 END),
+			COALESCE(SUM(CASE WHEN raw_usage_json IS NOT NULL THEN length(CAST(raw_usage_json AS BLOB)) ELSE 0 END), 0)
 		FROM usage_events
-		ORDER BY event_id
-	`)
-	if err != nil {
-		return stats, fmt.Errorf("read raw usage evidence: %w", err)
+	`).Scan(&stats.Candidates, &stats.AlreadyNull, &stats.RawBytesBefore); err != nil {
+		return stats, fmt.Errorf("inspect raw usage evidence: %w", err)
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var channel, strategy, raw string
-		if err := rows.Scan(&channel, &strategy, &raw); err != nil {
-			return stats, fmt.Errorf("read raw usage evidence: %w", err)
-		}
-		if _, err := addRawEvidenceStats(&stats, channel, strategy, raw); err != nil {
-			return stats, err
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return stats, fmt.Errorf("read raw usage evidence: %w", err)
-	}
+	// Apply writes NULL, whose logical payload occupies no raw bytes.
+	stats.RawBytesAfter = 0
+	stats.RemainingCandidates = stats.Candidates
 	return stats, nil
 }
 
-// CompactRawEvidence rewrites only recognized, non-identity raw evidence in
-// atomic keyset batches. Already compact, empty, unknown, raw-hash, and
-// fallback evidence remains byte-for-byte unchanged.
+// CompactRawEvidence retains its public name for CLI compatibility. It now
+// removes every non-NULL raw envelope in atomic keyset batches instead of
+// transforming selected evidence formats.
 func (d *Database) CompactRawEvidence() (RawEvidenceStats, error) {
 	stats, err := d.InspectRawEvidence()
 	if err != nil {
 		return stats, err
 	}
 	if stats.Candidates == 0 {
-		stats.RemainingCandidates = 0
 		return stats, nil
 	}
 	if _, err := d.conn.Exec(`PRAGMA secure_delete = ON`); err != nil {
@@ -144,94 +67,70 @@ func (d *Database) CompactRawEvidence() (RawEvidenceStats, error) {
 	var lastRowID int64
 	for {
 		rows, err := d.conn.Query(`
-			SELECT rowid, event_id, channel, dedupe_strategy, COALESCE(raw_usage_json, '')
+			SELECT rowid, event_id, raw_usage_json
 			FROM usage_events
-			WHERE rowid > ?
+			WHERE rowid > ? AND raw_usage_json IS NOT NULL
 			ORDER BY rowid
 			LIMIT ?
 		`, lastRowID, rawEvidenceBatchSize)
 		if err != nil {
-			stats.RemainingCandidates = remainingCandidateEstimate(stats)
+			stats.RemainingCandidates = remainingRawEvidenceCandidates(stats)
 			return stats, fmt.Errorf("read raw usage evidence batch: %w", err)
 		}
 
 		var candidates []rawEvidenceCandidate
-		var rowCount int
 		for rows.Next() {
-			var rowID int64
-			var eventID, channel, strategy, raw string
-			if err := rows.Scan(&rowID, &eventID, &channel, &strategy, &raw); err != nil {
+			candidate := rawEvidenceCandidate{}
+			if err := rows.Scan(&candidate.rowID, &candidate.eventID, &candidate.raw); err != nil {
 				_ = rows.Close()
-				stats.RemainingCandidates = remainingCandidateEstimate(stats)
+				stats.RemainingCandidates = remainingRawEvidenceCandidates(stats)
 				return stats, fmt.Errorf("read raw usage evidence batch: %w", err)
 			}
-			lastRowID = rowID
-			rowCount++
-			candidate, err := rawEvidenceCandidateForRow(eventID, channel, strategy, raw)
-			if err != nil {
-				_ = rows.Close()
-				stats.RemainingCandidates = remainingCandidateEstimate(stats)
-				return stats, err
-			}
-			if candidate.eventID != "" {
-				candidates = append(candidates, candidate)
-			}
+			lastRowID = candidate.rowID
+			candidates = append(candidates, candidate)
 		}
 		if err := rows.Err(); err != nil {
 			_ = rows.Close()
-			stats.RemainingCandidates = remainingCandidateEstimate(stats)
+			stats.RemainingCandidates = remainingRawEvidenceCandidates(stats)
 			return stats, fmt.Errorf("read raw usage evidence batch: %w", err)
 		}
 		if err := rows.Close(); err != nil {
-			stats.RemainingCandidates = remainingCandidateEstimate(stats)
+			stats.RemainingCandidates = remainingRawEvidenceCandidates(stats)
 			return stats, fmt.Errorf("close raw usage evidence batch: %w", err)
 		}
-
-		if len(candidates) > 0 {
-			if err := d.applyRawEvidenceBatch(candidates); err != nil {
-				stats.RemainingCandidates = remainingCandidateEstimate(stats)
-				return stats, err
-			}
-			stats.Updated += int64(len(candidates))
-			stats.BatchesCompleted++
+		if len(candidates) == 0 {
+			break
 		}
-		if rowCount < rawEvidenceBatchSize {
+		if err := d.applyRawEvidenceBatch(candidates); err != nil {
+			stats.RemainingCandidates = remainingRawEvidenceCandidates(stats)
+			return stats, err
+		}
+		stats.Updated += int64(len(candidates))
+		stats.BatchesCompleted++
+		if len(candidates) < rawEvidenceBatchSize {
 			break
 		}
 	}
+
 	remaining, err := d.InspectRawEvidence()
 	if err != nil {
-		stats.RemainingCandidates = remainingCandidateEstimate(stats)
+		stats.RemainingCandidates = remainingRawEvidenceCandidates(stats)
 		return stats, err
 	}
 	stats.RawBytesAfter = remaining.RawBytesBefore
 	stats.RemainingCandidates = remaining.Candidates
 	if stats.RemainingCandidates != 0 {
-		return stats, errors.New("raw usage evidence compaction incomplete; retry")
+		return stats, errors.New("raw usage evidence cleanup incomplete; retry")
 	}
 	return stats, nil
 }
 
-func remainingCandidateEstimate(stats RawEvidenceStats) int64 {
+func remainingRawEvidenceCandidates(stats RawEvidenceStats) int64 {
 	remaining := stats.Candidates - stats.Updated
 	if remaining < 0 {
 		return 0
 	}
 	return remaining
-}
-
-func rawEvidenceCandidateForRow(eventID, channel, strategy, raw string) (rawEvidenceCandidate, error) {
-	if rawEvidenceIdentityProtected(strategy) {
-		return rawEvidenceCandidate{}, nil
-	}
-	result, err := compactEvidence(channel, raw)
-	if err != nil {
-		return rawEvidenceCandidate{}, err
-	}
-	if result.Status != usageevidence.StatusRecognizedLegacy {
-		return rawEvidenceCandidate{}, nil
-	}
-	return rawEvidenceCandidate{eventID: eventID, raw: raw, compact: result.JSON}, nil
 }
 
 func (d *Database) applyRawEvidenceBatch(candidates []rawEvidenceCandidate) (err error) {
@@ -247,11 +146,11 @@ func (d *Database) applyRawEvidenceBatch(candidates []rawEvidenceCandidate) (err
 	for _, candidate := range candidates {
 		result, err := tx.Exec(`
 			UPDATE usage_events
-			SET raw_usage_json = ?
+			SET raw_usage_json = NULL
 			WHERE event_id = ? AND raw_usage_json = ?
-		`, candidate.compact, candidate.eventID, candidate.raw)
+		`, candidate.eventID, candidate.raw)
 		if err != nil {
-			return fmt.Errorf("compact raw usage evidence batch: %w", err)
+			return fmt.Errorf("clear raw usage evidence batch: %w", err)
 		}
 		rowsAffected, err := result.RowsAffected()
 		if err != nil {
@@ -267,16 +166,8 @@ func (d *Database) applyRawEvidenceBatch(candidates []rawEvidenceCandidate) (err
 	return nil
 }
 
-func compactStoredCodexEvidence(incoming *model.UsageEvent, stored []*model.UsageEvent) string {
-	if incoming == nil || incoming.Channel != "codex" {
-		return ""
-	}
-	for _, candidate := range stored {
-		if candidate != nil && usageevidence.IsCompact("codex", candidate.RawUsageJSON) {
-			return candidate.RawUsageJSON
-		}
-	}
-	return ""
+func rawEvidenceIdentityProtected(strategy string) bool {
+	return strategy == "raw_hash" || strategy == "fallback"
 }
 
 func storedIdentityProtection(exact *model.UsageEvent, stored []*model.UsageEvent) *model.UsageEvent {
@@ -289,8 +180,4 @@ func storedIdentityProtection(exact *model.UsageEvent, stored []*model.UsageEven
 		}
 	}
 	return nil
-}
-
-func compactCodexEvidence(raw string) bool {
-	return usageevidence.IsCompact("codex", raw)
 }

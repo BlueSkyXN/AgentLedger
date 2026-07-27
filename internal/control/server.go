@@ -111,12 +111,15 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"database":                s.cfg.DBPath(),
-		"schema_version":          stats["schema_version"],
-		"total_events":            stats["total_events"],
-		"total_import_runs":       stats["total_import_runs"],
-		"total_tokens":            stats["total_tokens"],
-		"total_recorded_cost_usd": stats["total_recorded_cost_usd"],
+		"database":                     s.cfg.DBPath(),
+		"schema_version":               stats["schema_version"],
+		"total_events":                 stats["total_events"],
+		"known_request_count":          stats["known_request_count"],
+		"request_count_known_events":   stats["request_count_known_events"],
+		"request_count_unknown_events": stats["request_count_unknown_events"],
+		"total_import_runs":            stats["total_import_runs"],
+		"total_tokens":                 stats["total_tokens"],
+		"total_recorded_cost_usd":      stats["total_recorded_cost_usd"],
 	})
 }
 

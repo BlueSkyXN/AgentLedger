@@ -12,6 +12,7 @@ v2 已从“多表账本 / 审计系统”收敛为“本地 usage analytics”�
 - 用稳定 fingerprint 做确定性去重。
 - 重复事件使用 upsert，保留更完整记录。
 - 围绕 `channel`、`provider`、`model`、`time`、`session`、`project` 做筛选和统计。
+- 区分 event、模型 API request 与 session 的计数；请求数同时披露已知/未知 event coverage。
 - 统计 token、耗时、TTFT、输出 TPS。
 - timing 只在日志明确提供时记录，缺失保持 `NULL`。
 - `recorded_cost_usd` 只表示来源日志明确给出的 USD 成本；CLI report 可选用标准 JSON pricing profile 做只读 estimated cost。
@@ -28,8 +29,8 @@ agent-ledger init --reset
 
 - **多 agent 导入**：Claude Code、Codex、GitHub Copilot、Gemini CLI、WorkBuddy。
 - **三表 SQLite schema**：只保留 `meta`、`import_runs`、`usage_events`。
-- **扁平事实表**：`usage_events` 直接保存 channel、provider、model、time、session、project、token、timing、source line 和最小用量证据。
-- **最小用量证据**：Claude/Codex 只持久化版本化 usage evidence，不保存对话正文、thinking、tool 参数或无关 source wrapper。
+- **扁平事实表**：`usage_events` 直接保存 channel、provider、model、time、session、project、token、可选 `request_count`、timing、source line 和 source hash。
+- **纯统计持久化**：所有 adapter 只持久化结构化统计事实，完整源对象和 usage 子树仅在解析期间存在，`raw_usage_json` 保持 `NULL`。
 - **确定性去重 + 完整度 upsert**：重复事件优先保留有 timing、有 recorded cost、有 model、token 总量更高的记录。
 - **常用报表**：`daily`、`weekly`、`monthly`、`models`、`channels`、`projects`、`sessions`、`slow`。
 - **只读 Web 面板**：Overview、趋势、渠道 / provider、模型、project / session、慢请求、导入 / 设置。
@@ -128,7 +129,7 @@ agent-ledger serve
 | `status` | 显示数据库统计信息。 |
 | `doctor` | 显示配置、数据库路径和 agent 日志发现诊断；`doctor codex` 输出 Codex token/timing/口径覆盖诊断。 |
 | `verify` | 运行 SQLite `PRAGMA integrity_check`。 |
-| `compact-raw --dry-run\|--apply` | 检查或批量收敛旧 `raw_usage_json`；不会自动运行 `VACUUM`。 |
+| `compact-raw --dry-run\|--apply` | 检查或批量清除历史 `raw_usage_json`；不会自动运行 `VACUUM`。 |
 | `vacuum` | 运行 SQLite `VACUUM`。 |
 | `serve` | 启动本机只读 Web 面板和 `/api/v1/*` JSON API。 |
 | `completion` | 通过 Cobra 生成 shell completion 脚本。 |
@@ -179,7 +180,7 @@ agent-ledger report sessions --until 2026-05-31
 agent-ledger report slow --sort ttft_ms --limit 20
 ```
 
-报表会输出事件数、token 分项、平均总耗时、平均 TTFT、平均输出 TPS 和成本列。默认 `--cost recorded` 只显示来源明确记录的 `Recorded Cost(USD)`；`--cost estimated` 或 `--cost both` 会按 `pricing/pricing.v1.json` 或 `--pricing` 指定的 JSON profile 做只读估算，并输出 pricing coverage / confidence。内置 profile 对有明确长上下文价格的模型按单次事件完整 input side（input + cache creation + cache read）选择整请求价格档，不做超额部分的累进计价。estimated cost 不会写回 SQLite。没有 explicit timing 的事件不会参与 timing 平均值，相关字段保持空值。
+报表会输出 `event_count`、token 分项、平均总耗时、平均 TTFT、平均输出 TPS 和成本列。可用时也会输出 `known_request_count`，以及 request count 的 known/unknown event coverage（`request_count_known_events` / `request_count_unknown_events`）：只有来源明确提供 `request_count` 的 event 才计入 `known_request_count`；未知值不会以 event 数或 session 数补齐。`event_count` 是 usage event 行数，`session_count` 是非空 `session_id` 的去重数，二者都不是模型 API 请求数。默认 `--cost recorded` 只显示来源明确记录的 `Recorded Cost(USD)`；`--cost estimated` 或 `--cost both` 会按 `pricing/pricing.v1.json` 或 `--pricing` 指定的 JSON profile 做只读估算，并输出 pricing coverage / confidence。内置 profile 对有明确长上下文价格的模型按单次事件完整 input side（input + cache creation + cache read）选择整请求价格档，不做超额部分的累进计价。estimated cost 不会写回 SQLite。没有 explicit timing 的事件不会参与 timing 平均值，相关字段保持空值。
 
 ## 本地 Web 面板
 
@@ -216,9 +217,9 @@ npm run build
 | Method | Path | 说明 |
 |---|---|---|
 | `GET` | `/api/v1/health` | 版本、数据库路径、数据库大小、面板资源模式。 |
-| `GET` | `/api/v1/status` | schema version、事件数、导入次数、token 和 recorded cost 汇总。 |
+| `GET` | `/api/v1/status` | schema version、事件数、导入次数、token、recorded cost、`known_request_count` 及 request count known/unknown event coverage（`request_count_known_events` / `request_count_unknown_events`）汇总。 |
 | `GET` | `/api/v1/config` | 脱敏配置快照。 |
-| `GET` | `/api/v1/analytics/summary` | 总览 KPI，支持统一 filters。 |
+| `GET` | `/api/v1/analytics/summary` | 总览 KPI，支持统一 filters；包含 `known_request_count` 与 request count known/unknown event coverage（`request_count_known_events` / `request_count_unknown_events`）。 |
 | `GET` | `/api/v1/analytics/timeseries?bucket=daily\|weekly\|monthly` | 时间趋势；可加 `by=channel\|model\|provider\|session\|project` 返回时间 + 维度拆分。 |
 | `GET` | `/api/v1/analytics/breakdown?by=channel\|model\|provider\|session\|project` | 维度排行。 |
 | `GET` | `/api/v1/analytics/slow?sort=output_tps\|ttft_ms\|total_duration_ms&limit=50` | 慢请求列表。 |
@@ -244,11 +245,19 @@ project=<project-path-label>
 |---|---|---|---|
 | Claude Code | `~/.config/claude/projects`, `~/.claude/projects` | JSONL | 读取带有 `message.usage` 的 assistant 消息；旧配置写 `~/.claude` 时会自动展开到 `projects`。 |
 | Codex | `~/.codex/sessions` | JSONL | 读取 token count 记录；Codex provider 归一为 `openai` 合并统计，不按 session 的 `model_provider` 拆账；按 JSONL 时序使用 usage 自身 model、`thread_settings_applied` 和 `turn_context`，并保存 `model_resolution`；没有前置模型证据时记录为 `unknown` fallback，按零值政策单独披露且不算真实价格覆盖；默认用 `total_token_usage` 的 per-session 累计 delta 还原真实增量，`last_token_usage` 仅用于旧记录或 `ccusage_compatible` 对照；配置写 `~/.codex` 时会自动收敛到 `sessions`。 |
-| GitHub Copilot | `~/.copilot/otel`, `~/.copilot/session-state` | JSONL | 优先读取 OTel `gen_ai.usage.*`；没有 OTel 文件时回退到每条非空 `session.shutdown.data.modelMetrics` 的 segment+model 汇总。Copilot input 会拆成 `raw_input_tokens`、非缓存 `input_tokens` 和 `cache_read_tokens`。 |
+| GitHub Copilot | `~/.copilot/otel`, `~/.copilot/session-state` | JSONL | 优先读取 OTel `gen_ai.usage.*`；没有 OTel 文件时回退到每条非空 `session.shutdown.data.modelMetrics` 的 segment+model 汇总。Copilot input 会拆成 `raw_input_tokens`、非缓存 `input_tokens` 和 `cache_read_tokens`；session-state 的 experimental `modelMetrics.<model>.requests.count` 会作为该模型 API `request_count`。 |
 | Gemini CLI | `~/.gemini` | JSON / JSONL | 读取 `usageMetadata`。 |
 | WorkBuddy | `~/.workbuddy/projects` | JSONL | 读取带 `providerData.usage` 与 `providerData.rawUsage` 的调用记录；按根级事件 ID 去重并拆分非缓存 input、cache read/write、output 和 reasoning 明细。`credit` 不保存、不作为 USD 成本；`auto` 是路由选择状态而非 model ID，规范化为 `unknown/policy_zero`。 |
 
 `channel` 固定表示 agent 来源，例如 `claude`、`codex`、`copilot`、`gemini`、`workbuddy`。
+
+Copilot 的历史 request count 补齐不需要也没有 `import --agents` 参数：确认 `[agents.copilot]` 的 `enabled = true` 后，直接运行普通导入即可：
+
+```bash
+agent-ledger import
+```
+
+该补齐仅使用 `session.shutdown.modelMetrics.<model>.requests.count`。OTel request count 的映射，以及 OTel 与 session-state 同时存在时的 request-count 协调不在本期；当前 OTel 优先的 token 导入规则保持不变。
 
 ## 配置
 
@@ -259,7 +268,7 @@ project=<project-path-label>
 path = "local/data/agent-ledger.db"
 
 [privacy]
-mode = "envelope"
+mode = "statistics"
 redact_paths_on_export = true
 
 [import]
@@ -308,7 +317,9 @@ paths = ["~/.workbuddy/projects"]
 - Config: `<data-dir>/config.toml`
 - Database: 默认 `<data-dir>/agent-ledger.db`，也可通过 `[database].path` 修改
 
-当前 `[reports].timezone` 已用于 daily / weekly / monthly 报表分桶和 `--since` / `--until` 日期过滤；支持 `Local`、`UTC`、固定偏移如 `+08:00`，以及 Go 可加载的 IANA 时区如 `Asia/Shanghai`。`[privacy].mode = "envelope"` 是当前唯一支持的写入策略：Claude/Codex 只落 allowlisted compact usage evidence；`import`、`merge` 和 `compact-raw` 会在打开写连接前拒绝其它值。`[privacy].redact_paths_on_export = true` 时，`export` 会移除导出副本里的 `project_path`、`source_file` 和 `raw_usage_json`。`[cleanup]` 和 `[reports].currency` 仍是配置占位；现有命令尚未实现 cleanup 或 currency 转换。report 的 estimated cost 由 `pricing/pricing.v1.json` 或 `--pricing` 指定文件驱动，不使用 `[reports].currency` 做换算。
+当前 `[reports].timezone` 已用于 daily / weekly / monthly 报表分桶和 `--since` / `--until` 日期过滤；支持 `Local`、`UTC`、固定偏移如 `+08:00`，以及 Go 可加载的 IANA 时区如 `Asia/Shanghai`。`[privacy].mode = "statistics"` 是 canonical 写入策略：所有 adapter 只持久化结构化统计事实，`raw_usage_json` 保持 `NULL`；旧配置中的 `envelope` 作为 deprecated compatibility alias 接受，但行为同样是 statistics-only。`import`、`merge` 和 `compact-raw` 会在打开写连接前拒绝 `full`、`none`、空值和其它未知值。`[privacy].redact_paths_on_export = true` 时，`export` 仍会移除导出副本里的 `project_path`、`source_file` 和历史 `raw_usage_json`。`[cleanup]` 和 `[reports].currency` 仍是配置占位；现有命令尚未实现 cleanup 或 currency 转换。report 的 estimated cost 由 `pricing/pricing.v1.json` 或 `--pricing` 指定文件驱动，不使用 `[reports].currency` 做换算。
+
+`request_count` 是 nullable 的来源字段：`NULL` 表示未知，`0` 只表示来源显式记录为零。CLI、只读 API 和 Web 面板展示 `known_request_count` 时会同时展示 known/unknown event coverage；不会把未知值按零、event 数或 session 数填充。
 
 ## 文档
 

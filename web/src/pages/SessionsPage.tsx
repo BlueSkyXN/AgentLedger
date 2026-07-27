@@ -3,13 +3,15 @@ import { useState } from "react";
 import { DataTable, type DataTableColumn } from "@/components/DataTable";
 import type { EventItem, MetricRow } from "@/api/types";
 import { useEvents, useSessions } from "@/hooks/queries";
-import { formatCost, formatDate, formatInt, formatMs, formatPercent, formatTPS, shortHash } from "@/utils/format";
+import { formatCost, formatDate, formatInt, formatKnownRequestCount, formatMs, formatPercent, formatRequestCount, formatRequestCoverage, formatTPS, shortHash } from "@/utils/format";
 
 const EVENT_LIMITS = [50, 100, 200, 500];
 
 const sessionColumns: Array<DataTableColumn<MetricRow>> = [
   { key: "session", label: "会话", render: (row) => <span className="mono">{shortHash(row.label)}</span>, value: (row) => row.label },
   { key: "events", label: "事件", render: (row) => formatInt(row.events), value: (row) => row.events, numeric: true },
+  { key: "known_request_count", label: "请求数", render: (row) => formatKnownRequestCount(row.known_request_count, row.request_count_known_events, row.request_count_unknown_events), value: (row) => row.known_request_count, numeric: true },
+  { key: "request_coverage", label: "请求覆盖", render: (row) => formatRequestCoverage(row.request_count_known_events, row.request_count_unknown_events), value: (row) => row.request_count_known_events, numeric: true },
   { key: "total_tokens", label: "Tokens", render: (row) => formatInt(row.total_tokens), value: (row) => row.total_tokens, numeric: true },
   { key: "input_tokens", label: "输入", render: (row) => formatInt(row.input_tokens), value: (row) => row.input_tokens, numeric: true },
   { key: "output_tokens", label: "输出", render: (row) => formatInt(row.output_tokens), value: (row) => row.output_tokens, numeric: true },
@@ -25,6 +27,7 @@ const eventColumns: Array<DataTableColumn<EventItem>> = [
   { key: "channel", label: "Channel", render: (row) => row.channel, value: (row) => row.channel },
   { key: "model", label: "模型", render: (row) => row.model_normalized ?? row.model_raw ?? "-", value: (row) => row.model_normalized ?? row.model_raw ?? "" },
   { key: "session", label: "会话", render: (row) => <span className="mono">{shortHash(row.session_id)}</span>, value: (row) => row.session_id ?? "" },
+  { key: "request_count", label: "请求次数", render: (row) => formatRequestCount(row.request_count), value: (row) => row.request_count, numeric: true },
   { key: "total_tokens", label: "Tokens", render: (row) => formatInt(row.total_tokens), value: (row) => row.total_tokens, numeric: true },
   { key: "cache_creation_tokens", label: "缓存写入", render: (row) => formatInt(row.cache_creation_tokens), value: (row) => row.cache_creation_tokens, numeric: true },
   { key: "cache_read_tokens", label: "缓存读取", render: (row) => formatInt(row.cache_read_tokens), value: (row) => row.cache_read_tokens, numeric: true },

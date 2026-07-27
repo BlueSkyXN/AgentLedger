@@ -187,12 +187,8 @@ func importParsedRecords(database *db.Database, adapterName string, records []*f
 	added := 0
 	updated := 0
 	skipped := 0
-	evidenceOmitted := 0
 	var warnings []string
 	for _, rec := range records {
-		if rec.EvidenceOmitted {
-			evidenceOmitted++
-		}
 		fp, strategy := fingerprint.Compute(rec)
 		nowMs := time.Now().UnixMilli()
 
@@ -263,8 +259,8 @@ func importParsedRecords(database *db.Database, adapterName string, records []*f
 			CacheReadTokens:       rec.CacheReadTokens,
 			ReasoningTokens:       rec.ReasoningTokens,
 			TotalTokens:           rec.TotalTokens,
+			RequestCount:          rec.RequestCount,
 			RecordedCostUSD:       rec.CostUSD,
-			RawUsageJSON:          rec.RawJSON,
 			ImportedAtMs:          nowMs,
 			UpdatedAtMs:           nowMs,
 		}
@@ -289,9 +285,6 @@ func importParsedRecords(database *db.Database, adapterName string, records []*f
 		default:
 			skipped++
 		}
-	}
-	if evidenceOmitted > 0 {
-		warnings = append(warnings, fmt.Sprintf("%s usage evidence omitted for %d parsed record(s)", adapterName, evidenceOmitted))
 	}
 	return added, updated, skipped, warnings
 }

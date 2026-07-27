@@ -20,12 +20,12 @@ func testDB(t *testing.T) *db.Database {
 	_, err = database.Conn().Exec(`INSERT INTO usage_events (
 		event_id, dedupe_key, dedupe_strategy,
 		channel, provider, model_raw, model_normalized, model_resolution, timestamp_ms, session_id, project_path, message_id,
-		input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, reasoning_tokens, total_tokens,
+			input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, reasoning_tokens, total_tokens, request_count,
 		request_started_at_ms, first_token_at_ms, completed_at_ms, total_duration_ms, ttft_ms, output_duration_ms, output_tps,
 		recorded_cost_usd, raw_usage_json, imported_at_ms, updated_at_ms
 	) VALUES
-		('fp1', 'fp1', 'message_id', 'codex', 'openai', 'gpt-5', 'gpt-5', 'direct_event', ?, 's1', '/Users/test/Github/project-a', 'm1', 100, 50, 10, 5, 20, 185, ?, ?, ?, 3000, 500, 2500, 20.0, 0.1, '{"secret":"hidden"}', 1, 1),
-		('fp2', 'fp2', 'message_id', 'claude', 'anthropic', 'claude-sonnet', 'claude-sonnet', 'direct_event', ?, 's2', '/Users/test/Github/project-b', 'm2', 200, 80, 0, 0, 0, 280, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0.2, '{"secret":"hidden"}', 2, 2)`,
+			('fp1', 'fp1', 'message_id', 'codex', 'openai', 'gpt-5', 'gpt-5', 'direct_event', ?, 's1', '/Users/test/Github/project-a', 'm1', 100, 50, 10, 5, 20, 185, 3, ?, ?, ?, 3000, 500, 2500, 20.0, 0.1, '{"secret":"hidden"}', 1, 1),
+			('fp2', 'fp2', 'message_id', 'claude', 'anthropic', 'claude-sonnet', 'claude-sonnet', 'direct_event', ?, 's2', '/Users/test/Github/project-b', 'm2', 200, 80, 0, 0, 0, 280, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0.2, '{"secret":"hidden"}', 2, 2)`,
 		base, base, base+500, base+3000, base+86400000)
 	if err != nil {
 		t.Fatalf("insert events: %v", err)
@@ -46,6 +46,9 @@ func TestBuildSummary(t *testing.T) {
 	}
 	if summary.TotalEvents != 2 || summary.TotalTokens != 465 || summary.ImportRuns != 1 {
 		t.Fatalf("unexpected summary: %+v", summary)
+	}
+	if summary.KnownRequestCount != 3 || summary.RequestCountKnownEvents != 1 || summary.RequestCountUnknownEvents != 1 {
+		t.Fatalf("unexpected request coverage: %+v", summary)
 	}
 	if summary.InputTokens != 300 {
 		t.Fatalf("expected stored input tokens to be used without report-time cache subtraction, got %d", summary.InputTokens)
@@ -140,6 +143,9 @@ func TestSessionsImportRunsEventsSlowAndOptions(t *testing.T) {
 	}
 	if events[1].EventID != "fp1" || events[1].InputTokens != 100 {
 		t.Fatalf("expected Codex event input to use stored non-cache input tokens, got %+v", events[1])
+	}
+	if events[1].RequestCount == nil || *events[1].RequestCount != 3 || events[0].RequestCount != nil {
+		t.Fatalf("unexpected event request counts: %+v", events)
 	}
 	if events[1].ModelResolution == nil || *events[1].ModelResolution != "direct_event" {
 		t.Fatalf("expected event model resolution, got %+v", events[1])

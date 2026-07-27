@@ -46,14 +46,14 @@ func TestWorkBuddyAdapterParsesUsageWithPrivacyEnvelope(t *testing.T) {
 	if rec.CostUSD != nil {
 		t.Fatalf("credit must not become recorded USD cost: %v", rec.CostUSD)
 	}
-	assertWorkBuddyEnvelopeIsPrivate(t, rec.RawJSON)
+	assertWorkBuddyEnvelopeIsPrivate(t, rec.FingerprintJSON)
 
 	var envelope map[string]interface{}
-	if err := json.Unmarshal([]byte(rec.RawJSON), &envelope); err != nil {
-		t.Fatalf("unmarshal raw envelope: %v", err)
+	if err := json.Unmarshal([]byte(rec.FingerprintJSON), &envelope); err != nil {
+		t.Fatalf("unmarshal fingerprint envelope: %v", err)
 	}
 	if envelope["route_kind"] != "custom-local" || envelope["usage_model"] != "deepseek-v4-pro-202606" || envelope["cached_tokens"] != float64(30) || envelope["cache_write_tokens"] != float64(20) || envelope["reasoning_tokens"] != float64(7) {
-		t.Fatalf("unexpected raw envelope: %#v", envelope)
+		t.Fatalf("unexpected fingerprint envelope: %#v", envelope)
 	}
 }
 
@@ -205,7 +205,7 @@ func TestWorkBuddyLiveCorpus(t *testing.T) {
 			if rec.Agent != "workbuddy" || rec.SourceProduct != "workbuddy" || rec.DedupeID == "" || rec.ProjectPath == "" || rec.TotalTokens <= 0 {
 				t.Fatalf("invalid live WorkBuddy record metadata")
 			}
-			assertWorkBuddyEnvelopeIsPrivate(t, rec.RawJSON)
+			assertWorkBuddyEnvelopeIsPrivate(t, rec.FingerprintJSON)
 		}
 	}
 	if events == 0 || total <= 0 {

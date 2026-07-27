@@ -11,7 +11,6 @@ import (
 
 	"github.com/BlueSkyXN/AgentLedger/internal/fingerprint"
 	"github.com/BlueSkyXN/AgentLedger/internal/model"
-	"github.com/BlueSkyXN/AgentLedger/internal/usageevidence"
 )
 
 type ClaudeAdapter struct{}
@@ -28,13 +27,6 @@ type claudeUsageCandidate struct {
 	model       string
 	costUSD     *float64
 	isSidechain bool
-}
-
-func evidenceWarning(channel string, result usageevidence.Result) string {
-	if result.Status == usageevidence.StatusRecognizedLegacy || result.Status == usageevidence.StatusAlreadyCompact {
-		return ""
-	}
-	return fmt.Sprintf("%s usage evidence omitted: %s", channel, result.Status)
 }
 
 func NewClaudeAdapter() *ClaudeAdapter {
@@ -81,7 +73,6 @@ func (a *ClaudeAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, err
 
 		rawJSON, _ := json.Marshal(obj)
 		rawHash := sha256Hex(rawJSON)
-		compactEvidence := usageevidence.Compact("claude", string(rawJSON))
 		sessionID := candidate.sessionID
 		if sessionID == "" {
 			sessionID = extractClaudeSession(path)
@@ -118,10 +109,7 @@ func (a *ClaudeAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, err
 			UsageSpeed:            getString(candidate.usage, "speed"),
 			TokenAccountingMethod: model.AccClaudeUsageSum,
 			// TotalTokens left as 0 — import.go computes the full sum (incl. cache) consistently with other adapters
-			RawJSON:         compactEvidence.JSON,
 			FingerprintJSON: string(rawJSON),
-			EvidenceOmitted: compactEvidence.Status != usageevidence.StatusRecognizedLegacy && compactEvidence.Status != usageevidence.StatusAlreadyCompact,
-			EvidenceWarning: evidenceWarning("claude", compactEvidence),
 			SourceFile:      path,
 			LineNumber:      lineNum,
 			RawSHA256:       rawHash,

@@ -227,7 +227,7 @@ func workBuddyRecordFromObject(obj map[string]interface{}, path string, lineNumb
 		ObservabilityLevel:    observability,
 		TokenAccountingMethod: model.AccWorkBuddyRawUsage,
 		AccountingProfile:     workBuddyAccountingProfile,
-		RawJSON:               string(rawJSON),
+		FingerprintJSON:       string(rawJSON),
 		SourceFile:            path,
 		LineNumber:            lineNumber,
 		RawSHA256:             sha256Hex(sourceLine),

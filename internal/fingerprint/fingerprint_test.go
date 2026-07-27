@@ -90,9 +90,9 @@ func TestComputeSessionTokenIncludesTokenDetails(t *testing.T) {
 
 func TestComputeRawHash(t *testing.T) {
 	rec := &ParsedRecord{
-		Agent:    "gemini",
-		Provider: "google",
-		RawJSON:  `{"b":2,"a":1}`,
+		Agent:           "gemini",
+		Provider:        "google",
+		FingerprintJSON: `{"b":2,"a":1}`,
 	}
 	fp, strategy := Compute(rec)
 	if strategy != StrategyRawHash {
@@ -103,9 +103,9 @@ func TestComputeRawHash(t *testing.T) {
 	}
 
 	rec2 := &ParsedRecord{
-		Agent:    "gemini",
-		Provider: "google",
-		RawJSON:  `{"a":1,"b":2}`,
+		Agent:           "gemini",
+		Provider:        "google",
+		FingerprintJSON: `{"a":1,"b":2}`,
 	}
 	fp2, _ := Compute(rec2)
 	if fp != fp2 {
@@ -113,18 +113,20 @@ func TestComputeRawHash(t *testing.T) {
 	}
 }
 
-func TestComputeRawHashPrefersTransientFingerprintJSON(t *testing.T) {
+func TestComputeRawHashUsesTransientFingerprintJSON(t *testing.T) {
 	fullSource := `{"private":"source-only","usage":{"input_tokens":1}}`
-	compactEvidence := `{"schema":"agentledger.codex-usage.v1","source_variant":"headless_root","usage":{"input_tokens":1}}`
-	fullFingerprint, fullStrategy := Compute(&ParsedRecord{Agent: "codex", Provider: "openai", RawJSON: fullSource})
-	compactFingerprint, compactStrategy := Compute(&ParsedRecord{
+	fullFingerprint, fullStrategy := Compute(&ParsedRecord{
 		Agent:           "codex",
 		Provider:        "openai",
-		RawJSON:         compactEvidence,
 		FingerprintJSON: fullSource,
 	})
-	if fullStrategy != StrategyRawHash || compactStrategy != StrategyRawHash || compactFingerprint != fullFingerprint {
-		t.Fatalf("transient source JSON must preserve raw fingerprint: full=%s/%s compact=%s/%s", fullFingerprint, fullStrategy, compactFingerprint, compactStrategy)
+	secondFingerprint, secondStrategy := Compute(&ParsedRecord{
+		Agent:           "codex",
+		Provider:        "openai",
+		FingerprintJSON: fullSource,
+	})
+	if fullStrategy != StrategyRawHash || secondStrategy != StrategyRawHash || secondFingerprint != fullFingerprint {
+		t.Fatalf("transient source JSON must produce a stable raw fingerprint: first=%s/%s second=%s/%s", fullFingerprint, fullStrategy, secondFingerprint, secondStrategy)
 	}
 }
 

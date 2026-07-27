@@ -23,11 +23,11 @@ func reportTestDB(t *testing.T) *db.Database {
 	_, err = database.Conn().Exec(`INSERT INTO usage_events (
 		event_id, dedupe_key, dedupe_strategy,
 		channel, provider, model_raw, model_normalized, timestamp_ms, session_id, project_path, message_id,
-		input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, reasoning_tokens, total_tokens,
+			input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, reasoning_tokens, total_tokens, request_count,
 		imported_at_ms, updated_at_ms
 	) VALUES
-		('claude-a', 'claude-a', 'message_id', 'claude', 'anthropic', 'claude-sonnet', 'claude-sonnet', 1, 's1', '/Users/test/Github/project-a', 'm1', 10, 5, 3, 7, 0, 25, 1, 1),
-		('claude-b', 'claude-b', 'message_id', 'claude', 'anthropic', 'claude-sonnet', 'claude-sonnet', 2, 's1', '/Users/test/Github/project-b', 'm2', 20, 8, 4, 9, 0, 41, 1, 1)`)
+			('claude-a', 'claude-a', 'message_id', 'claude', 'anthropic', 'claude-sonnet', 'claude-sonnet', 1, 's1', '/Users/test/Github/project-a', 'm1', 10, 5, 3, 7, 0, 25, 2, 1, 1),
+			('claude-b', 'claude-b', 'message_id', 'claude', 'anthropic', 'claude-sonnet', 'claude-sonnet', 2, 's1', '/Users/test/Github/project-b', 'm2', 20, 8, 4, 9, 0, 41, NULL, 1, 1)`)
 	if err != nil {
 		t.Fatalf("insert events: %v", err)
 	}
@@ -50,6 +50,9 @@ func TestGenerateGroupedJSONIncludesCacheTokens(t *testing.T) {
 	if row.TotalTokens != 66 || row.InputTokens != 30 || row.OutputTokens != 13 || row.CacheCreationTokens != 7 || row.CacheReadTokens != 16 {
 		t.Fatalf("unexpected token breakdown: %+v", row)
 	}
+	if row.KnownRequestCount != 2 || row.RequestCountKnownEvents != 1 || row.RequestCountUnknownEvents != 1 {
+		t.Fatalf("unexpected request coverage: %+v", row)
+	}
 }
 
 func TestGenerateGroupedTableShowsCacheColumns(t *testing.T) {
@@ -57,10 +60,32 @@ func TestGenerateGroupedTableShowsCacheColumns(t *testing.T) {
 	output := captureReportOutput(t, func() error {
 		return Generate(database.Conn(), "models", Filters{Channel: "claude"}, false)
 	})
-	for _, want := range []string{"Cache Create", "Cache Read", "Reasoning", "Recorded Cost(USD)", "claude-sonnet"} {
+	for _, want := range []string{"Requests", "Req Coverage", "2+", "1/2", "Cache Create", "Cache Read", "Reasoning", "Recorded Cost(USD)", "claude-sonnet"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("report output missing %q:\n%s", want, output)
 		}
+	}
+}
+
+func TestFormatKnownRequestCountStates(t *testing.T) {
+	for _, test := range []struct {
+		name                              string
+		known, knownEvents, unknownEvents int64
+		want                              string
+	}{
+		{name: "unknown", known: 0, knownEvents: 0, unknownEvents: 2, want: "—"},
+		{name: "explicit zero", known: 0, knownEvents: 1, unknownEvents: 0, want: "0"},
+		{name: "complete", known: 3, knownEvents: 1, unknownEvents: 0, want: "3"},
+		{name: "partial", known: 3, knownEvents: 1, unknownEvents: 1, want: "3+"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := formatKnownRequestCount(test.known, test.knownEvents, test.unknownEvents); got != test.want {
+				t.Fatalf("formatKnownRequestCount=%q want=%q", got, test.want)
+			}
+		})
+	}
+	if got := formatRequestEventCoverage(1, 2); got != "1/3" {
+		t.Fatalf("formatRequestEventCoverage=%q", got)
 	}
 }
 

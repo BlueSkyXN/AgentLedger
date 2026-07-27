@@ -57,6 +57,12 @@ func (d *Database) FinishImportRunWithStatus(runID string, filesScanned, eventsA
 }
 
 func (d *Database) UpsertEvent(ev *model.UsageEvent) (string, error) {
+	// Raw usage envelopes are parsing inputs only. The v2 fact table persists
+	// structured usage fields and must never retain the envelope itself. Work
+	// on a copy so callers can still use their parsed record for fingerprinting.
+	storedEvent := *ev
+	ev = &storedEvent
+	ev.RawUsageJSON = ""
 	ev.ModelResolution = modelResolutionForStorage(ev)
 	tx, err := d.conn.Begin()
 	if err != nil {
@@ -68,14 +74,7 @@ func (d *Database) UpsertEvent(ev *model.UsageEvent) (string, error) {
 		}
 	}()
 
-	var existingRawUsageMatches bool
-	var redactedSourceMatchesExist bool
-	var existing *model.UsageEvent
-	if ev.Channel == "codex" {
-		existing, existingRawUsageMatches, redactedSourceMatchesExist, err = selectCodexEventForComparison(tx, ev)
-	} else {
-		existing, err = selectEventForComparison(tx, ev.EventID)
-	}
+	existing, err := selectEventForComparison(tx, ev.EventID)
 	if err != nil && err != sql.ErrNoRows {
 		return "", err
 	}
@@ -91,7 +90,7 @@ func (d *Database) UpsertEvent(ev *model.UsageEvent) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if existing != nil && (strings.TrimSpace(existing.SourceFile) == "" || redactedSourceMatchesExist) {
+	if existing != nil {
 		redactedMatches, err := selectRedactedEventsForComparisonBySourceIdentity(tx, ev)
 		if err != nil {
 			return "", err
@@ -100,9 +99,9 @@ func (d *Database) UpsertEvent(ev *model.UsageEvent) (string, error) {
 			sourceMatches = appendUniqueEvent(sourceMatches, match)
 		}
 	}
-	refreshSourceEnvelope := codexSourceEnvelopeNeedsRefresh(existing, ev, existingRawUsageMatches)
+	refreshSourceMetadata := existing != nil && strings.TrimSpace(existing.SourceFile) == "" && strings.TrimSpace(ev.SourceFile) != ""
 	refreshClassification := codexClassificationNeedsReconciliation(existing, ev, sourceMatches)
-	if hasDifferentEventID(sourceMatches, ev.EventID) || refreshSourceEnvelope || refreshClassification || protectExactClassification {
+	if hasDifferentEventID(sourceMatches, ev.EventID) || refreshSourceMetadata || refreshClassification || protectExactClassification {
 		var status string
 		status, err = reconcileSourceIdentityMatches(tx, incoming, existing, sourceMatches)
 		if err != nil {
@@ -119,6 +118,7 @@ func (d *Database) UpsertEvent(ev *model.UsageEvent) (string, error) {
 		existing.ModelNormalized = ev.ModelNormalized
 		existing.ModelResolution = ev.ModelResolution
 		existing.ModelIsFallback = ev.ModelIsFallback
+		existing.RawUsageJSON = ""
 		existing.UpdatedAtMs = ev.UpdatedAtMs
 		if err = updateEvent(tx, existing); err != nil {
 			return "", err
@@ -143,13 +143,23 @@ func (d *Database) UpsertEvent(ev *model.UsageEvent) (string, error) {
 			if err = updateEventMetadata(tx, existing); err != nil {
 				return "", err
 			}
+			if _, err = clearRawUsage(tx, existing.EventID); err != nil {
+				return "", err
+			}
 			if err = tx.Commit(); err != nil {
 				return "", err
 			}
 			return "updated", nil
 		}
+		cleared, clearErr := clearRawUsage(tx, existing.EventID)
+		if clearErr != nil {
+			return "", clearErr
+		}
 		if err = tx.Commit(); err != nil {
 			return "", err
+		}
+		if cleared {
+			return "updated", nil
 		}
 		return "skipped", nil
 	}
@@ -183,6 +193,7 @@ const eventComparisonColumns = `
     timestamp_ms, COALESCE(session_id, ''), COALESCE(session_path_id, ''), COALESCE(turn_id, ''), COALESCE(project_path, ''),
 	COALESCE(message_id, ''), COALESCE(request_id, ''), COALESCE(source_file, ''), COALESCE(line_number, 0), COALESCE(raw_sha256, ''),
 	input_tokens, output_tokens, reasoning_tokens, cache_creation_tokens, cache_read_tokens, total_tokens,
+	request_count,
 	request_started_at_ms, first_token_at_ms, completed_at_ms, total_duration_ms, ttft_ms, output_duration_ms, output_tps,
 	recorded_cost_usd, COALESCE(raw_usage_json, ''), imported_at_ms, updated_at_ms
 `
@@ -190,34 +201,6 @@ const eventComparisonColumns = `
 func selectEventForComparison(tx *sql.Tx, eventID string) (*model.UsageEvent, error) {
 	row := tx.QueryRow(`SELECT `+eventComparisonColumns+` FROM usage_events WHERE event_id = ?`, eventID)
 	return scanEventForComparison(row)
-}
-
-const codexEventComparisonQuery = `
-	SELECT ` + eventComparisonColumns + `,
-		CASE WHEN COALESCE(raw_usage_json, '') = ? THEN 1 ELSE 0 END,
-		EXISTS(
-			SELECT 1
-			FROM usage_events AS redacted INDEXED BY idx_usage_source_identity
-			WHERE ? = 1
-				AND redacted.source_file IS NULL
-				AND redacted.line_number = ? AND redacted.raw_sha256 = ? AND redacted.channel = ?
-				AND redacted.session_id = ? AND redacted.timestamp_ms = ?
-			LIMIT 1
-		)
-	FROM usage_events
-	WHERE event_id = ?
-`
-
-func selectCodexEventForComparison(tx *sql.Tx, ev *model.UsageEvent) (*model.UsageEvent, bool, bool, error) {
-	redactedIdentityValid := ev.LineNumber > 0 && strings.TrimSpace(ev.RawSHA256) != "" && strings.TrimSpace(ev.SessionID) != ""
-	var rawUsageMatches, redactedMatchesExist int
-	row := tx.QueryRow(
-		codexEventComparisonQuery,
-		ev.RawUsageJSON, boolToInt(redactedIdentityValid), ev.LineNumber, ev.RawSHA256,
-		ev.Channel, ev.SessionID, ev.TimestampMs, ev.EventID,
-	)
-	existing, err := scanEventForComparison(row, &rawUsageMatches, &redactedMatchesExist)
-	return existing, rawUsageMatches == 1, redactedMatchesExist == 1, err
 }
 
 func selectEventsForComparisonBySourceIdentity(tx *sql.Tx, ev *model.UsageEvent) ([]*model.UsageEvent, error) {
@@ -294,6 +277,17 @@ func reconcileSourceIdentityMatches(tx *sql.Tx, incoming, exact *model.UsageEven
 	}
 	stored = appendUniqueEvent(stored, exact)
 	if hasConflictingExplicitCodexModels(incoming, stored) {
+		cleared := false
+		for _, match := range stored {
+			changed, err := clearRawUsage(tx, match.EventID)
+			if err != nil {
+				return "", err
+			}
+			cleared = cleared || changed
+		}
+		if cleared {
+			return "updated", nil
+		}
 		return "skipped", nil
 	}
 
@@ -317,13 +311,14 @@ func reconcileSourceIdentityMatches(tx *sql.Tx, incoming, exact *model.UsageEven
 	}
 
 	if len(stored) == 1 && sameEventContentExceptRawUsage(canonical, stored[0]) {
-		sameRawUsage, err := eventRawUsageMatches(tx, stored[0].EventID, canonical.RawUsageJSON)
+		cleared, err := clearRawUsage(tx, stored[0].EventID)
 		if err != nil {
 			return "", err
 		}
-		if sameRawUsage {
-			return "skipped", nil
+		if cleared {
+			return "updated", nil
 		}
+		return "skipped", nil
 	}
 
 	for _, match := range stored {
@@ -369,9 +364,6 @@ func buildCanonicalReconciledEvent(incoming, exact *model.UsageEvent, stored []*
 	preserveReconciledSourceMetadata(&canonical, stored)
 	preserveStrongerCodexClassification(&canonical, incoming, exact, stored)
 	applyUsageWinner(&canonical, &usageWinner)
-	if compact := compactStoredCodexEvidence(incoming, stored); compact != "" {
-		canonical.RawUsageJSON = compact
-	}
 	for _, candidate := range stored {
 		if canonical.ImportedAtMs <= 0 || (candidate.ImportedAtMs > 0 && candidate.ImportedAtMs < canonical.ImportedAtMs) {
 			canonical.ImportedAtMs = candidate.ImportedAtMs
@@ -381,10 +373,15 @@ func buildCanonicalReconciledEvent(incoming, exact *model.UsageEvent, stored []*
 		}
 	}
 
+	canonical.RawUsageJSON = ""
 	if protected := storedIdentityProtection(exact, stored); protected != nil {
 		canonical.EventID = protected.EventID
 		canonical.DedupeKey = protected.DedupeKey
 		canonical.DedupeStrategy = protected.DedupeStrategy
+	} else if rawEvidenceIdentityProtected(incoming.DedupeStrategy) {
+		canonical.EventID = incoming.EventID
+		canonical.DedupeKey = incoming.DedupeKey
+		canonical.DedupeStrategy = incoming.DedupeStrategy
 	} else {
 		eventID, strategy := computeEventFingerprint(&canonical)
 		canonical.EventID = eventID
@@ -515,6 +512,7 @@ func applyUsageWinner(target, winner *model.UsageEvent) {
 	target.CacheCreationTokens = winner.CacheCreationTokens
 	target.CacheReadTokens = winner.CacheReadTokens
 	target.TotalTokens = winner.TotalTokens
+	target.RequestCount = winner.RequestCount
 	target.RequestStartedAtMs = winner.RequestStartedAtMs
 	target.FirstTokenAtMs = winner.FirstTokenAtMs
 	target.CompletedAtMs = winner.CompletedAtMs
@@ -549,7 +547,6 @@ func computeEventFingerprint(ev *model.UsageEvent) (string, fingerprint.Strategy
 		ReasoningTokens:     ev.ReasoningTokens,
 		TotalTokens:         ev.TotalTokens,
 		SourceTotalTokens:   ev.SourceTotalTokens,
-		RawJSON:             ev.RawUsageJSON,
 		SourceFile:          ev.SourceFile,
 		LineNumber:          ev.LineNumber,
 		RawSHA256:           ev.RawSHA256,
@@ -568,34 +565,6 @@ func sameEventContentExceptRawUsage(left, right *model.UsageEvent) bool {
 	return reflect.DeepEqual(leftCopy, rightCopy)
 }
 
-func eventRawUsageMatches(tx *sql.Tx, eventID, rawUsageJSON string) (bool, error) {
-	var matches int
-	if err := tx.QueryRow(`
-		SELECT CASE WHEN COALESCE(raw_usage_json, '') = ? THEN 1 ELSE 0 END
-		FROM usage_events
-		WHERE event_id = ?
-	`, rawUsageJSON, eventID).Scan(&matches); err != nil {
-		return false, err
-	}
-	return matches == 1, nil
-}
-
-func codexSourceEnvelopeNeedsRefresh(existing, incoming *model.UsageEvent, rawUsageMatches bool) bool {
-	if existing == nil || incoming.Channel != "codex" {
-		return false
-	}
-	if strings.TrimSpace(existing.SourceFile) == "" && strings.TrimSpace(incoming.SourceFile) != "" {
-		return true
-	}
-	if compactCodexEvidence(existing.RawUsageJSON) {
-		return false
-	}
-	if incoming.RawUsageJSON == "" {
-		return false
-	}
-	return !rawUsageMatches
-}
-
 func codexClassificationNeedsReconciliation(existing, incoming *model.UsageEvent, sourceMatches []*model.UsageEvent) bool {
 	if existing == nil || incoming.Channel != "codex" || !containsEventID(sourceMatches, existing.EventID) {
 		return false
@@ -607,6 +576,9 @@ func codexClassificationNeedsReconciliation(existing, incoming *model.UsageEvent
 		existing.ModelIsFallback != incoming.ModelIsFallback
 	if !classificationChanged {
 		return false
+	}
+	if rawEvidenceIdentityProtected(existing.DedupeStrategy) {
+		return true
 	}
 	recomputedEventID, strategy := computeEventFingerprint(incoming)
 	return incoming.EventID == recomputedEventID &&
@@ -736,12 +708,6 @@ func preserveStrongerExactCodexClassification(existing, incoming *model.UsageEve
 		(incoming.Provider == "openai" && hasCompleteExplicitCodexModel(incoming)) {
 		return incoming, false
 	}
-	incomingEventID, incomingStrategy := computeEventFingerprint(incoming)
-	if incoming.EventID != incomingEventID ||
-		incoming.DedupeKey != incomingEventID ||
-		incoming.DedupeStrategy != string(incomingStrategy) {
-		return incoming, false
-	}
 	candidate := *incoming
 	preserveStrongerCodexClassification(&candidate, incoming, existing, []*model.UsageEvent{existing})
 	if candidate.Provider == incoming.Provider &&
@@ -784,7 +750,7 @@ type eventComparisonScanner interface {
 func scanEventForComparison(row eventComparisonScanner, additionalDestinations ...any) (*model.UsageEvent, error) {
 	var ev model.UsageEvent
 	var requestStarted, firstToken, completed, totalDuration, ttft, outputDuration sql.NullInt64
-	var sourceTotal, rawInput sql.NullInt64
+	var sourceTotal, rawInput, requestCount sql.NullInt64
 	var outputTPS, recordedCost sql.NullFloat64
 	var lineNumber int64
 	var modelIsFallback int
@@ -821,6 +787,7 @@ func scanEventForComparison(row eventComparisonScanner, additionalDestinations .
 		&ev.CacheCreationTokens,
 		&ev.CacheReadTokens,
 		&ev.TotalTokens,
+		&requestCount,
 		&requestStarted,
 		&firstToken,
 		&completed,
@@ -848,6 +815,7 @@ func scanEventForComparison(row eventComparisonScanner, additionalDestinations .
 	ev.ModelIsFallback = modelIsFallback != 0
 	ev.SourceTotalTokens = nullInt64Ptr(sourceTotal)
 	ev.RawInputTokens = nullInt64Ptr(rawInput)
+	ev.RequestCount = nullInt64Ptr(requestCount)
 	ev.LineNumber = int(lineNumber)
 	return &ev, nil
 }
@@ -890,7 +858,7 @@ func insertEvent(exec interface {
             channel, provider, model_raw, model_normalized, model_resolution,
             source_agent, source_product, observability_level, model_is_fallback, source_total_tokens, raw_input_tokens, token_accounting_method, accounting_profile,
             timestamp_ms, session_id, session_path_id, turn_id, project_path, message_id, request_id, source_file, line_number, raw_sha256,
-            input_tokens, output_tokens, reasoning_tokens, cache_creation_tokens, cache_read_tokens, total_tokens,
+	            input_tokens, output_tokens, reasoning_tokens, cache_creation_tokens, cache_read_tokens, total_tokens, request_count,
             request_started_at_ms, first_token_at_ms, completed_at_ms, total_duration_ms, ttft_ms, output_duration_ms, output_tps,
             recorded_cost_usd, raw_usage_json,
             imported_at_ms, updated_at_ms
@@ -899,7 +867,7 @@ func insertEvent(exec interface {
             ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-            ?, ?, ?, ?, ?, ?,
+	            ?, ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?, ?,
             ?, ?,
             ?, ?
@@ -918,7 +886,7 @@ func updateEventByID(tx *sql.Tx, existingEventID string, ev *model.UsageEvent) e
 		ev.Channel, ev.Provider, ev.ModelRaw, ev.ModelNormalized, modelResolutionForStorage(ev),
 		nullIfEmpty(ev.SourceAgent), nullIfEmpty(ev.SourceProduct), nullIfEmpty(ev.ObservabilityLevel), boolToInt(ev.ModelIsFallback), nullableInt64(ev.SourceTotalTokens), nullableInt64(ev.RawInputTokens), nullIfEmpty(ev.TokenAccountingMethod), nullIfEmpty(ev.AccountingProfile),
 		ev.TimestampMs, ev.SessionID, ev.SessionPathID, ev.TurnID, ev.ProjectPath, ev.MessageID, ev.RequestID, ev.SourceFile, ev.LineNumber, ev.RawSHA256,
-		ev.InputTokens, ev.OutputTokens, ev.ReasoningTokens, ev.CacheCreationTokens, ev.CacheReadTokens, ev.TotalTokens,
+		ev.InputTokens, ev.OutputTokens, ev.ReasoningTokens, ev.CacheCreationTokens, ev.CacheReadTokens, ev.TotalTokens, nullableInt64(ev.RequestCount),
 		ev.RequestStartedAtMs, ev.FirstTokenAtMs, ev.CompletedAtMs, ev.TotalDurationMs, ev.TTFTMs, ev.OutputDurationMs, ev.OutputTPS,
 		ev.RecordedCostUSD, nullIfEmpty(ev.RawUsageJSON),
 		ev.UpdatedAtMs,
@@ -930,7 +898,7 @@ func updateEventByID(tx *sql.Tx, existingEventID string, ev *model.UsageEvent) e
             channel = ?, provider = ?, model_raw = ?, model_normalized = ?, model_resolution = ?,
             source_agent = ?, source_product = ?, observability_level = ?, model_is_fallback = ?, source_total_tokens = ?, raw_input_tokens = ?, token_accounting_method = ?, accounting_profile = ?,
             timestamp_ms = ?, session_id = ?, session_path_id = ?, turn_id = ?, project_path = ?, message_id = ?, request_id = ?, source_file = ?, line_number = ?, raw_sha256 = ?,
-            input_tokens = ?, output_tokens = ?, reasoning_tokens = ?, cache_creation_tokens = ?, cache_read_tokens = ?, total_tokens = ?,
+	            input_tokens = ?, output_tokens = ?, reasoning_tokens = ?, cache_creation_tokens = ?, cache_read_tokens = ?, total_tokens = ?, request_count = ?,
             request_started_at_ms = ?, first_token_at_ms = ?, completed_at_ms = ?, total_duration_ms = ?, ttft_ms = ?, output_duration_ms = ?, output_tps = ?,
             recorded_cost_usd = ?, raw_usage_json = ?,
             updated_at_ms = ?
@@ -950,8 +918,9 @@ func updateEventMetadata(tx *sql.Tx, ev *model.UsageEvent) error {
             source_total_tokens = ?,
             raw_input_tokens = ?,
             token_accounting_method = ?,
-            accounting_profile = ?,
-            session_path_id = ?,
+	            accounting_profile = ?,
+	            request_count = ?,
+	            session_path_id = ?,
             turn_id = ?,
             project_path = ?,
             updated_at_ms = ?
@@ -966,6 +935,7 @@ func updateEventMetadata(tx *sql.Tx, ev *model.UsageEvent) error {
 		nullableInt64(ev.RawInputTokens),
 		nullIfEmpty(ev.TokenAccountingMethod),
 		nullIfEmpty(ev.AccountingProfile),
+		nullableInt64(ev.RequestCount),
 		nullIfEmpty(ev.SessionPathID),
 		nullIfEmpty(ev.TurnID),
 		nullIfEmpty(ev.ProjectPath),
@@ -980,13 +950,31 @@ func deleteEventByID(tx *sql.Tx, eventID string) error {
 	return err
 }
 
+// clearRawUsage makes a legacy row comply with the statistics-only storage
+// boundary. It intentionally treats an empty string as stale raw data too.
+func clearRawUsage(tx *sql.Tx, eventID string) (bool, error) {
+	result, err := tx.Exec(`
+		UPDATE usage_events
+		SET raw_usage_json = NULL
+		WHERE event_id = ? AND raw_usage_json IS NOT NULL
+	`, eventID)
+	if err != nil {
+		return false, fmt.Errorf("clear raw usage evidence: %w", err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("verify raw usage evidence cleanup: %w", err)
+	}
+	return changed > 0, nil
+}
+
 func eventArgs(ev *model.UsageEvent) []any {
 	return []any{
 		ev.EventID, ev.DedupeKey, ev.DedupeStrategy,
 		ev.Channel, ev.Provider, ev.ModelRaw, ev.ModelNormalized, modelResolutionForStorage(ev),
 		nullIfEmpty(ev.SourceAgent), nullIfEmpty(ev.SourceProduct), nullIfEmpty(ev.ObservabilityLevel), boolToInt(ev.ModelIsFallback), nullableInt64(ev.SourceTotalTokens), nullableInt64(ev.RawInputTokens), nullIfEmpty(ev.TokenAccountingMethod), nullIfEmpty(ev.AccountingProfile),
 		ev.TimestampMs, ev.SessionID, ev.SessionPathID, ev.TurnID, ev.ProjectPath, ev.MessageID, ev.RequestID, ev.SourceFile, ev.LineNumber, ev.RawSHA256,
-		ev.InputTokens, ev.OutputTokens, ev.ReasoningTokens, ev.CacheCreationTokens, ev.CacheReadTokens, ev.TotalTokens,
+		ev.InputTokens, ev.OutputTokens, ev.ReasoningTokens, ev.CacheCreationTokens, ev.CacheReadTokens, ev.TotalTokens, nullableInt64(ev.RequestCount),
 		ev.RequestStartedAtMs, ev.FirstTokenAtMs, ev.CompletedAtMs, ev.TotalDurationMs, ev.TTFTMs, ev.OutputDurationMs, ev.OutputTPS,
 		ev.RecordedCostUSD, nullIfEmpty(ev.RawUsageJSON),
 		ev.ImportedAtMs, ev.UpdatedAtMs,
@@ -1012,7 +1000,7 @@ type MergeResult struct {
 }
 
 // MergeFrom attaches another v2 .aldb database and imports unseen events.
-// All destination writes, including raw evidence compaction, are atomic.
+// All destination writes are atomic and incoming raw envelopes are discarded.
 func (d *Database) MergeFrom(incomingPath string) (result MergeResult, err error) {
 	absPath, err := filepath.Abs(incomingPath)
 	if err != nil {
@@ -1081,7 +1069,6 @@ func (d *Database) MergeFrom(incomingPath string) (result MergeResult, err error
 		FROM incoming.usage_events AS candidate
 		WHERE NOT EXISTS (SELECT 1 FROM usage_events WHERE event_id = candidate.event_id)
 			AND COALESCE(candidate.raw_usage_json, '') <> ''
-			AND agentledger_raw_evidence_status(candidate.channel, candidate.raw_usage_json) = 'unknown'
 	`).Scan(&result.RawEvidenceOmitted); err != nil {
 		return result, errors.New("inspect incoming raw usage evidence")
 	}
@@ -1091,7 +1078,7 @@ func (d *Database) MergeFrom(incomingPath string) (result MergeResult, err error
             channel, provider, model_raw, model_normalized, model_resolution,
             source_agent, source_product, observability_level, model_is_fallback, source_total_tokens, raw_input_tokens, token_accounting_method, accounting_profile,
             timestamp_ms, session_id, session_path_id, turn_id, project_path, message_id, request_id, source_file, line_number, raw_sha256,
-            input_tokens, output_tokens, reasoning_tokens, cache_creation_tokens, cache_read_tokens, total_tokens,
+	            input_tokens, output_tokens, reasoning_tokens, cache_creation_tokens, cache_read_tokens, total_tokens, request_count,
             request_started_at_ms, first_token_at_ms, completed_at_ms, total_duration_ms, ttft_ms, output_duration_ms, output_tps,
             recorded_cost_usd, raw_usage_json,
             imported_at_ms, updated_at_ms
@@ -1101,19 +1088,13 @@ func (d *Database) MergeFrom(incomingPath string) (result MergeResult, err error
             channel, provider, model_raw, model_normalized, %s,
             %s, %s, %s, %s, %s, %s, %s, %s,
             timestamp_ms, session_id, %s, %s, project_path, message_id, request_id, source_file, line_number, raw_sha256,
-            input_tokens, output_tokens, reasoning_tokens, cache_creation_tokens, cache_read_tokens, total_tokens,
-            request_started_at_ms, first_token_at_ms, completed_at_ms, total_duration_ms, ttft_ms, output_duration_ms, output_tps,
-            recorded_cost_usd,
-			CASE agentledger_raw_evidence_status(channel, COALESCE(raw_usage_json, ''))
-				WHEN 'recognized_legacy' THEN agentledger_compact_raw_evidence(channel, COALESCE(raw_usage_json, ''))
-				WHEN 'already_compact' THEN raw_usage_json
-				WHEN 'empty' THEN raw_usage_json
-				WHEN 'unknown' THEN NULL
-				ELSE agentledger_compact_raw_evidence(channel, COALESCE(raw_usage_json, ''))
-			END,
-            imported_at_ms, updated_at_ms
+	            input_tokens, output_tokens, reasoning_tokens, cache_creation_tokens, cache_read_tokens, total_tokens, %s,
+			request_started_at_ms, first_token_at_ms, completed_at_ms, total_duration_ms, ttft_ms, output_duration_ms, output_tps,
+			recorded_cost_usd,
+			NULL,
+			imported_at_ms, updated_at_ms
         FROM incoming.usage_events
-    `, selects.modelResolution, selects.sourceAgent, selects.sourceProduct, selects.observabilityLevel, selects.modelIsFallback, selects.sourceTotalTokens, selects.rawInputTokens, selects.tokenAccountingMethod, selects.accountingProfile, selects.sessionPathID, selects.turnID)
+	    `, selects.modelResolution, selects.sourceAgent, selects.sourceProduct, selects.observabilityLevel, selects.modelIsFallback, selects.sourceTotalTokens, selects.rawInputTokens, selects.tokenAccountingMethod, selects.accountingProfile, selects.sessionPathID, selects.turnID, selects.requestCount)
 	insertResult, err := tx.Exec(query)
 	if err != nil {
 		return result, fmt.Errorf("merge events: %w", err)
@@ -1141,6 +1122,7 @@ type incomingSelects struct {
 	rawInputTokens        string
 	tokenAccountingMethod string
 	accountingProfile     string
+	requestCount          string
 	sessionPathID         string
 	turnID                string
 }
@@ -1159,6 +1141,7 @@ func incomingCompatibilitySelects(conn sqlQueryer) (incomingSelects, error) {
 		rawInputTokens:        "NULL",
 		tokenAccountingMethod: "NULL",
 		accountingProfile:     "NULL",
+		requestCount:          "NULL",
 		sessionPathID:         "NULL",
 		turnID:                "NULL",
 	}
@@ -1175,6 +1158,7 @@ func incomingCompatibilitySelects(conn sqlQueryer) (incomingSelects, error) {
 		{"raw_input_tokens", func() { selects.rawInputTokens = "raw_input_tokens" }},
 		{"token_accounting_method", func() { selects.tokenAccountingMethod = "token_accounting_method" }},
 		{"accounting_profile", func() { selects.accountingProfile = "accounting_profile" }},
+		{"request_count", func() { selects.requestCount = "request_count" }},
 		{"session_path_id", func() { selects.sessionPathID = "session_path_id" }},
 		{"turn_id", func() { selects.turnID = "turn_id" }},
 	}
@@ -1221,6 +1205,18 @@ func (d *Database) GetStats() (map[string]interface{}, error) {
 		return nil, err
 	}
 	stats["total_events"] = count
+
+	var knownRequestCount sql.NullInt64
+	var requestCountKnownEvents int64
+	if err := d.conn.QueryRow(`SELECT SUM(request_count), COUNT(request_count) FROM usage_events`).Scan(&knownRequestCount, &requestCountKnownEvents); err != nil {
+		return nil, err
+	}
+	stats["known_request_count"] = int64(0)
+	if knownRequestCount.Valid {
+		stats["known_request_count"] = knownRequestCount.Int64
+	}
+	stats["request_count_known_events"] = requestCountKnownEvents
+	stats["request_count_unknown_events"] = count - requestCountKnownEvents
 
 	if err := d.conn.QueryRow("SELECT COUNT(*) FROM import_runs").Scan(&count); err != nil {
 		return nil, err
@@ -1277,6 +1273,10 @@ func mergeMissingMetadata(target, candidate *model.UsageEvent) bool {
 		changed = true
 	}
 	if sameTokenUsage(target, candidate) {
+		if candidate.RequestCount != nil && (target.RequestCount == nil || *target.RequestCount != *candidate.RequestCount) {
+			target.RequestCount = candidate.RequestCount
+			changed = true
+		}
 		if target.SourceTotalTokens == nil && candidate.SourceTotalTokens != nil {
 			target.SourceTotalTokens = candidate.SourceTotalTokens
 			changed = true

@@ -124,25 +124,28 @@ func TestCopilotSessionShutdownModelMetrics(t *testing.T) {
 		if rec.SourceTotalTokens != nil {
 			t.Fatalf("session metric has no source total; got %v", rec.SourceTotalTokens)
 		}
-		if rec.RawJSON == "" {
-			t.Fatalf("expected raw usage envelope for model=%s", rec.Model)
+		if rec.FingerprintJSON == "" {
+			t.Fatalf("expected fingerprint envelope for model=%s", rec.Model)
 		}
 		if rec.CostUSD != nil {
 			t.Fatalf("requests.cost is not USD and should not be recorded as CostUSD: %v", rec.CostUSD)
 		}
 		var raw map[string]interface{}
-		if err := json.Unmarshal([]byte(rec.RawJSON), &raw); err != nil {
-			t.Fatalf("raw json should be valid for model=%s: %v", rec.Model, err)
+		if err := json.Unmarshal([]byte(rec.FingerprintJSON), &raw); err != nil {
+			t.Fatalf("fingerprint envelope should be valid for model=%s: %v", rec.Model, err)
 		}
 		shutdownID, _ := raw["shutdown_id"].(string)
 		sessionPathID, _ := raw["session_path_id"].(string)
 		if shutdownID == "" || sessionPathID != "session-123" {
-			t.Fatalf("raw envelope missing shutdown/session ids: %v", raw)
+			t.Fatalf("fingerprint envelope missing shutdown/session ids: %v", raw)
 		}
 		if requests, ok := raw["requests"].(map[string]interface{}); !ok || requests["cost"] == nil {
-			t.Fatalf("requests.cost should remain available in raw envelope: %v", raw)
+			t.Fatalf("requests.cost should remain available in fingerprint envelope: %v", raw)
 		}
 		if rec.Model == "gpt-5.4" {
+			if rec.RequestCount == nil || *rec.RequestCount != 3 {
+				t.Fatalf("expected gpt request count 3, got %v", rec.RequestCount)
+			}
 			if rec.InputTokens != 700 || rec.OutputTokens != 200 || rec.CacheReadTokens != 300 || rec.CacheCreationTokens != 40 || rec.ReasoningTokens != 50 || rec.TotalTokens != 1290 {
 				t.Fatalf("unexpected gpt tokens input=%d output=%d cacheRead=%d cacheWrite=%d reasoning=%d total=%d", rec.InputTokens, rec.OutputTokens, rec.CacheReadTokens, rec.CacheCreationTokens, rec.ReasoningTokens, rec.TotalTokens)
 			}
@@ -151,6 +154,9 @@ func TestCopilotSessionShutdownModelMetrics(t *testing.T) {
 			}
 		}
 		if rec.Model == "claude-opus-4.6" {
+			if rec.RequestCount == nil || *rec.RequestCount != 1 {
+				t.Fatalf("expected claude request count 1, got %v", rec.RequestCount)
+			}
 			if rec.InputTokens != 7 || rec.OutputTokens != 2 || rec.CacheReadTokens != 3 || rec.CacheCreationTokens != 4 || rec.ReasoningTokens != 0 || rec.TotalTokens != 16 {
 				t.Fatalf("unexpected claude tokens input=%d output=%d cacheRead=%d cacheWrite=%d reasoning=%d total=%d", rec.InputTokens, rec.OutputTokens, rec.CacheReadTokens, rec.CacheCreationTokens, rec.ReasoningTokens, rec.TotalTokens)
 			}
@@ -158,6 +164,42 @@ func TestCopilotSessionShutdownModelMetrics(t *testing.T) {
 	}
 	if !byModel["gpt-5.4"] || !byModel["claude-opus-4.6"] {
 		t.Fatalf("missing model records: %v", byModel)
+	}
+}
+
+func TestCopilotSessionRequestCountValidation(t *testing.T) {
+	tests := []struct {
+		name  string
+		value interface{}
+		want  *int64
+	}{
+		{name: "zero", value: float64(0), want: int64Ptr(0)},
+		{name: "positive integer", value: float64(53), want: int64Ptr(53)},
+		{name: "json number", value: json.Number("9223372036854775807"), want: int64Ptr(9223372036854775807)},
+		{name: "negative", value: float64(-1)},
+		{name: "fractional", value: 1.5},
+		{name: "string", value: "2"},
+		{name: "overflow", value: float64(9_223_372_036_854_775_808)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := copilotSessionRequestCount(map[string]interface{}{"count": test.value})
+			if test.want == nil {
+				if got != nil {
+					t.Fatalf("expected unknown count, got %d", *got)
+				}
+				return
+			}
+			if got == nil || *got != *test.want {
+				t.Fatalf("expected %d, got %v", *test.want, got)
+			}
+		})
+	}
+	if got := copilotSessionRequestCount(nil); got != nil {
+		t.Fatalf("missing requests should remain unknown: %v", got)
+	}
+	if got := copilotSessionRequestCount(map[string]interface{}{}); got != nil {
+		t.Fatalf("missing count should remain unknown: %v", got)
 	}
 }
 

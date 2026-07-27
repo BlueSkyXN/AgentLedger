@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -275,8 +276,9 @@ func copilotSessionMetricCandidatesFromObject(obj map[string]interface{}, path s
 		}
 
 		requests := getMap(metric, "requests")
-		rawUsageJSON := copilotSessionMetricRawJSON(sessionID, sessionPathID, shutdownID, getString(obj, "timestamp"), modelName, usage, requests, data)
-		rawHash := sha256Hex([]byte(rawUsageJSON))
+		requestCount := copilotSessionRequestCount(requests)
+		fingerprintJSON := copilotSessionMetricFingerprintJSON(sessionID, sessionPathID, shutdownID, getString(obj, "timestamp"), modelName, usage, requests, data)
+		rawHash := sha256Hex([]byte(fingerprintJSON))
 		dedupeScope := firstNonEmpty(sessionID, sessionPathID, path)
 		dedupeID := fmt.Sprintf("copilot-session-state|%s|%s|%s", dedupeScope, shutdownID, modelName)
 		record := &fingerprint.ParsedRecord{
@@ -296,11 +298,12 @@ func copilotSessionMetricCandidatesFromObject(obj map[string]interface{}, path s
 			CacheReadTokens:       cacheRead,
 			ReasoningTokens:       reasoning,
 			TotalTokens:           total,
+			RequestCount:          requestCount,
 			SourceProduct:         "copilot-session-state",
 			ObservabilityLevel:    "session_summary",
 			TokenAccountingMethod: ledgermodel.AccCopilotSessionMetrics,
 			AccountingProfile:     "input_includes_cache_read",
-			RawJSON:               rawUsageJSON,
+			FingerprintJSON:       fingerprintJSON,
 			SourceFile:            path,
 			LineNumber:            lineNum,
 			RawSHA256:             rawHash,
@@ -317,6 +320,43 @@ func copilotSessionMetricCandidatesFromObject(obj map[string]interface{}, path s
 		})
 	}
 	return candidates
+}
+
+func copilotSessionRequestCount(requests map[string]interface{}) *int64 {
+	if requests == nil {
+		return nil
+	}
+	value, ok := requests["count"]
+	if !ok {
+		return nil
+	}
+	var count int64
+	switch typed := value.(type) {
+	case float64:
+		if math.IsNaN(typed) || math.IsInf(typed, 0) || typed < 0 || typed >= 9_223_372_036_854_775_808 || math.Trunc(typed) != typed {
+			return nil
+		}
+		count = int64(typed)
+	case json.Number:
+		parsed, err := typed.Int64()
+		if err != nil || parsed < 0 {
+			return nil
+		}
+		count = parsed
+	case int64:
+		if typed < 0 {
+			return nil
+		}
+		count = typed
+	case int:
+		if typed < 0 {
+			return nil
+		}
+		count = int64(typed)
+	default:
+		return nil
+	}
+	return int64Ptr(count)
 }
 
 func copilotCandidatesFromObject(obj map[string]interface{}, rawJSON, rawHash, path string, lineNum int) []copilotCandidate {
@@ -414,7 +454,7 @@ func copilotCandidateFromAttrs(obj, attrs map[string]interface{}, rawJSON, rawHa
 		ObservabilityLevel:    observability,
 		TokenAccountingMethod: accountingMethod,
 		AccountingProfile:     "input_includes_cache_read",
-		RawJSON:               rawJSON,
+		FingerprintJSON:       rawJSON,
 		SourceFile:            path,
 		LineNumber:            lineNum,
 		RawSHA256:             rawHash,
@@ -494,7 +534,7 @@ func copilotSessionIDFromPath(path string) string {
 	return ""
 }
 
-func copilotSessionMetricRawJSON(sessionID, sessionPathID, shutdownID, shutdownTimestamp, modelName string, usage, requests, shutdownData map[string]interface{}) string {
+func copilotSessionMetricFingerprintJSON(sessionID, sessionPathID, shutdownID, shutdownTimestamp, modelName string, usage, requests, shutdownData map[string]interface{}) string {
 	envelope := map[string]interface{}{
 		"source":             "session.shutdown.modelMetrics",
 		"session_id":         sessionID,

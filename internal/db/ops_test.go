@@ -61,8 +61,8 @@ func TestUpsertEventKeepsMoreCompleteDuplicate(t *testing.T) {
 	}
 
 	status, err = database.UpsertEvent(base)
-	if err != nil || status != "skipped" {
-		t.Fatalf("less complete upsert status=%s err=%v", status, err)
+	if err != nil || status != "updated" {
+		t.Fatalf("less complete reimport should clear legacy raw status=%s err=%v", status, err)
 	}
 }
 
@@ -226,6 +226,9 @@ func TestUpsertEventCodexReimportUpgradesUnknownToThreadSettingsResolution(t *te
 	if status, err := database.UpsertEvent(legacy); err != nil || status != "inserted" {
 		t.Fatalf("insert legacy status=%s err=%v", status, err)
 	}
+	if _, err := database.Conn().Exec(`UPDATE usage_events SET raw_usage_json = 'legacy-workbuddy-raw' WHERE event_id = ?`, legacy.EventID); err != nil {
+		t.Fatalf("seed legacy raw: %v", err)
+	}
 
 	corrected := *legacy
 	corrected.ModelRaw = "gpt-5.6-terra"
@@ -294,12 +297,16 @@ func TestUpsertEventReclassifiesWorkBuddyAutoAsUnknown(t *testing.T) {
 	}
 
 	var raw, normalized, resolution string
+	var legacyRaw sql.NullString
 	var fallback int
-	if err := database.Conn().QueryRow(`SELECT model_raw, model_normalized, model_resolution, model_is_fallback FROM usage_events WHERE event_id='workbuddy-auto'`).Scan(&raw, &normalized, &resolution, &fallback); err != nil {
+	if err := database.Conn().QueryRow(`SELECT model_raw, model_normalized, model_resolution, model_is_fallback, raw_usage_json FROM usage_events WHERE event_id='workbuddy-auto'`).Scan(&raw, &normalized, &resolution, &fallback, &legacyRaw); err != nil {
 		t.Fatalf("select corrected auto: %v", err)
 	}
 	if raw != "auto" || normalized != "unknown" || resolution != model.ModelResolutionUnknown || fallback != 1 {
 		t.Fatalf("unexpected corrected auto raw=%q normalized=%q resolution=%q fallback=%d", raw, normalized, resolution, fallback)
+	}
+	if legacyRaw.Valid {
+		t.Fatalf("auto-model correction retained legacy raw: %+v", legacyRaw)
 	}
 	if status, err := database.UpsertEvent(&corrected); err != nil || status != "skipped" {
 		t.Fatalf("idempotent auto correction status=%s err=%v", status, err)
@@ -607,7 +614,7 @@ func TestUpsertEventCodexClassificationTrustOrder(t *testing.T) {
 
 			stored := selectOnlyUsageEventForTest(t, database)
 			if tc.strategy == fingerprint.StrategyRawHash {
-				if err := database.Conn().QueryRow(`SELECT raw_usage_json FROM usage_events WHERE event_id = ?`, stored.EventID).Scan(&stored.RawUsageJSON); err != nil {
+				if err := database.Conn().QueryRow(`SELECT COALESCE(raw_usage_json, '') FROM usage_events WHERE event_id = ?`, stored.EventID).Scan(&stored.RawUsageJSON); err != nil {
 					t.Fatalf("select stored raw usage: %v", err)
 				}
 			}
@@ -618,9 +625,15 @@ func TestUpsertEventCodexClassificationTrustOrder(t *testing.T) {
 			if tc.addTiming && (stored.TTFTMs == nil || *stored.TTFTMs != 100) {
 				t.Fatalf("more complete timing was not retained: %v", stored.TTFTMs)
 			}
-			recomputedEventID, recomputedStrategy := computeUsageEventFingerprintForTest(stored)
-			if stored.EventID != recomputedEventID || stored.DedupeKey != recomputedEventID || stored.DedupeStrategy != recomputedStrategy {
-				t.Fatalf("stored identity is not recomputable event_id=%s recomputed=%s dedupe=%s strategy=%s recomputed_strategy=%s", stored.EventID, recomputedEventID, stored.DedupeKey, stored.DedupeStrategy, recomputedStrategy)
+			if tc.strategy == fingerprint.StrategyRawHash {
+				if stored.EventID != legacy.EventID || stored.DedupeKey != legacy.DedupeKey || stored.DedupeStrategy != string(fingerprint.StrategyRawHash) || stored.RawUsageJSON != "" {
+					t.Fatalf("protected raw-hash identity was not retained without raw storage: %+v", stored)
+				}
+			} else {
+				recomputedEventID, recomputedStrategy := computeUsageEventFingerprintForTest(stored)
+				if stored.EventID != recomputedEventID || stored.DedupeKey != recomputedEventID || stored.DedupeStrategy != recomputedStrategy {
+					t.Fatalf("stored identity is not recomputable event_id=%s recomputed=%s dedupe=%s strategy=%s recomputed_strategy=%s", stored.EventID, recomputedEventID, stored.DedupeKey, stored.DedupeStrategy, recomputedStrategy)
+				}
 			}
 
 			if status, err := database.UpsertEvent(&incoming); err != nil || status != "skipped" {
@@ -868,8 +881,8 @@ func TestUpsertEventCodexWeakClassificationPreservesConflictingExplicitSiblings(
 				t.Fatalf("session fallback should match legacy exact ID incoming=%s legacy=%s", incoming.EventID, legacy.EventID)
 			}
 
-			if status, err := database.UpsertEvent(&incoming); err != nil || status != "skipped" {
-				t.Fatalf("defer conflicting classification status=%s err=%v", status, err)
+			if status, err := database.UpsertEvent(&incoming); err != nil || status != "updated" {
+				t.Fatalf("conflicting classification should only clear legacy raw status=%s err=%v", status, err)
 			}
 			var count int
 			if err := database.Conn().QueryRow(`SELECT COUNT(*) FROM usage_events`).Scan(&count); err != nil {
@@ -971,8 +984,8 @@ func TestUpsertEventCodexExplicitClassificationResolvesConflictAfterLaterMerge(t
 	weak.ModelIsFallback = true
 	weak.UpdatedAtMs = 5
 	setUsageEventFingerprintForTest(&weak)
-	if status, err := database.UpsertEvent(&weak); err != nil || status != "skipped" {
-		t.Fatalf("weak classification after merge status=%s err=%v", status, err)
+	if status, err := database.UpsertEvent(&weak); err != nil || status != "updated" {
+		t.Fatalf("weak classification should only clear legacy raw after merge status=%s err=%v", status, err)
 	}
 	var count int
 	if err := database.Conn().QueryRow(`SELECT COUNT(*) FROM usage_events`).Scan(&count); err != nil {
@@ -1388,12 +1401,12 @@ func TestUpsertEventReconcilesExactMatchOutsideCurrentSourceIdentity(t *testing.
 			var eventID, sourceFile, rawUsage string
 			var total int64
 			if err := database.Conn().QueryRow(`
-				SELECT COUNT(*), event_id, source_file, raw_usage_json, total_tokens
+				SELECT COUNT(*), event_id, source_file, COALESCE(raw_usage_json, ''), total_tokens
 				FROM usage_events
 			`).Scan(&count, &eventID, &sourceFile, &rawUsage, &total); err != nil {
 				t.Fatalf("select reconciled row: %v", err)
 			}
-			if status != "updated" || count != 1 || eventID != candidate.EventID || sourceFile != candidate.SourceFile || rawUsage != candidate.RawUsageJSON || total != tc.expectedTotal {
+			if status != "updated" || count != 1 || eventID != candidate.EventID || sourceFile != candidate.SourceFile || rawUsage != "" || total != tc.expectedTotal {
 				t.Fatalf("unexpected reconciliation status=%s rows=%d event_id=%s source=%q raw=%q total=%d", status, count, eventID, sourceFile, rawUsage, total)
 			}
 		})
@@ -1471,7 +1484,7 @@ func TestUpsertEventReconcilesFullyRedactedSourceIdentityDuplicates(t *testing.T
 	`).Scan(&count, &sourceFile, &rawUsage); err != nil {
 		t.Fatalf("select fully redacted reconciliation: %v", err)
 	}
-	if count != 1 || sourceFile != incoming.SourceFile || rawUsage != incoming.RawUsageJSON {
+	if count != 1 || sourceFile != incoming.SourceFile || rawUsage != "" {
 		t.Fatalf("fully redacted rows did not converge rows=%d source=%q raw=%q", count, sourceFile, rawUsage)
 	}
 
@@ -1645,8 +1658,8 @@ func TestUpsertEventDoesNotReconcileRedactedCodexNearMatches(t *testing.T) {
 			incoming.ImportedAtMs = 3
 			incoming.UpdatedAtMs = 3
 			status, err := database.UpsertEvent(&incoming)
-			if err != nil || status != "skipped" {
-				t.Fatalf("near-match import status=%s err=%v", status, err)
+			if err != nil || status != "updated" {
+				t.Fatalf("near-match import should only clear the exact legacy raw status=%s err=%v", status, err)
 			}
 
 			var count int
@@ -1710,7 +1723,7 @@ func TestUpsertEventExactMatchRestoresRedactedCodexSourceEnvelope(t *testing.T) 
 	`).Scan(&sourceFile, &rawUsage); err != nil {
 		t.Fatalf("select restored source envelope: %v", err)
 	}
-	if sourceFile != incoming.SourceFile || rawUsage != incoming.RawUsageJSON {
+	if sourceFile != incoming.SourceFile || rawUsage != "" {
 		t.Fatalf("exact source envelope was not restored source=%q raw=%q", sourceFile, rawUsage)
 	}
 
@@ -2098,16 +2111,16 @@ func TestUpsertEventReconciliationRefreshesCurrentRawEnvelope(t *testing.T) {
 	setUsageEventFingerprintForTest(&incoming)
 
 	status, err := database.UpsertEvent(&incoming)
-	if err != nil || status != "updated" {
-		t.Fatalf("refresh raw envelope status=%s err=%v", status, err)
+	if err != nil || status != "skipped" {
+		t.Fatalf("raw-only reimport status=%s err=%v", status, err)
 	}
 
 	var rawUsage string
 	if err := database.Conn().QueryRow(`SELECT COALESCE(raw_usage_json, '') FROM usage_events`).Scan(&rawUsage); err != nil {
 		t.Fatalf("select refreshed raw envelope: %v", err)
 	}
-	if rawUsage != incoming.RawUsageJSON {
-		t.Fatalf("current raw envelope was not persisted: %q", rawUsage)
+	if rawUsage != "" {
+		t.Fatalf("raw-only reimport persisted raw: %q", rawUsage)
 	}
 
 	status, err = database.UpsertEvent(&incoming)
@@ -2922,9 +2935,9 @@ func computeUsageEventFingerprintForTest(ev *model.UsageEvent) (string, string) 
 		ReasoningTokens:     ev.ReasoningTokens,
 		TotalTokens:         ev.TotalTokens,
 		SourceTotalTokens:   ev.SourceTotalTokens,
-		RawJSON:             ev.RawUsageJSON,
 		SourceFile:          ev.SourceFile,
 		LineNumber:          ev.LineNumber,
+		FingerprintJSON:     ev.RawUsageJSON,
 		RawSHA256:           ev.RawSHA256,
 	})
 	return eventID, string(strategy)

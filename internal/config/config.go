@@ -27,7 +27,12 @@ type PrivacyConfig struct {
 	RedactPathsOnExport bool   `toml:"redact_paths_on_export"`
 }
 
-const PrivacyModeEnvelope = "envelope"
+const (
+	PrivacyModeStatistics = "statistics"
+	// PrivacyModeEnvelope is accepted as a compatibility alias for existing
+	// configs. Both modes persist statistics only and never raw usage evidence.
+	PrivacyModeEnvelope = "envelope"
+)
 
 type ImportConfig struct {
 	GracingMinutes int  `toml:"gracing_minutes"`
@@ -66,7 +71,7 @@ func Default() *Config {
 			Path: filepath.Join(DataDir(), "agent-ledger.db"),
 		},
 		Privacy: PrivacyConfig{
-			Mode:                "envelope",
+			Mode:                PrivacyModeStatistics,
 			RedactPathsOnExport: true,
 		},
 		Import: ImportConfig{
@@ -201,16 +206,16 @@ func (c *Config) DBPath() string {
 }
 
 // ValidateUsageEvidenceWritePolicy rejects unsupported modes before commands
-// persist or transform usage evidence.
+// persist or remove raw usage evidence.
 func (c *Config) ValidateUsageEvidenceWritePolicy() error {
 	mode := strings.TrimSpace(c.Privacy.Mode)
-	if mode == PrivacyModeEnvelope {
+	if mode == PrivacyModeStatistics || mode == PrivacyModeEnvelope {
 		return nil
 	}
 	if mode == "" {
 		mode = "<empty>"
 	}
-	return fmt.Errorf("unsupported privacy.mode %q: this version only supports %q", mode, PrivacyModeEnvelope)
+	return fmt.Errorf("unsupported privacy.mode %q: this version only supports %q (%q is a deprecated compatibility alias)", mode, PrivacyModeStatistics, PrivacyModeEnvelope)
 }
 
 func ExpandHome(path string) string {

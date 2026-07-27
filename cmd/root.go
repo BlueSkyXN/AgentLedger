@@ -12,7 +12,7 @@ var rootCmd = &cobra.Command{
 	Short: "A local-first usage analytics tool for AI coding agents",
 	Long: `AgentLedger imports usage data from multiple AI agents (Claude Code, Codex, Gemini, GitHub Copilot, WorkBuddy),
 stores it in a simple SQLite analytics schema with deterministic deduplication,
-and provides token, timing, TTFT, and output TPS reports.`,
+and provides request-count, token, timing, TTFT, and output TPS reports.`,
 }
 
 func Execute() {

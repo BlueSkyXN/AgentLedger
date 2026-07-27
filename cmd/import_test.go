@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,44 @@ import (
 	"github.com/BlueSkyXN/AgentLedger/internal/fingerprint"
 	"github.com/BlueSkyXN/AgentLedger/internal/model"
 )
+
+func TestImportPersistsStatisticsWithoutRawUsage(t *testing.T) {
+	database, err := db.Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer database.Close()
+
+	records := []*fingerprint.ParsedRecord{{
+		Agent:           "claude",
+		Provider:        "anthropic",
+		Model:           "claude-test",
+		DedupeID:        "message-1",
+		TimestampMs:     1,
+		InputTokens:     3,
+		OutputTokens:    2,
+		TotalTokens:     5,
+		FingerprintJSON: `{"usage":{"input_tokens":3},"private":"must-not-persist"}`,
+		RawSHA256:       "source-hash",
+	}}
+	added, updated, skipped, warnings := importParsedRecords(database, "claude", records)
+	if added != 1 || updated != 0 || skipped != 0 || len(warnings) != 0 {
+		t.Fatalf("unexpected import result added=%d updated=%d skipped=%d warnings=%v", added, updated, skipped, warnings)
+	}
+
+	var raw sql.NullString
+	var input, output, total int64
+	var rawSHA string
+	if err := database.Conn().QueryRow(`
+		SELECT raw_usage_json, input_tokens, output_tokens, total_tokens, raw_sha256
+		FROM usage_events
+	`).Scan(&raw, &input, &output, &total, &rawSHA); err != nil {
+		t.Fatalf("read imported event: %v", err)
+	}
+	if raw.Valid || input != 3 || output != 2 || total != 5 || rawSHA != "source-hash" {
+		t.Fatalf("unexpected stored event raw=%+v input=%d output=%d total=%d raw_sha=%q", raw, input, output, total, rawSHA)
+	}
+}
 
 func TestApplyTimingFieldsDerivesOutputDurationAndTPS(t *testing.T) {
 	event := &model.UsageEvent{OutputTokens: 42}
@@ -113,31 +152,96 @@ func TestImportUsesParsedNormalizedModelOverride(t *testing.T) {
 	}
 }
 
-func TestImportAggregatesOmittedUsageEvidenceWarnings(t *testing.T) {
+func TestImportPersistsParsedRequestCount(t *testing.T) {
 	database, err := db.Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
 	defer database.Close()
 
-	records := []*fingerprint.ParsedRecord{
-		{Agent: "claude", DedupeID: "one", TimestampMs: 1, TotalTokens: 1, EvidenceOmitted: true},
-		{Agent: "claude", DedupeID: "two", TimestampMs: 2, TotalTokens: 1, EvidenceOmitted: true},
+	requestCount := int64(7)
+	records := []*fingerprint.ParsedRecord{{
+		Agent:         "copilot",
+		Provider:      "github",
+		Model:         "gpt-5.4",
+		TimestampMs:   1,
+		DedupeID:      "copilot-summary",
+		SessionID:     "session-1",
+		InputTokens:   10,
+		OutputTokens:  5,
+		TotalTokens:   15,
+		RequestCount:  &requestCount,
+		SourceProduct: "copilot-session-state",
+	}}
+	added, updated, skipped, warnings := importParsedRecords(database, "copilot", records)
+	if added != 1 || updated != 0 || skipped != 0 || len(warnings) != 0 {
+		t.Fatalf("unexpected first import added=%d updated=%d skipped=%d warnings=%v", added, updated, skipped, warnings)
 	}
-	added, updated, skipped, warnings := importParsedRecords(database, "claude", records)
-	if added != 2 || updated != 0 || skipped != 0 {
-		t.Fatalf("unexpected import result added=%d updated=%d skipped=%d", added, updated, skipped)
+	added, updated, skipped, warnings = importParsedRecords(database, "copilot", records)
+	if added != 0 || updated != 0 || skipped != 1 || len(warnings) != 0 {
+		t.Fatalf("unexpected repeated import added=%d updated=%d skipped=%d warnings=%v", added, updated, skipped, warnings)
 	}
-	if len(warnings) != 1 || warnings[0] != "claude usage evidence omitted for 2 parsed record(s)" {
-		t.Fatalf("expected one aggregate evidence warning, got %v", warnings)
+	var stored int64
+	if err := database.Conn().QueryRow(`SELECT request_count FROM usage_events`).Scan(&stored); err != nil {
+		t.Fatalf("read request_count: %v", err)
+	}
+	if stored != requestCount {
+		t.Fatalf("request_count=%d want=%d", stored, requestCount)
+	}
+}
+
+func TestCopilotLiveRequestCountImport(t *testing.T) {
+	if os.Getenv("COPILOT_LIVE_TEST") != "1" {
+		t.Skip("set COPILOT_LIVE_TEST=1 to validate the local Copilot session-state corpus")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("resolve home: %v", err)
+	}
+	adapter := adapters.NewCopilotAdapter()
+	files, err := adapter.Discover([]string{filepath.Join(home, ".copilot", "session-state")})
+	if err != nil {
+		t.Fatalf("discover Copilot corpus: %v", err)
+	}
+	var records []*fingerprint.ParsedRecord
+	var sourceKnownEvents, sourceRequests, sourceTokens int64
+	for _, file := range files {
+		parsed, err := adapter.ParseFile(file)
+		if err != nil {
+			t.Fatalf("parse Copilot corpus: %v", err)
+		}
+		for _, record := range parsed {
+			sourceTokens += record.TotalTokens
+			if record.RequestCount != nil {
+				sourceKnownEvents++
+				sourceRequests += *record.RequestCount
+			}
+		}
+		records = append(records, parsed...)
+	}
+	if len(records) == 0 || sourceKnownEvents == 0 || sourceRequests == 0 || sourceTokens == 0 {
+		t.Fatalf("live corpus has no request-count usage: files=%d records=%d known_events=%d", len(files), len(records), sourceKnownEvents)
 	}
 
-	var rawCount int
-	if err := database.Conn().QueryRow(`SELECT COUNT(*) FROM usage_events WHERE raw_usage_json IS NOT NULL`).Scan(&rawCount); err != nil {
-		t.Fatalf("count raw evidence: %v", err)
+	database, err := db.Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
+	if err != nil {
+		t.Fatalf("open temp db: %v", err)
 	}
-	if rawCount != 0 {
-		t.Fatalf("expected omitted evidence to remain NULL/empty, got %d persisted values", rawCount)
+	defer database.Close()
+	added, updated, skipped, warnings := importParsedRecords(database, "copilot", records)
+	if updated != 0 || skipped != 0 || len(warnings) != 0 {
+		t.Fatalf("unexpected live import result added=%d updated=%d skipped=%d warnings=%d", added, updated, skipped, len(warnings))
+	}
+	var dbEvents, dbKnownEvents, dbRequests, dbTokens int64
+	if err := database.Conn().QueryRow(`SELECT COUNT(*), COUNT(request_count), COALESCE(SUM(request_count), 0), COALESCE(SUM(total_tokens), 0) FROM usage_events`).Scan(&dbEvents, &dbKnownEvents, &dbRequests, &dbTokens); err != nil {
+		t.Fatalf("aggregate temp db: %v", err)
+	}
+	if dbEvents != int64(len(records)) || dbKnownEvents != sourceKnownEvents || dbRequests != sourceRequests || dbTokens != sourceTokens {
+		t.Fatalf("source/db mismatch records=%d/%d known=%d/%d requests=%d/%d tokens=%d/%d", len(records), dbEvents, sourceKnownEvents, dbKnownEvents, sourceRequests, dbRequests, sourceTokens, dbTokens)
+	}
+	added, updated, skipped, warnings = importParsedRecords(database, "copilot", records)
+	if added != 0 || updated != 0 || skipped != len(records) || len(warnings) != 0 {
+		t.Fatalf("live reimport not idempotent added=%d updated=%d skipped=%d warnings=%d", added, updated, skipped, len(warnings))
 	}
 }
 

@@ -4,11 +4,13 @@ import { Chart } from "@/components/Chart";
 import { DataTable, type DataTableColumn } from "@/components/DataTable";
 import type { MetricRow } from "@/api/types";
 import { useBreakdown } from "@/hooks/queries";
-import { formatCost, formatInt, formatMs, formatPercent, formatTPS } from "@/utils/format";
+import { formatCost, formatInt, formatKnownRequestCount, formatMs, formatPercent, formatRequestCoverage, formatTPS } from "@/utils/format";
 
 const channelColumns: Array<DataTableColumn<MetricRow>> = [
   { key: "channel", label: "Channel", render: (row) => row.label, value: (row) => row.label },
   { key: "events", label: "事件", render: (row) => formatInt(row.events), value: (row) => row.events, numeric: true },
+  { key: "known_request_count", label: "请求数", render: (row) => formatKnownRequestCount(row.known_request_count, row.request_count_known_events, row.request_count_unknown_events), value: (row) => row.known_request_count, numeric: true },
+  { key: "request_coverage", label: "请求覆盖", render: (row) => formatRequestCoverage(row.request_count_known_events, row.request_count_unknown_events), value: (row) => row.request_count_known_events, numeric: true },
   { key: "total_tokens", label: "Tokens", render: (row) => formatInt(row.total_tokens), value: (row) => row.total_tokens, numeric: true },
   { key: "input_tokens", label: "输入", render: (row) => formatInt(row.input_tokens), value: (row) => row.input_tokens, numeric: true },
   { key: "output_tokens", label: "输出", render: (row) => formatInt(row.output_tokens), value: (row) => row.output_tokens, numeric: true },

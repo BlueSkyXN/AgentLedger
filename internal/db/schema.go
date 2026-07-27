@@ -20,6 +20,7 @@ var v2CompatibilityColumns = []string{
 	"raw_input_tokens INTEGER",
 	"token_accounting_method TEXT",
 	"accounting_profile TEXT",
+	"request_count INTEGER CHECK (request_count >= 0)",
 	"session_path_id TEXT",
 	"turn_id TEXT",
 }
@@ -143,8 +144,9 @@ CREATE TABLE IF NOT EXISTS usage_events (
     output_tokens INTEGER NOT NULL DEFAULT 0,
     reasoning_tokens INTEGER NOT NULL DEFAULT 0,
     cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
-    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
-    total_tokens INTEGER NOT NULL DEFAULT 0,
+	    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+	    total_tokens INTEGER NOT NULL DEFAULT 0,
+	    request_count INTEGER CHECK (request_count >= 0),
 
     request_started_at_ms INTEGER,
     first_token_at_ms INTEGER,

@@ -26,9 +26,9 @@ func testServer(t *testing.T) *Server {
 	base := time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC).UnixMilli()
 	_, err = database.Conn().Exec(`INSERT INTO usage_events (
 		event_id, dedupe_key, dedupe_strategy, channel, provider, model_raw, model_normalized, model_resolution, timestamp_ms,
-		session_id, project_path, message_id, input_tokens, output_tokens, total_tokens, output_duration_ms, output_tps,
+		session_id, project_path, message_id, input_tokens, output_tokens, total_tokens, request_count, output_duration_ms, output_tps,
 		raw_usage_json, imported_at_ms, updated_at_ms
-	) VALUES ('fp1', 'fp1', 'message_id', 'codex', 'openai', 'gpt-5', 'gpt-5', 'direct_event', ?, 's1', '/Users/test/Github/project-a', 'm1', 100, 50, 150, 2500, 20.0, '{"secret":"hidden"}', 1, 1)`, base)
+	) VALUES ('fp1', 'fp1', 'message_id', 'codex', 'openai', 'gpt-5', 'gpt-5', 'direct_event', ?, 's1', '/Users/test/Github/project-a', 'm1', 100, 50, 150, 3, 2500, 20.0, '{"secret":"hidden"}', 1, 1)`, base)
 	if err != nil {
 		t.Fatalf("insert event: %v", err)
 	}
@@ -49,6 +49,9 @@ func TestAPIHealthAndSummary(t *testing.T) {
 	}
 	if payload["total_events"].(float64) != 1 {
 		t.Fatalf("unexpected payload: %v", payload)
+	}
+	if payload["known_request_count"].(float64) != 3 || payload["request_count_known_events"].(float64) != 1 || payload["request_count_unknown_events"].(float64) != 0 {
+		t.Fatalf("unexpected request coverage: %v", payload)
 	}
 }
 
@@ -103,8 +106,15 @@ func TestEventsConfigAndFilters(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/events", nil)
 	server.Handler().ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"model_resolution":"direct_event"`) {
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"model_resolution":"direct_event"`) || !strings.Contains(recorder.Body.String(), `"request_count":3`) {
 		t.Fatalf("events missing model resolution: status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	recorder = httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)
+	server.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"known_request_count":3`) || !strings.Contains(recorder.Body.String(), `"request_count_known_events":1`) {
+		t.Fatalf("status missing request coverage: status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 
 	recorder = httptest.NewRecorder()

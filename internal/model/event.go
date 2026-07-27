@@ -49,12 +49,13 @@ type UsageEvent struct {
 	LineNumber    int    `json:"line_number" db:"line_number"`
 	RawSHA256     string `json:"raw_sha256" db:"raw_sha256"`
 
-	InputTokens         int64 `json:"input_tokens" db:"input_tokens"`
-	OutputTokens        int64 `json:"output_tokens" db:"output_tokens"`
-	ReasoningTokens     int64 `json:"reasoning_tokens" db:"reasoning_tokens"`
-	CacheCreationTokens int64 `json:"cache_creation_tokens" db:"cache_creation_tokens"`
-	CacheReadTokens     int64 `json:"cache_read_tokens" db:"cache_read_tokens"`
-	TotalTokens         int64 `json:"total_tokens" db:"total_tokens"`
+	InputTokens         int64  `json:"input_tokens" db:"input_tokens"`
+	OutputTokens        int64  `json:"output_tokens" db:"output_tokens"`
+	ReasoningTokens     int64  `json:"reasoning_tokens" db:"reasoning_tokens"`
+	CacheCreationTokens int64  `json:"cache_creation_tokens" db:"cache_creation_tokens"`
+	CacheReadTokens     int64  `json:"cache_read_tokens" db:"cache_read_tokens"`
+	TotalTokens         int64  `json:"total_tokens" db:"total_tokens"`
+	RequestCount        *int64 `json:"request_count" db:"request_count"`
 
 	RequestStartedAtMs *int64   `json:"request_started_at_ms" db:"request_started_at_ms"`
 	FirstTokenAtMs     *int64   `json:"first_token_at_ms" db:"first_token_at_ms"`
