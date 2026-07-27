@@ -8,7 +8,7 @@ AgentLedger v2 通过 adapter 读取本机 agent 日志，解析出统一的 `Pa
 |---|---|---|---|
 | Claude Code | `~/.config/claude/projects`, `~/.claude/projects` | JSONL | `message.usage`、`message.id`、`requestId`、`sessionId`、project path。 |
 | Codex | `~/.codex/sessions` | JSONL | `usage`、`response.usage`、`payload.info.last_token_usage`、`payload.info.total_token_usage`。 |
-| GitHub Copilot | `~/.copilot/otel`, `~/.copilot/session-state` | JSONL | 优先 OTel `gen_ai.usage.*` token telemetry；没有 OTel 文件时回退到 `session.shutdown.data.modelMetrics` session+model 汇总。 |
+| GitHub Copilot | `~/.copilot/otel`, `~/.copilot/session-state` | JSONL | 优先 OTel `gen_ai.usage.*` token telemetry；没有 OTel 文件时回退到 `session.shutdown.data.modelMetrics` session+model 汇总，其中 `requests.count` 可提供模型 API 请求次数。 |
 | Gemini CLI | `~/.gemini` | JSON / JSONL | `usageMetadata`、`promptTokenCount`、`candidatesTokenCount`、`totalTokenCount`。 |
 | WorkBuddy | `~/.workbuddy/projects` | JSONL | `providerData.usage`、`providerData.rawUsage`、根级 source event ID、session/request/project metadata。 |
 
@@ -24,7 +24,7 @@ Claude Code 日志会把同一次 assistant message 以多条流式行写出。A
 
 `model == "<synthetic>"` 且 token total 为 0 的记录不会写入统计；`usage.speed == "fast"` 时，模型名追加 `-fast` 后缀，避免和 standard model 混在同一 model 维度。
 
-Claude 完整 source object 只在解析期间用于结构化字段、`raw_sha256` 和罕见 `raw_hash` fingerprint fallback。落库 evidence 使用 `agentledger.claude-usage.v1`，只保留 parser 实际选中的 usage map、standard/wrapped variant、sidechain、message ID 来源以及明确存在的 source cost；不保存 `content`、thinking、tool 参数、cwd、Git 或完整 message。
+Claude 完整 source object 只在解析期间用于结构化字段、`raw_sha256` 和罕见 `raw_hash` fingerprint fallback。SQLite 只保存规范化 token、model、cost、identity 和 accounting 字段，`raw_usage_json` 保持 `NULL`；不持久化 usage 子树、`content`、thinking、tool 参数、cwd、Git 或完整 message。
 
 ### Codex
 
@@ -50,7 +50,7 @@ Codex 的 `task_complete.duration_ms`、`task_complete.time_to_first_token_ms` �
 
 `agent-ledger doctor codex` 会扫描 configured paths，输出 raw `token_count` 覆盖、`task_complete` timing 覆盖、默认（准确）口径与 `ccusage_compatible` 口径的事件数/token 差异，以及模型分布。
 
-Codex 完整 source object 同样只在解析期间使用。落库 evidence 使用 `agentledger.codex-usage.v1`：`token_count` 保留源中实际存在的 `total_token_usage` / `last_token_usage` map，headless 保留被选中的 usage map 与 container variant；缺失字段不补零，不保存 `rate_limits`、`model_context_window`、timestamp/type/payload wrapper。`task_complete` 继续只更新独立 timing/turn 列，完整重放依赖源 JSONL。
+Codex 完整 source object 同样只在解析期间用于累计 delta、结构化字段、`raw_sha256` 和 fingerprint。`total_token_usage` / `last_token_usage` 的计算结果写入 token 分项、`source_total_tokens`、`raw_input_tokens`、`token_accounting_method` 和 `accounting_profile`，但 usage map 本身不落库；`raw_usage_json` 保持 `NULL`。`task_complete` 继续只更新独立 timing/turn 列，完整重放依赖源 JSONL。
 
 ### GitHub Copilot
 
@@ -58,7 +58,11 @@ GitHub Copilot 优先读取本地 OTel JSONL telemetry：`~/.copilot/otel` 或 `
 
 没有 OTel 文件时，Copilot adapter 会读取 `~/.copilot/session-state/*/events.jsonl` 里的每条非空 `session.shutdown` 事件。该事件的 `data.modelMetrics.<model>.usage` 提供 `inputTokens`、`outputTokens`、`cacheReadTokens`、`cacheWriteTokens`、`reasoningTokens`，一条 `usage_events` 记录表示一个 shutdown/run-resume segment 下的一个 model，而不是整段 session 的最后累计值。字段口径为：`source_product = copilot-session-state`、`observability_level = session_summary`、`token_accounting_method = copilot_session_model_metrics`、`accounting_profile = input_includes_cache_read`。未 shutdown 的活跃 session 不会产生这类汇总记录。
 
-`requests.cost`、`totalPremiumRequests`、`totalNanoAiu` 等 Copilot 本地指标会保留在 `raw_usage_json`，但不会写入 `recorded_cost_usd`；这些值不是可直接和 Claude/Codex 拉通的 USD 成本。`assistant.message.outputTokens`、`subagent.completed.totalTokens` 和 compaction token 字段只作为校验线索，当前不会作为主 usage 导入，避免 partial envelope 和 `session.shutdown` 汇总重复计数。
+同一 `modelMetrics.<model>` 下的 `requests.count` 是该模型的 API 请求次数，写入 `usage_events.request_count`。该 Copilot CLI session-state 字段目前属于 experimental schema：缺失或结构变化时保持 `request_count = NULL`，不从 token、event 或 session 数推断；源日志明确提供 `0` 时才写入 `0`。
+
+本期只为 `session.shutdown.modelMetrics.<model>.requests.count` 增加 request count。OTel 的 `request_count` 映射，以及 OTel 与 session-state 同时存在时的 request-count 协调，均不在本期范围内；现有“发现 OTel usage 文件即优先 OTel、避免 token 双计数”的来源选择规则不因此改变。
+
+`requests.cost`、`totalPremiumRequests`、`totalNanoAiu` 等 Copilot 本地指标不会写入 `recorded_cost_usd` 或 `raw_usage_json`；这些值不是可直接和 Claude/Codex 拉通的 USD 成本。`assistant.message.outputTokens`、`subagent.completed.totalTokens` 和 compaction token 字段只作为解析期校验线索，当前不会作为主 usage 导入，避免 partial envelope 和 `session.shutdown` 汇总重复计数。
 
 ### WorkBuddy
 
@@ -68,7 +72,7 @@ WorkBuddy source input 包含 cache。入库时 `raw_input_tokens` 保存 `promp
 
 `model_raw` 保存 `providerData.model`，规范化仅使用 WorkBuddy exact aliases：`deepseek-v4-pro-202606 -> deepseek-v4-pro`、`k3 -> kimi-k3`、`kimi-k3-2 -> kimi-k3`。内置路由使用 `provider = workbuddy`，`custom-local:*` 使用 `provider = custom`；两者的 `channel`、`source_agent`、`source_product` 均为 `workbuddy`。`auto` 是路由选择状态而不是 resolved model ID，因此保留 `model_raw = auto` 供诊断，同时写入 `model_normalized = unknown`、`model_resolution = unknown` 和 `policy_zero`。
 
-WorkBuddy 的 `rawUsage.credit` 不写入脱敏 raw usage envelope，也不映射为 `recorded_cost_usd`。estimated cost 只使用规范化模型、token 分项和 pricing profile。保存的 raw envelope 是 allowlist 重建结果，不包含正文、工具参数、`cwd`、URL、API key 或完整 `providerData`；`project_path` 单独保存在本地事实表中，并继续服从默认 export path redaction。
+WorkBuddy 的 `rawUsage.credit` 不写入 `recorded_cost_usd` 或 `raw_usage_json`。estimated cost 只使用规范化模型、token 分项和 pricing profile；SQLite 不保存 usage envelope、正文、工具参数、`cwd`、URL、API key 或完整 `providerData`。`project_path` 单独保存在本地事实表中，并继续服从默认 export path redaction。
 
 ## Parsed fields
 
@@ -93,7 +97,7 @@ Adapter 会尽量提供：
 - `SourceFile`
 - `LineNumber`
 - `RawSHA256`
-- `RawUsageJSON`
+- `FingerprintJSON`（仅在解析和 fingerprint 计算期间存在，不落库）
 
 新写入事件会同时写入 `channel` 和 `source_agent`，并保持二者一致。`source_product` 用于区分 `claude-code`、`codex-cli`、`copilot-otel`、`copilot-session-state` 等具体来源形态；项目或工作目录维度保存在 `project_path`。
 

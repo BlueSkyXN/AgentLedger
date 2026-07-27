@@ -21,60 +21,69 @@ type Filters struct {
 }
 
 type Summary struct {
-	TotalEvents           int64                    `json:"total_events"`
-	ImportRuns            int64                    `json:"import_runs"`
-	TotalTokens           int64                    `json:"total_tokens"`
-	InputTokens           int64                    `json:"input_tokens"`
-	OutputTokens          int64                    `json:"output_tokens"`
-	CacheCreationTokens   int64                    `json:"cache_creation_tokens"`
-	CacheReadTokens       int64                    `json:"cache_read_tokens"`
-	ReasoningTokens       int64                    `json:"reasoning_tokens"`
-	RecordedCostUSD       float64                  `json:"recorded_cost_usd"`
-	AvgTotalDurationMs    *float64                 `json:"avg_total_duration_ms"`
-	AvgTTFTMs             *float64                 `json:"avg_ttft_ms"`
-	AvgOutputTPS          *float64                 `json:"avg_output_tps"`
-	FirstEventAt          *string                  `json:"first_event_at"`
-	LastEventAt           *string                  `json:"last_event_at"`
-	EstimatedCostUSD      *float64                 `json:"estimated_cost_usd,omitempty"`
-	EstimatedCostMicroUSD *int64                   `json:"estimated_cost_micro_usd,omitempty"`
-	Pricing               *pricing.CoverageSummary `json:"pricing,omitempty"`
+	TotalEvents               int64                    `json:"total_events"`
+	KnownRequestCount         int64                    `json:"known_request_count"`
+	RequestCountKnownEvents   int64                    `json:"request_count_known_events"`
+	RequestCountUnknownEvents int64                    `json:"request_count_unknown_events"`
+	ImportRuns                int64                    `json:"import_runs"`
+	TotalTokens               int64                    `json:"total_tokens"`
+	InputTokens               int64                    `json:"input_tokens"`
+	OutputTokens              int64                    `json:"output_tokens"`
+	CacheCreationTokens       int64                    `json:"cache_creation_tokens"`
+	CacheReadTokens           int64                    `json:"cache_read_tokens"`
+	ReasoningTokens           int64                    `json:"reasoning_tokens"`
+	RecordedCostUSD           float64                  `json:"recorded_cost_usd"`
+	AvgTotalDurationMs        *float64                 `json:"avg_total_duration_ms"`
+	AvgTTFTMs                 *float64                 `json:"avg_ttft_ms"`
+	AvgOutputTPS              *float64                 `json:"avg_output_tps"`
+	FirstEventAt              *string                  `json:"first_event_at"`
+	LastEventAt               *string                  `json:"last_event_at"`
+	EstimatedCostUSD          *float64                 `json:"estimated_cost_usd,omitempty"`
+	EstimatedCostMicroUSD     *int64                   `json:"estimated_cost_micro_usd,omitempty"`
+	Pricing                   *pricing.CoverageSummary `json:"pricing,omitempty"`
 }
 
 type MetricRow struct {
-	Label                 string                   `json:"label"`
-	Events                int64                    `json:"events"`
-	TotalTokens           int64                    `json:"total_tokens"`
-	InputTokens           int64                    `json:"input_tokens"`
-	OutputTokens          int64                    `json:"output_tokens"`
-	CacheCreationTokens   int64                    `json:"cache_creation_tokens"`
-	CacheReadTokens       int64                    `json:"cache_read_tokens"`
-	ReasoningTokens       int64                    `json:"reasoning_tokens"`
-	RecordedCostUSD       float64                  `json:"recorded_cost_usd"`
-	AvgTotalDurationMs    *float64                 `json:"avg_total_duration_ms"`
-	AvgTTFTMs             *float64                 `json:"avg_ttft_ms"`
-	AvgOutputTPS          *float64                 `json:"avg_output_tps"`
-	EstimatedCostUSD      *float64                 `json:"estimated_cost_usd,omitempty"`
-	EstimatedCostMicroUSD *int64                   `json:"estimated_cost_micro_usd,omitempty"`
-	Pricing               *pricing.CoverageSummary `json:"pricing,omitempty"`
+	Label                     string                   `json:"label"`
+	Events                    int64                    `json:"events"`
+	KnownRequestCount         int64                    `json:"known_request_count"`
+	RequestCountKnownEvents   int64                    `json:"request_count_known_events"`
+	RequestCountUnknownEvents int64                    `json:"request_count_unknown_events"`
+	TotalTokens               int64                    `json:"total_tokens"`
+	InputTokens               int64                    `json:"input_tokens"`
+	OutputTokens              int64                    `json:"output_tokens"`
+	CacheCreationTokens       int64                    `json:"cache_creation_tokens"`
+	CacheReadTokens           int64                    `json:"cache_read_tokens"`
+	ReasoningTokens           int64                    `json:"reasoning_tokens"`
+	RecordedCostUSD           float64                  `json:"recorded_cost_usd"`
+	AvgTotalDurationMs        *float64                 `json:"avg_total_duration_ms"`
+	AvgTTFTMs                 *float64                 `json:"avg_ttft_ms"`
+	AvgOutputTPS              *float64                 `json:"avg_output_tps"`
+	EstimatedCostUSD          *float64                 `json:"estimated_cost_usd,omitempty"`
+	EstimatedCostMicroUSD     *int64                   `json:"estimated_cost_micro_usd,omitempty"`
+	Pricing                   *pricing.CoverageSummary `json:"pricing,omitempty"`
 }
 
 type TimeBreakdownRow struct {
-	Bucket                string                   `json:"bucket"`
-	Label                 string                   `json:"label"`
-	Events                int64                    `json:"events"`
-	TotalTokens           int64                    `json:"total_tokens"`
-	InputTokens           int64                    `json:"input_tokens"`
-	OutputTokens          int64                    `json:"output_tokens"`
-	CacheCreationTokens   int64                    `json:"cache_creation_tokens"`
-	CacheReadTokens       int64                    `json:"cache_read_tokens"`
-	ReasoningTokens       int64                    `json:"reasoning_tokens"`
-	RecordedCostUSD       float64                  `json:"recorded_cost_usd"`
-	AvgTotalDurationMs    *float64                 `json:"avg_total_duration_ms"`
-	AvgTTFTMs             *float64                 `json:"avg_ttft_ms"`
-	AvgOutputTPS          *float64                 `json:"avg_output_tps"`
-	EstimatedCostUSD      *float64                 `json:"estimated_cost_usd,omitempty"`
-	EstimatedCostMicroUSD *int64                   `json:"estimated_cost_micro_usd,omitempty"`
-	Pricing               *pricing.CoverageSummary `json:"pricing,omitempty"`
+	Bucket                    string                   `json:"bucket"`
+	Label                     string                   `json:"label"`
+	Events                    int64                    `json:"events"`
+	KnownRequestCount         int64                    `json:"known_request_count"`
+	RequestCountKnownEvents   int64                    `json:"request_count_known_events"`
+	RequestCountUnknownEvents int64                    `json:"request_count_unknown_events"`
+	TotalTokens               int64                    `json:"total_tokens"`
+	InputTokens               int64                    `json:"input_tokens"`
+	OutputTokens              int64                    `json:"output_tokens"`
+	CacheCreationTokens       int64                    `json:"cache_creation_tokens"`
+	CacheReadTokens           int64                    `json:"cache_read_tokens"`
+	ReasoningTokens           int64                    `json:"reasoning_tokens"`
+	RecordedCostUSD           float64                  `json:"recorded_cost_usd"`
+	AvgTotalDurationMs        *float64                 `json:"avg_total_duration_ms"`
+	AvgTTFTMs                 *float64                 `json:"avg_ttft_ms"`
+	AvgOutputTPS              *float64                 `json:"avg_output_tps"`
+	EstimatedCostUSD          *float64                 `json:"estimated_cost_usd,omitempty"`
+	EstimatedCostMicroUSD     *int64                   `json:"estimated_cost_micro_usd,omitempty"`
+	Pricing                   *pricing.CoverageSummary `json:"pricing,omitempty"`
 }
 
 type ImportRun struct {
@@ -110,6 +119,7 @@ type Event struct {
 	CacheReadTokens     int64    `json:"cache_read_tokens"`
 	ReasoningTokens     int64    `json:"reasoning_tokens"`
 	TotalTokens         int64    `json:"total_tokens"`
+	RequestCount        *int64   `json:"request_count"`
 	TotalDurationMs     *int64   `json:"total_duration_ms"`
 	TTFTMs              *int64   `json:"ttft_ms"`
 	OutputDurationMs    *int64   `json:"output_duration_ms"`
@@ -131,6 +141,9 @@ func BuildSummary(conn *sql.DB, filters Filters) (*Summary, error) {
 	}
 	query := `SELECT
 		COUNT(*),
+		COALESCE(SUM(request_count), 0),
+		COUNT(request_count),
+		COUNT(*) - COUNT(request_count),
 		COALESCE(SUM(total_tokens), 0),
 		COALESCE(SUM(` + effectiveInputTokensExpr() + `), 0),
 		COALESCE(SUM(output_tokens), 0),
@@ -152,6 +165,9 @@ func BuildSummary(conn *sql.DB, filters Filters) (*Summary, error) {
 	var firstMs, lastMs sql.NullInt64
 	if err := conn.QueryRow(query, args...).Scan(
 		&s.TotalEvents,
+		&s.KnownRequestCount,
+		&s.RequestCountKnownEvents,
+		&s.RequestCountUnknownEvents,
 		&s.TotalTokens,
 		&s.InputTokens,
 		&s.OutputTokens,
@@ -221,8 +237,11 @@ func BuildTimeseriesBreakdown(conn *sql.DB, bucket, by string, filters Filters) 
 	query := fmt.Sprintf(`SELECT
 		%s AS bucket,
 		%s AS label,
-		COUNT(*),
-		COALESCE(SUM(total_tokens), 0),
+			COUNT(*),
+			COALESCE(SUM(request_count), 0),
+			COUNT(request_count),
+			COUNT(*) - COUNT(request_count),
+			COALESCE(SUM(total_tokens), 0),
 		COALESCE(SUM(`+effectiveInputTokensExpr()+`), 0),
 		COALESCE(SUM(output_tokens), 0),
 		COALESCE(SUM(cache_creation_tokens), 0),
@@ -392,8 +411,11 @@ func BuildFilterOptions(conn *sql.DB) (*FilterOptions, error) {
 func groupedMetricQuery(labelExpr string) string {
 	return fmt.Sprintf(`SELECT
 		%s AS label,
-		COUNT(*),
-		COALESCE(SUM(total_tokens), 0),
+			COUNT(*),
+			COALESCE(SUM(request_count), 0),
+			COUNT(request_count),
+			COUNT(*) - COUNT(request_count),
+			COALESCE(SUM(total_tokens), 0),
 		COALESCE(SUM(`+effectiveInputTokensExpr()+`), 0),
 		COALESCE(SUM(output_tokens), 0),
 		COALESCE(SUM(cache_creation_tokens), 0),
@@ -443,7 +465,7 @@ func eventSelect() string {
 		timestamp_ms, session_id, session_path_id, turn_id, project_path, message_id, request_id,
 		` + effectiveInputTokensExpr() + `, COALESCE(output_tokens, 0),
 		COALESCE(cache_creation_tokens, 0), COALESCE(cache_read_tokens, 0), COALESCE(reasoning_tokens, 0),
-		COALESCE(total_tokens, 0), total_duration_ms, ttft_ms, output_duration_ms, output_tps, recorded_cost_usd`
+			COALESCE(total_tokens, 0), request_count, total_duration_ms, ttft_ms, output_duration_ms, output_tps, recorded_cost_usd`
 }
 
 func effectiveInputTokensExpr() string {
@@ -462,7 +484,7 @@ func scanEvents(conn *sql.DB, query string, args ...any) ([]Event, error) {
 		var item Event
 		var provider, modelRaw, modelNormalized, modelResolution, sessionID, sessionPathID, turnID, projectPath, messageID, requestID sql.NullString
 		var ts sql.NullInt64
-		var totalDuration, ttft, outputDuration sql.NullInt64
+		var requestCount, totalDuration, ttft, outputDuration sql.NullInt64
 		var outputTPS, recordedCost sql.NullFloat64
 		if err := rows.Scan(
 			&item.EventID,
@@ -485,6 +507,7 @@ func scanEvents(conn *sql.DB, query string, args ...any) ([]Event, error) {
 			&item.CacheReadTokens,
 			&item.ReasoningTokens,
 			&item.TotalTokens,
+			&requestCount,
 			&totalDuration,
 			&ttft,
 			&outputDuration,
@@ -503,6 +526,7 @@ func scanEvents(conn *sql.DB, query string, args ...any) ([]Event, error) {
 		item.ProjectPath = nullableString(projectPath)
 		item.MessageID = nullableString(messageID)
 		item.RequestID = nullableString(requestID)
+		item.RequestCount = nullableInt(requestCount)
 		item.TotalDurationMs = nullableInt(totalDuration)
 		item.TTFTMs = nullableInt(ttft)
 		item.OutputDurationMs = nullableInt(outputDuration)
@@ -527,7 +551,7 @@ func scanMetricRows(conn *sql.DB, query string, args ...any) ([]MetricRow, error
 	for rows.Next() {
 		var item MetricRow
 		var avgDuration, avgTTFT, avgTPS sql.NullFloat64
-		if err := rows.Scan(&item.Label, &item.Events, &item.TotalTokens, &item.InputTokens, &item.OutputTokens, &item.CacheCreationTokens, &item.CacheReadTokens, &item.ReasoningTokens, &item.RecordedCostUSD, &avgDuration, &avgTTFT, &avgTPS); err != nil {
+		if err := rows.Scan(&item.Label, &item.Events, &item.KnownRequestCount, &item.RequestCountKnownEvents, &item.RequestCountUnknownEvents, &item.TotalTokens, &item.InputTokens, &item.OutputTokens, &item.CacheCreationTokens, &item.CacheReadTokens, &item.ReasoningTokens, &item.RecordedCostUSD, &avgDuration, &avgTTFT, &avgTPS); err != nil {
 			return nil, err
 		}
 		item.AvgTotalDurationMs = nullableFloat(avgDuration)
@@ -549,7 +573,7 @@ func scanTimeBreakdownRows(conn *sql.DB, query string, args ...any) ([]TimeBreak
 	for rows.Next() {
 		var item TimeBreakdownRow
 		var avgDuration, avgTTFT, avgTPS sql.NullFloat64
-		if err := rows.Scan(&item.Bucket, &item.Label, &item.Events, &item.TotalTokens, &item.InputTokens, &item.OutputTokens, &item.CacheCreationTokens, &item.CacheReadTokens, &item.ReasoningTokens, &item.RecordedCostUSD, &avgDuration, &avgTTFT, &avgTPS); err != nil {
+		if err := rows.Scan(&item.Bucket, &item.Label, &item.Events, &item.KnownRequestCount, &item.RequestCountKnownEvents, &item.RequestCountUnknownEvents, &item.TotalTokens, &item.InputTokens, &item.OutputTokens, &item.CacheCreationTokens, &item.CacheReadTokens, &item.ReasoningTokens, &item.RecordedCostUSD, &avgDuration, &avgTTFT, &avgTPS); err != nil {
 			return nil, err
 		}
 		item.AvgTotalDurationMs = nullableFloat(avgDuration)

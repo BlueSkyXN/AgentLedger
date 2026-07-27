@@ -17,7 +17,7 @@ var (
 
 var compactRawCmd = &cobra.Command{
 	Use:   "compact-raw",
-	Short: "Compact stored raw usage into minimal usage evidence",
+	Short: "Remove stored raw usage evidence from the statistics database",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return executeCompactRaw(compactRawDryRun, compactRawApply, cmd.OutOrStdout())
@@ -25,8 +25,8 @@ var compactRawCmd = &cobra.Command{
 }
 
 func init() {
-	compactRawCmd.Flags().BoolVar(&compactRawDryRun, "dry-run", false, "inspect compactable evidence without writing")
-	compactRawCmd.Flags().BoolVar(&compactRawApply, "apply", false, "compact recognized evidence in resumable batches")
+	compactRawCmd.Flags().BoolVar(&compactRawDryRun, "dry-run", false, "inspect stored raw evidence without writing")
+	compactRawCmd.Flags().BoolVar(&compactRawApply, "apply", false, "clear stored raw evidence in resumable batches")
 }
 
 func executeCompactRaw(dryRun, apply bool, out io.Writer) error {
@@ -62,7 +62,7 @@ func executeCompactRaw(dryRun, apply bool, out io.Writer) error {
 
 	if dryRun {
 		stats, err := database.InspectRawEvidence()
-		printRawEvidenceStats(out, "Raw evidence compaction dry-run", stats, false)
+		printRawEvidenceStats(out, "Raw evidence removal dry-run", stats, false)
 		if err != nil {
 			return fmt.Errorf("inspect raw usage evidence: %w", err)
 		}
@@ -70,9 +70,9 @@ func executeCompactRaw(dryRun, apply bool, out io.Writer) error {
 	}
 
 	stats, err := database.CompactRawEvidence()
-	printRawEvidenceStats(out, "Raw evidence compaction apply", stats, true)
+	printRawEvidenceStats(out, "Raw evidence removal apply", stats, true)
 	if err != nil {
-		return fmt.Errorf("compact raw usage evidence: %w", err)
+		return fmt.Errorf("remove raw usage evidence: %w", err)
 	}
 	return nil
 }
@@ -81,15 +81,12 @@ func printRawEvidenceStats(out io.Writer, title string, stats db.RawEvidenceStat
 	reduction := stats.RawBytesBefore - stats.RawBytesAfter
 	fmt.Fprintf(out, "%s:\n", title)
 	fmt.Fprintf(out, "  Candidates:          %d\n", stats.Candidates)
-	fmt.Fprintf(out, "  Already compact:     %d\n", stats.AlreadyCompacted)
-	fmt.Fprintf(out, "  Empty:               %d\n", stats.Empty)
-	fmt.Fprintf(out, "  Unknown preserved:   %d\n", stats.UnknownPreserved)
-	fmt.Fprintf(out, "  Identity protected:  %d\n", stats.IdentityProtected)
+	fmt.Fprintf(out, "  Already NULL:        %d\n", stats.AlreadyNull)
 	fmt.Fprintf(out, "  Logical bytes before: %d\n", stats.RawBytesBefore)
 	fmt.Fprintf(out, "  Logical bytes after:  %d\n", stats.RawBytesAfter)
 	fmt.Fprintf(out, "  Logical byte change:  %d\n", reduction)
 	if applied {
-		fmt.Fprintf(out, "  Rows updated:         %d\n", stats.Updated)
+		fmt.Fprintf(out, "  Rows cleared:         %d\n", stats.Updated)
 		fmt.Fprintf(out, "  Batches completed:    %d\n", stats.BatchesCompleted)
 		fmt.Fprintf(out, "  Remaining candidates: %d\n", stats.RemainingCandidates)
 	}

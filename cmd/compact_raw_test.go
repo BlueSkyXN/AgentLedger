@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"database/sql"
 	"io"
 	"path/filepath"
 	"strings"
@@ -10,7 +11,6 @@ import (
 	"github.com/BlueSkyXN/AgentLedger/internal/config"
 	"github.com/BlueSkyXN/AgentLedger/internal/db"
 	"github.com/BlueSkyXN/AgentLedger/internal/model"
-	"github.com/BlueSkyXN/AgentLedger/internal/usageevidence"
 )
 
 func TestCompactRawRequiresExactlyOneAction(t *testing.T) {
@@ -61,6 +61,10 @@ func TestCompactRawDryRunApplyAndIdempotentRerun(t *testing.T) {
 		_ = database.Close()
 		t.Fatalf("insert event: %v", err)
 	}
+	if _, err := database.Conn().Exec(`UPDATE usage_events SET raw_usage_json = ? WHERE event_id = 'event-1'`, legacyRaw); err != nil {
+		_ = database.Close()
+		t.Fatalf("seed legacy raw evidence: %v", err)
+	}
 	if err := database.Close(); err != nil {
 		t.Fatalf("close database: %v", err)
 	}
@@ -72,43 +76,42 @@ func TestCompactRawDryRunApplyAndIdempotentRerun(t *testing.T) {
 	if !strings.Contains(dryRunOutput.String(), "Candidates:          1") {
 		t.Fatalf("unexpected dry-run output: %s", dryRunOutput.String())
 	}
-	if got := readRawEvidenceForTest(t, cfg.DBPath()); got != legacyRaw {
-		t.Fatalf("dry-run changed raw evidence: %q", got)
+	if got := readRawEvidenceForTest(t, cfg.DBPath()); !got.Valid || got.String != legacyRaw {
+		t.Fatalf("dry-run changed raw evidence: %#v", got)
 	}
 
 	var applyOutput bytes.Buffer
 	if err := executeCompactRaw(false, true, &applyOutput); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
-	for _, want := range []string{"Rows updated:         1", "Remaining candidates: 0"} {
+	for _, want := range []string{"Rows cleared:         1", "Remaining candidates: 0"} {
 		if !strings.Contains(applyOutput.String(), want) {
 			t.Fatalf("apply output missing %q: %s", want, applyOutput.String())
 		}
 	}
-	compact := readRawEvidenceForTest(t, cfg.DBPath())
-	if !usageevidence.IsCompact("claude", compact) || strings.Contains(compact, "private") || strings.Contains(compact, "session-private") {
-		t.Fatalf("unexpected compact evidence: %s", compact)
+	if raw := readRawEvidenceForTest(t, cfg.DBPath()); raw.Valid {
+		t.Fatalf("expected raw evidence to be NULL, got %q", raw.String)
 	}
 
 	var rerunOutput bytes.Buffer
 	if err := executeCompactRaw(false, true, &rerunOutput); err != nil {
 		t.Fatalf("idempotent rerun: %v", err)
 	}
-	for _, want := range []string{"Candidates:          0", "Rows updated:         0"} {
+	for _, want := range []string{"Candidates:          0", "Rows cleared:         0"} {
 		if !strings.Contains(rerunOutput.String(), want) {
 			t.Fatalf("rerun output missing %q: %s", want, rerunOutput.String())
 		}
 	}
 }
 
-func readRawEvidenceForTest(t *testing.T, path string) string {
+func readRawEvidenceForTest(t *testing.T, path string) sql.NullString {
 	t.Helper()
 	database, err := db.OpenReadOnlyV2(path)
 	if err != nil {
 		t.Fatalf("open read-only database: %v", err)
 	}
 	defer database.Close()
-	var raw string
+	var raw sql.NullString
 	if err := database.Conn().QueryRow(`SELECT raw_usage_json FROM usage_events WHERE event_id = 'event-1'`).Scan(&raw); err != nil {
 		t.Fatalf("read raw evidence: %v", err)
 	}

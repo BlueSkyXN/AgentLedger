@@ -9,7 +9,7 @@ AgentLedger 是 local-first CLI，不主动联网。主要风险来自本机日�
 - agent 名称、模型名、provider、时间戳和 token 统计。
 - session / request / message 标识。
 - `usage_events.source_file`、`line_number`、`project_path` 等来源定位信息。
-- `raw_usage_json` 中版本化、allowlisted 的最小用量证据；旧库迁移前可能仍含 legacy full raw。
+- `raw_usage_json` 是历史兼容列；statistics-only 新写入保持 `NULL`，旧库迁移前可能仍含 legacy 或 compact raw。
 
 这些内容足以反映本机 AI Coding Agent 使用痕迹。公开 issue、PR、截图和示例文档中不要粘贴真实数据库内容、真实 session 标识、私有路径或 raw JSON。
 
@@ -21,7 +21,7 @@ AgentLedger 是 local-first CLI，不主动联网。主要风险来自本机日�
 
 - 默认 `redact_paths_on_export = true` 时，`export` 会在导出副本中清空 `project_path`、`source_file` 和 `raw_usage_json`。
 - 如果关闭 `redact_paths_on_export`，`export` 会生成未脱敏 SQLite 副本。
-- `privacy.mode = "envelope"` 是当前唯一支持的写入策略；`full`、`none` 和其它值会被写入命令拒绝。
+- `privacy.mode = "statistics"` 是 canonical 写入策略；旧值 `envelope` 是行为相同的 deprecated compatibility alias。`full`、`none`、空值和其它值会被写入命令拒绝。
 - 没有加密 raw archive。
 
 对外分享前，仍应按私有数据处理；导出副本仍包含 agent、模型、时间、session 和 token 聚合等使用痕迹。
@@ -73,7 +73,7 @@ agent-ledger compact-raw --dry-run
 agent-ledger compact-raw --apply
 ```
 
-`--dry-run` 使用严格只读 v2 连接，只输出聚合状态和预计逻辑字节变化。`--apply` 使用严格 `mode=rw` v2 连接，启用 connection-local `secure_delete=ON`，按 `rowid` 分批把可识别的 Claude/Codex legacy raw 收敛为版本化 usage evidence。每批最多 1000 行并独立提交；unknown、invalid、`raw_hash` 和 `fallback` 行保留。更新只修改 `raw_usage_json`，可中断后幂等重跑，不自动执行 `VACUUM`。
+`--dry-run` 使用严格只读 v2 连接，只输出所有非 `NULL` raw 的行数和预计逻辑字节变化。`--apply` 使用严格 `mode=rw` v2 连接，启用 connection-local `secure_delete=ON`，按 `rowid` 分批把所有 channel、格式和 dedupe strategy 的历史 `raw_usage_json` 写为 `NULL`。每批最多 1000 行并独立提交；更新只修改 `raw_usage_json`，可中断后幂等重跑，不自动执行 `VACUUM`。
 
 迁移旧库前应先创建 SQLite 一致性备份，并在 apply 前后验证全部非 raw 列、关键聚合和 `PRAGMA integrity_check` 不变。物理空间只有在正确性验证后显式运行 `vacuum` 才会回收。
 
@@ -103,7 +103,7 @@ agent-ledger serve
 ## 安全默认值
 
 - 默认只读扫描源日志并写入 AgentLedger 自己的 SQLite 数据库。
-- Claude/Codex 解析仍在内存中读取完整 source object 以计算 usage、hash 和 fingerprint fallback，但只持久化 compact evidence；完整重放依赖原始 JSONL。
+- 所有 adapter 只在内存中读取完整 source object 以计算 usage、hash 和 fingerprint fallback；SQLite 只持久化结构化统计事实，完整重放依赖原始 agent JSON/JSONL。
 - 导入会对 grace period 内的近期文件做稳定性检查；仍在变化的文件会跳过。
 - merge 会检查输入文件存在、不是目录、并具有 SQLite header。
 - monthly report 的 `--by` 使用 allowlist，避免把任意用户输入拼入 SQL label expression。

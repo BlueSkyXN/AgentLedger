@@ -123,9 +123,10 @@ _foreign_keys=ON
 | `project_path` | `TEXT` | nullable | adapter 能解析到的项目路径；报表/API 会从它派生项目标签用于按项目筛选和聚合，不代表客户端产品。 |
 | `message_id` | `TEXT` | nullable | 日志中的 message id。 |
 | `request_id` | `TEXT` | nullable | 日志中的 request id。 |
+| `request_count` | `INTEGER` | nullable; `CHECK (request_count >= 0)` | 来源明确给出的模型 API 请求次数。`NULL` 表示来源未知或当前 adapter 未提供该口径；`0` 只表示来源显式记录为零，不能把 `NULL` 当作零。 |
 | `source_file` | `TEXT` | nullable | 来源文件路径。 |
 | `line_number` | `INTEGER` | nullable | JSONL 行号。 |
-| `raw_sha256` | `TEXT` | nullable | adapter 完整源解析对象的 canonical JSON hash；不等于 compact evidence 的 hash。 |
+| `raw_sha256` | `TEXT` | nullable | adapter 完整源解析对象的 canonical JSON hash；源对象本身不落库。 |
 | `input_tokens` | `INTEGER` | `NOT NULL DEFAULT 0` | 非缓存输入 token；source 把 cached input 包含在 input 内时，adapter 入库前会拆分。 |
 | `output_tokens` | `INTEGER` | `NOT NULL DEFAULT 0` | 输出 token。 |
 | `reasoning_tokens` | `INTEGER` | `NOT NULL DEFAULT 0` | reasoning token。 |
@@ -140,7 +141,7 @@ _foreign_keys=ON
 | `output_duration_ms` | `INTEGER` | nullable | 从首 token 到完成的输出耗时。 |
 | `output_tps` | `REAL` | nullable | 输出 TPS。 |
 | `recorded_cost_usd` | `REAL` | nullable | 来源明确给出的 USD cost；v2 不计算价格，Copilot `requests.cost` 不写入此列。 |
-| `raw_usage_json` | `TEXT` | nullable | allowlisted compact usage evidence。Claude/Codex 使用 `agentledger.*-usage.v1`；无法安全收敛的新 import 会写 `NULL`，旧库 unknown 在显式迁移中保留。 |
+| `raw_usage_json` | `TEXT` | nullable | 历史兼容列。statistics-only 写入契约要求所有新 import/merge 保持 `NULL`；维护命令可清除旧库遗留 raw。 |
 | `imported_at_ms` | `INTEGER` | `NOT NULL` | 首次导入时间。 |
 | `updated_at_ms` | `INTEGER` | `NOT NULL` | 最近更新时间。 |
 
@@ -165,11 +166,21 @@ output_tps = output_tokens / (output_duration_ms / 1000.0)
 - `output_tps` 要求 `output_duration_ms > 0`。
 - 缺失 timing 时对应列保持 `NULL`。
 
+### 事件、请求与 session 的计数口径
+
+这三个计数不能互相替代：
+
+- `event_count`：符合筛选条件的 `usage_events` 行数，用于表示已导入的 usage event 数量。
+- `request_count`：`request_count` 非 `NULL` 的 event 的值之和，用于表示来源明确提供的模型 API 请求次数；它不等同于 event 行数。
+- `session_count`：符合筛选条件的非空 `session_id` 去重数，用于表示可识别 session 数量。
+
+请求计数同时披露 event coverage：`request_count_known_events` 是 `request_count IS NOT NULL` 的 event 数，`request_count_unknown_events` 是 `request_count IS NULL` 的 event 数。这样可以区分“已知请求数为零”和“来源没有提供请求数”，不会以 event 行数或 session 数补齐未知请求数。
+
 ## Upsert 完整度规则
 
 `import` 不再使用 `INSERT OR IGNORE`。重复事件会按完整度决定是否覆盖旧记录；对于 Codex，如果 parser 或 fingerprint 规则修正导致 `event_id` 改变，但 `source_file + line_number + raw_sha256` 仍指向同一原始 JSONL 行，upsert 会把当前 `event_id` 精确匹配行和同来源历史 sibling 放进同一个候选集合。存在 exact match 时，还会把 session、timestamp、line、raw hash 和 channel 都一致的脱敏行加入候选；无论 legacy/corrected sibling 全部来自默认脱敏导出，还是 legacy 脱敏行后 merge 到已有本地 canonical row，都能在真实本地来源再次 import 时收敛。
 
-收敛时，incoming candidate 和候选集合共同选择最完整的 token、timing、cost 用量 winner。删除 sibling 前，只从 token 六分项相同、并包含 winner 已有 accounting 字段相同值的单一最佳 donor 补齐 `source_total_tokens`、`raw_input_tokens`、`token_accounting_method` 和 `accounting_profile`，避免跨冲突 profile 或 method 拼出来源中不存在的 bundle。`session_path_id`、`turn_id`、`project_path` 等 source metadata 不使用 usage score 决定冲突赢家：最早历史候选提供稳定基准，其余候选只做 missing、已知纠正和路径具体度升级。provider/model classification 采用独立的可信度顺序：当前 Codex parser 明确解析出的 `openai` provider 和非 fallback model 可以修正历史值，并同步保存 `model_resolution`；stored `openai` 和 explicit model 优先于新的 fallback/`unknown`。唯一例外是旧 parser 硬编码生成且仍带 `model_is_fallback = true` 的 `gpt-5` 占位符：当前同来源行重新解析为 `unknown` fallback 时允许替换该旧占位符。最终记录使用可信 classification、当前 identity、本地 source 和 compact evidence；合法 compact Codex evidence 不会被 full raw 恢复。已有 `raw_hash` / `fallback` 事件在 reconciliation 中保留其 ID 与 dedupe strategy，不从 compact evidence 重算 identity。
+收敛时，incoming candidate 和候选集合共同选择最完整的 token、timing、cost 用量 winner。删除 sibling 前，只从 token 六分项相同、并包含 winner 已有 accounting 字段相同值的单一最佳 donor 补齐 `source_total_tokens`、`raw_input_tokens`、`token_accounting_method` 和 `accounting_profile`，避免跨冲突 profile 或 method 拼出来源中不存在的 bundle。`session_path_id`、`turn_id`、`project_path` 等 source metadata 不使用 usage score 决定冲突赢家：最早历史候选提供稳定基准，其余候选只做 missing、已知纠正和路径具体度升级。provider/model classification 采用独立的可信度顺序：当前 Codex parser 明确解析出的 `openai` provider 和非 fallback model 可以修正历史值，并同步保存 `model_resolution`；stored `openai` 和 explicit model 优先于新的 fallback/`unknown`。唯一例外是旧 parser 硬编码生成且仍带 `model_is_fallback = true` 的 `gpt-5` 占位符：当前同来源行重新解析为 `unknown` fallback 时允许替换该旧占位符。最终记录使用可信 classification、当前 identity、本地 source 和结构化统计事实，`raw_usage_json` 始终为 `NULL`。已有或 incoming `raw_hash` / `fallback` 事件保留其已计算 ID 与 dedupe strategy，不依赖持久化 raw 重算 identity。
 
 优先级：
 
@@ -211,5 +222,5 @@ output_tps = output_tokens / (output_duration_ms / 1000.0)
 | `serve` | 无 | `meta`、`import_runs`、`usage_events` | 通过只读连接提供 API 和 Web 面板。 |
 | `doctor` | 无 | config 与 source paths | 使用内存默认值或现有配置扫描 source paths；配置缺失时不创建本地状态。 |
 | `verify` | 无 | 现有 SQLite 数据库 | 通过基础只读连接执行 `PRAGMA integrity_check`，不要求当前 AgentLedger v2 schema。 |
-| `compact-raw` | `usage_events.raw_usage_json`（仅 `--apply`） | `usage_events` | dry-run 零写入；apply 分批收敛 recognized legacy evidence，unknown 与 identity-protected 行保留。 |
+| `compact-raw` | `usage_events.raw_usage_json`（仅 `--apply`） | `usage_events` | dry-run 零写入；apply 分批把所有历史非 `NULL` raw 清除，不区分 channel、格式或 identity strategy。 |
 | `vacuum` | SQLite 内部重写 | 当前 SQLite 数据库 | 执行 `VACUUM`。 |

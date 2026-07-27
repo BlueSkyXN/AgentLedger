@@ -20,7 +20,7 @@ agent-ledger [command]
 | `status` | 已实现 | 输出数据库统计。 |
 | `doctor` | 已实现 | 输出配置、数据库和源文件发现诊断。 |
 | `verify` | 已实现 | 运行 SQLite integrity check。 |
-| `compact-raw` | 已实现 | 显式 dry-run 或 apply，将旧 raw 收敛为最小用量证据。 |
+| `compact-raw` | 已实现 | 显式 dry-run 或 apply，将历史 raw evidence 清为 `NULL`。 |
 | `vacuum` | 已实现 | 运行 SQLite vacuum。 |
 | `serve` | 已实现 | 启动本机只读 Web 面板和 `/api/v1/*` JSON API。 |
 | `completion` | 已实现 | Cobra 自动生成的 shell completion 命令。 |
@@ -183,7 +183,7 @@ agent-ledger compact-raw --dry-run
 agent-ledger compact-raw --apply
 ```
 
-必须且只能指定一个 action。`--dry-run` 通过严格只读 v2 连接统计 candidate、already compact、empty、unknown preserved、identity protected 和预计逻辑字节变化，零数据库写入。`--apply` 通过严格 `mode=rw` v2 连接启用 connection-local `secure_delete=ON`，按 `rowid` 每批最多 1000 行原子更新，并用 `event_id + 原 raw_usage_json` 防止并发覆盖。它只修改 `raw_usage_json`，unknown、`raw_hash` 和 `fallback` 行保持不变；命令可中断后重跑，且不会自动运行 `VACUUM`。
+必须且只能指定一个 action。`--dry-run` 通过严格只读 v2 连接统计所有非 `NULL` raw candidate、已经为 `NULL` 的行数和精确 BLOB 字节变化，零数据库写入。`--apply` 通过严格 `mode=rw` v2 连接启用 connection-local `secure_delete=ON`，按 `rowid` 每批最多 1000 行原子更新，并用 `event_id + 原 raw_usage_json` 防止并发覆盖。它把所有 channel、格式和 dedupe strategy 的历史 `raw_usage_json` 统一写为 `NULL`；命令可中断后重跑，且不会自动运行 `VACUUM`。
 
 ## `vacuum`
 

@@ -73,12 +73,17 @@ func TestLoadReadOnlyBackfillsWorkBuddyDefaults(t *testing.T) {
 }
 
 func TestValidateUsageEvidenceWritePolicy(t *testing.T) {
+	if got := Default().Privacy.Mode; got != PrivacyModeStatistics {
+		t.Fatalf("default privacy mode = %q, want %q", got, PrivacyModeStatistics)
+	}
+
 	tests := []struct {
 		name    string
 		mode    string
 		wantErr bool
 	}{
-		{name: "envelope", mode: PrivacyModeEnvelope},
+		{name: "statistics", mode: PrivacyModeStatistics},
+		{name: "legacy envelope alias", mode: PrivacyModeEnvelope},
 		{name: "full", mode: "full", wantErr: true},
 		{name: "none", mode: "none", wantErr: true},
 		{name: "empty", mode: "", wantErr: true},

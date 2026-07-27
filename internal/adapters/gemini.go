@@ -110,17 +110,17 @@ func parseGeminiObject(obj map[string]interface{}, path string, lineNum int) *fi
 	rawHash := sha256Hex(rawJSON)
 
 	return &fingerprint.ParsedRecord{
-		Agent:        "gemini",
-		Provider:     "google",
-		Model:        getString(obj, "model"),
-		TimestampMs:  parseTimestamp(obj["timestamp"]),
-		SessionID:    getString(obj, "session_id"),
-		InputTokens:  getInt64(usage, "promptTokenCount"),
-		OutputTokens: getInt64(usage, "candidatesTokenCount"),
-		TotalTokens:  getInt64(usage, "totalTokenCount"),
-		RawJSON:      string(rawJSON),
-		SourceFile:   path,
-		LineNumber:   lineNum,
-		RawSHA256:    rawHash,
+		Agent:           "gemini",
+		Provider:        "google",
+		Model:           getString(obj, "model"),
+		TimestampMs:     parseTimestamp(obj["timestamp"]),
+		SessionID:       getString(obj, "session_id"),
+		InputTokens:     getInt64(usage, "promptTokenCount"),
+		OutputTokens:    getInt64(usage, "candidatesTokenCount"),
+		TotalTokens:     getInt64(usage, "totalTokenCount"),
+		FingerprintJSON: string(rawJSON),
+		SourceFile:      path,
+		LineNumber:      lineNum,
+		RawSHA256:       rawHash,
 	}
 }

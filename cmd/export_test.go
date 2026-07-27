@@ -17,10 +17,10 @@ func TestExportDatabaseRedactsPrivateFields(t *testing.T) {
 		t.Fatalf("open source: %v", err)
 	}
 	_, err = database.Conn().Exec(`INSERT INTO usage_events (
-		event_id, dedupe_key, dedupe_strategy, channel, timestamp_ms, session_id, project_path, source_file, raw_usage_json,
+		event_id, dedupe_key, dedupe_strategy, channel, timestamp_ms, session_id, project_path, source_file, raw_usage_json, request_count,
 		input_tokens, output_tokens, total_tokens, imported_at_ms, updated_at_ms
 	) VALUES (
-		'event-1', 'event-1', 'message_id', 'codex', 1, 'session-1', '/Users/alice/project', '/Users/alice/.codex/log.jsonl', '{"path":"/Users/alice/project"}',
+		'event-1', 'event-1', 'message_id', 'codex', 1, 'session-1', '/Users/alice/project', '/Users/alice/.codex/log.jsonl', '{"path":"/Users/alice/project"}', 7,
 		10, 5, 15, 1, 1
 	)`)
 	if err != nil {
@@ -48,13 +48,13 @@ func TestExportDatabaseRedactsPrivateFields(t *testing.T) {
 	defer conn.Close()
 
 	var session string
-	var total int64
+	var total, requestCount int64
 	var projectPath, sourceFile, rawUsage sql.NullString
-	if err := conn.QueryRow(`SELECT session_id, total_tokens, project_path, source_file, raw_usage_json FROM usage_events WHERE event_id='event-1'`).Scan(&session, &total, &projectPath, &sourceFile, &rawUsage); err != nil {
+	if err := conn.QueryRow(`SELECT session_id, total_tokens, request_count, project_path, source_file, raw_usage_json FROM usage_events WHERE event_id='event-1'`).Scan(&session, &total, &requestCount, &projectPath, &sourceFile, &rawUsage); err != nil {
 		t.Fatalf("select export: %v", err)
 	}
-	if session != "session-1" || total != 15 {
-		t.Fatalf("redacted export changed analytics fields session=%q total=%d", session, total)
+	if session != "session-1" || total != 15 || requestCount != 7 {
+		t.Fatalf("redacted export changed analytics fields session=%q total=%d requests=%d", session, total, requestCount)
 	}
 	if projectPath.Valid || sourceFile.Valid || rawUsage.Valid {
 		t.Fatalf("expected private fields to be redacted, project=%v source=%v raw=%v", projectPath, sourceFile, rawUsage)

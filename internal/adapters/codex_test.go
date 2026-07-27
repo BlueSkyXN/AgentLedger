@@ -1,7 +1,6 @@
 package adapters
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -420,7 +419,7 @@ func TestCodexHeadlessUsage(t *testing.T) {
 	}
 }
 
-func TestCodexAdapterCompactsEvidenceAfterAccounting(t *testing.T) {
+func TestCodexAdapterUsesFullSourceOnlyForFingerprint(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "codex.jsonl")
 	data := `{"type":"event_msg","timestamp":"2026-01-01T00:00:00Z","session_id":"A","context":"secret context","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":10}},"info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":25,"output_tokens":50,"reasoning_output_tokens":10,"total_tokens":160},"last_token_usage":{"input_tokens":100,"cached_input_tokens":25,"output_tokens":50,"reasoning_output_tokens":10,"total_tokens":160}}}}`
 	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
@@ -438,18 +437,11 @@ func TestCodexAdapterCompactsEvidenceAfterAccounting(t *testing.T) {
 	if rec.InputTokens != 75 || rec.CacheReadTokens != 25 || rec.OutputTokens != 50 || rec.ReasoningTokens != 10 || rec.TotalTokens != 160 {
 		t.Fatalf("Codex accounting changed: %#v", rec)
 	}
-	if rec.EvidenceOmitted || rec.EvidenceWarning != "" || rec.FingerprintJSON == "" || rec.RawSHA256 != sha256Hex([]byte(rec.FingerprintJSON)) {
-		t.Fatalf("evidence state invalid: %#v", rec)
+	if rec.FingerprintJSON == "" || rec.RawSHA256 != sha256Hex([]byte(rec.FingerprintJSON)) {
+		t.Fatalf("fingerprint source state invalid: %#v", rec)
 	}
-	if strings.Contains(rec.RawJSON, "secret") || strings.Contains(rec.RawJSON, "rate_limits") || strings.Contains(rec.RawJSON, "timestamp") {
-		t.Fatalf("compact evidence leaked source data: %s", rec.RawJSON)
-	}
-	var evidence map[string]interface{}
-	if err := json.Unmarshal([]byte(rec.RawJSON), &evidence); err != nil {
-		t.Fatalf("decode compact evidence: %v", err)
-	}
-	if evidence["schema"] != "agentledger.codex-usage.v1" || evidence["source_variant"] != "token_count" || evidence["total_token_usage"] == nil || evidence["last_token_usage"] == nil {
-		t.Fatalf("unexpected compact Codex evidence: %#v", evidence)
+	if !strings.Contains(rec.FingerprintJSON, "secret context") || !strings.Contains(rec.FingerprintJSON, "rate_limits") {
+		t.Fatalf("full source must remain available for fingerprinting: %s", rec.FingerprintJSON)
 	}
 }
 

@@ -22,13 +22,7 @@ type Database struct {
 func init() {
 	sql.Register(sqliteDriverName, &sqlite3.SQLiteDriver{
 		ConnectHook: func(conn *sqlite3.SQLiteConn) error {
-			if err := conn.RegisterFunc("agentledger_project_label", projectLabel, true); err != nil {
-				return err
-			}
-			if err := conn.RegisterFunc("agentledger_compact_raw_evidence", sqliteCompactEvidence, true); err != nil {
-				return err
-			}
-			return conn.RegisterFunc("agentledger_raw_evidence_status", sqliteEvidenceStatus, true)
+			return conn.RegisterFunc("agentledger_project_label", projectLabel, true)
 		},
 	})
 }

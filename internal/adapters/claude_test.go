@@ -1,7 +1,6 @@
 package adapters
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -90,9 +89,6 @@ func TestClaudeAdapterFallbacksToUUIDWhenMessageIDMissing(t *testing.T) {
 	}
 	if records[0].MessageID != "uuid-only" || records[0].DedupeID != "uuid-only" {
 		t.Fatalf("expected uuid fallback, message=%q dedupe=%q", records[0].MessageID, records[0].DedupeID)
-	}
-	if compactEvidenceString(t, records[0].RawJSON, "message_id_source") != "uuid_fallback" {
-		t.Fatalf("uuid fallback evidence missing: %s", records[0].RawJSON)
 	}
 }
 
@@ -187,12 +183,9 @@ func TestClaudeAdapterSidechainReplayPrefersNonSidechain(t *testing.T) {
 	if records[0].RequestID != "req-main" || records[0].IsSidechain {
 		t.Fatalf("expected non-sidechain record to win, request=%q sidechain=%v", records[0].RequestID, records[0].IsSidechain)
 	}
-	if compactEvidenceBool(t, records[0].RawJSON, "is_sidechain") {
-		t.Fatalf("winner evidence should preserve non-sidechain selection: %s", records[0].RawJSON)
-	}
 }
 
-func TestClaudeAdapterCompactsRawEvidenceAfterFullParsing(t *testing.T) {
+func TestClaudeAdapterUsesFullSourceOnlyForFingerprint(t *testing.T) {
 	path := writeClaudeUsageFile(t,
 		`{"type":"assistant","uuid":"uuid-compact","timestamp":"2026-01-02T03:04:05Z","cwd":"/private/project","content":"secret message body","thinking":"secret reasoning","isSidechain":true,"costUSD":1.25,"message":{"id":"msg-compact","model":"claude-sonnet","usage":{"input_tokens":10,"output_tokens":5,"speed":"fast"}}}`,
 	)
@@ -208,18 +201,15 @@ func TestClaudeAdapterCompactsRawEvidenceAfterFullParsing(t *testing.T) {
 	if rec.Model != "claude-sonnet-fast" || rec.InputTokens != 10 || rec.OutputTokens != 5 || !rec.IsSidechain || rec.CostUSD == nil || *rec.CostUSD != 1.25 {
 		t.Fatalf("structured Claude parsing changed: %#v", rec)
 	}
-	if rec.EvidenceOmitted || rec.EvidenceWarning != "" || rec.FingerprintJSON == "" || rec.RawSHA256 != sha256Hex([]byte(rec.FingerprintJSON)) {
-		t.Fatalf("evidence state invalid: %#v", rec)
+	if rec.FingerprintJSON == "" || rec.RawSHA256 != sha256Hex([]byte(rec.FingerprintJSON)) {
+		t.Fatalf("fingerprint source state invalid: %#v", rec)
 	}
-	if strings.Contains(rec.RawJSON, "secret") || strings.Contains(rec.RawJSON, "/private") || strings.Contains(rec.RawJSON, "thinking") || strings.Contains(rec.RawJSON, "cwd") {
-		t.Fatalf("compact evidence leaked private source data: %s", rec.RawJSON)
-	}
-	if !strings.Contains(rec.FingerprintJSON, "secret message body") || compactEvidenceString(t, rec.RawJSON, "schema") != "agentledger.claude-usage.v1" || compactEvidenceString(t, rec.RawJSON, "source_variant") != "assistant_message" || !compactEvidenceBool(t, rec.RawJSON, "is_sidechain") {
-		t.Fatalf("unexpected compact/full evidence split: compact=%s full=%s", rec.RawJSON, rec.FingerprintJSON)
+	if !strings.Contains(rec.FingerprintJSON, "secret message body") || !strings.Contains(rec.FingerprintJSON, "/private/project") {
+		t.Fatalf("full source must remain available for fingerprinting: %s", rec.FingerprintJSON)
 	}
 }
 
-func TestClaudeAdapterCompactsWrappedEvidence(t *testing.T) {
+func TestClaudeAdapterUsesWrappedSourceForFingerprint(t *testing.T) {
 	path := writeClaudeUsageFile(t,
 		`{"data":{"message":{"timestamp":"2026-01-02T03:04:05Z","requestId":"req-wrapped","isSidechain":true,"content":"secret wrapper","message":{"id":"msg-wrapped","model":"claude-sonnet","usage":{"input_tokens":10,"output_tokens":5}}}}}`,
 	)
@@ -227,12 +217,12 @@ func TestClaudeAdapterCompactsWrappedEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if len(records) != 1 || compactEvidenceString(t, records[0].RawJSON, "source_variant") != "agent_progress_wrapped" || strings.Contains(records[0].RawJSON, "secret") {
-		t.Fatalf("wrapped compact evidence invalid: %#v", records)
+	if len(records) != 1 || !strings.Contains(records[0].FingerprintJSON, "secret wrapper") {
+		t.Fatalf("wrapped fingerprint source invalid: %#v", records)
 	}
 }
 
-func TestClaudeAdapterSignalsOmittedEvidenceWhenIdentityIsMissing(t *testing.T) {
+func TestClaudeAdapterKeepsFingerprintSourceWhenIdentityIsMissing(t *testing.T) {
 	path := writeClaudeUsageFile(t,
 		`{"timestamp":"2026-01-02T03:04:05Z","message":{"model":"claude-sonnet","usage":{"input_tokens":10,"output_tokens":5}}}`,
 	)
@@ -244,29 +234,9 @@ func TestClaudeAdapterSignalsOmittedEvidenceWhenIdentityIsMissing(t *testing.T) 
 		t.Fatalf("expected one record, got %d", len(records))
 	}
 	rec := records[0]
-	if !rec.EvidenceOmitted || rec.RawJSON != "" || rec.EvidenceWarning != "claude usage evidence omitted: unknown" || rec.FingerprintJSON == "" {
-		t.Fatalf("missing-identity evidence signal invalid: %#v", rec)
+	if rec.FingerprintJSON == "" || rec.RawSHA256 != sha256Hex([]byte(rec.FingerprintJSON)) {
+		t.Fatalf("missing-identity fingerprint source invalid: %#v", rec)
 	}
-}
-
-func compactEvidenceString(t *testing.T, raw, key string) string {
-	t.Helper()
-	var evidence map[string]interface{}
-	if err := json.Unmarshal([]byte(raw), &evidence); err != nil {
-		t.Fatalf("decode compact evidence: %v", err)
-	}
-	value, _ := evidence[key].(string)
-	return value
-}
-
-func compactEvidenceBool(t *testing.T, raw, key string) bool {
-	t.Helper()
-	var evidence map[string]interface{}
-	if err := json.Unmarshal([]byte(raw), &evidence); err != nil {
-		t.Fatalf("decode compact evidence: %v", err)
-	}
-	value, _ := evidence[key].(bool)
-	return value
 }
 
 func TestClaudeDiscoverPathsExpandLegacyRootToProjectsAndXDG(t *testing.T) {

@@ -36,6 +36,9 @@ export type PricingCoverage = {
 
 export type Summary = {
   total_events: number;
+  known_request_count: number;
+  request_count_known_events: number;
+  request_count_unknown_events: number;
   import_runs: number;
   total_tokens: number;
   input_tokens: number;
@@ -57,6 +60,9 @@ export type Summary = {
 export type MetricRow = {
   label: string;
   events: number;
+  known_request_count: number;
+  request_count_known_events: number;
+  request_count_unknown_events: number;
   total_tokens: number;
   input_tokens: number;
   output_tokens: number;
@@ -72,6 +78,10 @@ export type MetricRow = {
   pricing?: PricingCoverage | null;
 };
 
+export type TimeBreakdownRow = MetricRow & {
+  bucket: string;
+};
+
 export type Health = {
   status: string;
   version: string;
@@ -84,6 +94,9 @@ export type Status = {
   database: string;
   schema_version: string;
   total_events: number;
+  known_request_count: number;
+  request_count_known_events: number;
+  request_count_unknown_events: number;
   total_import_runs: number;
   total_tokens: number;
   total_recorded_cost_usd: number;
@@ -122,6 +135,7 @@ export type EventItem = {
   project_path: string | null;
   message_id: string | null;
   request_id: string | null;
+  request_count: number | null;
   input_tokens: number;
   output_tokens: number;
   cache_creation_tokens: number;

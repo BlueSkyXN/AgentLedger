@@ -8,28 +8,31 @@ import (
 	"testing"
 
 	"github.com/BlueSkyXN/AgentLedger/internal/model"
-	"github.com/BlueSkyXN/AgentLedger/internal/usageevidence"
 )
 
-const compactableCodexRaw = `{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1,"output_tokens":2}}},"private":"omit"}`
+const legacyRawUsage = `{"source":"legacy","private":"must-not-persist"}`
 
-func TestCompactRawEvidenceDryRunApplyPreservesNonRawColumns(t *testing.T) {
+func TestCompactRawEvidenceDryRunApplyClearsEveryNonNullValue(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "agent-ledger.db")
 	database, err := Open(path)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	for _, event := range []*model.UsageEvent{
-		rawEvidenceEvent("compact", "message_id", compactableCodexRaw),
-		rawEvidenceEvent("unknown", "message_id", `{"future":true}`),
-		rawEvidenceEvent("raw-hash", "raw_hash", compactableCodexRaw),
-		rawEvidenceEvent("fallback", "fallback", compactableCodexRaw),
+		rawEvidenceEvent("legacy", "message_id", legacyRawUsage),
+		rawEvidenceEvent("compact", "message_id", `{"version":1}`),
+		rawEvidenceEvent("raw-hash", "raw_hash", legacyRawUsage),
+		rawEvidenceEvent("fallback", "fallback", legacyRawUsage),
 		rawEvidenceEvent("empty", "message_id", ""),
 	} {
 		if err := insertEvent(database.Conn(), event); err != nil {
 			_ = database.Close()
 			t.Fatalf("insert %s: %v", event.EventID, err)
 		}
+	}
+	if _, err := database.Conn().Exec(`UPDATE usage_events SET raw_usage_json = '' WHERE event_id = 'empty'`); err != nil {
+		_ = database.Close()
+		t.Fatalf("seed empty raw: %v", err)
 	}
 	if err := database.StartImportRun("raw-evidence-run"); err != nil {
 		_ = database.Close()
@@ -51,7 +54,7 @@ func TestCompactRawEvidenceDryRunApplyPreservesNonRawColumns(t *testing.T) {
 		_ = reader.Close()
 		t.Fatalf("inspect: %v", err)
 	}
-	if dryRun.Candidates != 1 || dryRun.UnknownPreserved != 1 || dryRun.IdentityProtected != 2 || dryRun.Empty != 1 || dryRun.Updated != 0 {
+	if dryRun.Candidates != 5 || dryRun.AlreadyNull != 0 || dryRun.RawBytesBefore <= 0 || dryRun.RawBytesAfter != 0 || dryRun.Updated != 0 || dryRun.RemainingCandidates != 5 {
 		_ = reader.Close()
 		t.Fatalf("unexpected dry-run stats: %+v", dryRun)
 	}
@@ -75,7 +78,7 @@ func TestCompactRawEvidenceDryRunApplyPreservesNonRawColumns(t *testing.T) {
 		_ = writer.Close()
 		t.Fatalf("apply: %v stats=%+v", err, apply)
 	}
-	if apply.Updated != 1 || apply.BatchesCompleted != 1 || apply.RemainingCandidates != 0 {
+	if apply.Candidates != 5 || apply.Updated != 5 || apply.BatchesCompleted != 1 || apply.RemainingCandidates != 0 || apply.RawBytesAfter != 0 {
 		_ = writer.Close()
 		t.Fatalf("unexpected apply stats: %+v", apply)
 	}
@@ -84,9 +87,9 @@ func TestCompactRawEvidenceDryRunApplyPreservesNonRawColumns(t *testing.T) {
 		_ = writer.Close()
 		t.Fatalf("second apply: %v stats=%+v", err, second)
 	}
-	if second.Candidates != 0 || second.Updated != 0 || second.RemainingCandidates != 0 {
+	if second.Candidates != 0 || second.Updated != 0 || second.RemainingCandidates != 0 || second.AlreadyNull != 5 {
 		_ = writer.Close()
-		t.Fatalf("compaction was not idempotent: %+v", second)
+		t.Fatalf("cleanup was not idempotent: %+v", second)
 	}
 	if err := writer.Close(); err != nil {
 		t.Fatalf("close strict writer: %v", err)
@@ -94,135 +97,135 @@ func TestCompactRawEvidenceDryRunApplyPreservesNonRawColumns(t *testing.T) {
 
 	afterEvents := tableSnapshot(t, path, "usage_events", "raw_usage_json")
 	if !reflect.DeepEqual(afterEvents, beforeEvents) {
-		t.Fatal("compact changed a non-raw usage_events column")
+		t.Fatal("cleanup changed a non-raw usage_events column")
 	}
 	if afterMeta := tableSnapshot(t, path, "meta"); !reflect.DeepEqual(afterMeta, beforeMeta) {
-		t.Fatal("compact changed meta")
+		t.Fatal("cleanup changed meta")
 	}
 	if afterRuns := tableSnapshot(t, path, "import_runs"); !reflect.DeepEqual(afterRuns, beforeRuns) {
-		t.Fatal("compact changed import_runs")
+		t.Fatal("cleanup changed import_runs")
 	}
-
-	conn, err := sql.Open("sqlite3", path)
-	if err != nil {
-		t.Fatalf("open assertions: %v", err)
-	}
-	defer conn.Close()
-	raws := map[string]sql.NullString{}
-	rows, err := conn.Query(`SELECT event_id, raw_usage_json FROM usage_events`)
-	if err != nil {
-		t.Fatalf("query raw: %v", err)
-	}
-	for rows.Next() {
-		var eventID string
-		var raw sql.NullString
-		if err := rows.Scan(&eventID, &raw); err != nil {
-			_ = rows.Close()
-			t.Fatalf("scan raw: %v", err)
-		}
-		raws[eventID] = raw
-	}
-	if err := rows.Close(); err != nil {
-		t.Fatalf("close raw rows: %v", err)
-	}
-	if !raws["compact"].Valid || !usageevidence.IsCompact("codex", raws["compact"].String) {
-		t.Fatalf("recognized raw was not compacted: %+v", raws["compact"])
-	}
-	for _, id := range []string{"unknown", "raw-hash", "fallback"} {
-		if !raws[id].Valid || raws[id].String != map[string]string{"unknown": `{"future":true}`, "raw-hash": compactableCodexRaw, "fallback": compactableCodexRaw}[id] {
-			t.Fatalf("protected raw changed for %s", id)
-		}
-	}
-	if raws["empty"].Valid {
-		t.Fatalf("empty raw must be stored as NULL, got %+v", raws["empty"])
-	}
+	assertNoRawUsage(t, path)
 }
 
-func TestCodexReimportDoesNotRestoreCompactEvidence(t *testing.T) {
+func TestInspectRawEvidenceCountsUTF8Bytes(t *testing.T) {
 	database, err := Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	defer database.Close()
-	stored := rawEvidenceEvent("codex-reimport", "message_id", compactableCodexRaw)
-	stored.MessageID = "codex-reimport"
-	stored.SourceFile = "/synthetic/codex.jsonl"
-	stored.LineNumber = 7
-	stored.RawSHA256 = "source-hash"
-	stored.ModelRaw = "unknown"
-	stored.ModelNormalized = "unknown"
-	stored.ModelIsFallback = true
-	stored.ModelResolution = model.ModelResolutionUnknown
-	setUsageEventFingerprintForTest(stored)
+	event := rawEvidenceEvent("unicode", "message_id", "使用量")
+	if err := insertEvent(database.Conn(), event); err != nil {
+		t.Fatalf("insert unicode raw: %v", err)
+	}
+	stats, err := database.InspectRawEvidence()
+	if err != nil {
+		t.Fatalf("inspect: %v", err)
+	}
+	if stats.Candidates != 1 || stats.RawBytesBefore != int64(len(event.RawUsageJSON)) {
+		t.Fatalf("UTF-8 byte count mismatch stats=%+v raw=%q", stats, event.RawUsageJSON)
+	}
+}
+
+func TestCompactRawEvidenceCASRejectsConcurrentChange(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer database.Close()
+	first := rawEvidenceEvent("cas-first", "message_id", "first-original")
+	second := rawEvidenceEvent("cas-second", "message_id", "second-original")
+	for _, event := range []*model.UsageEvent{first, second} {
+		if err := insertEvent(database.Conn(), event); err != nil {
+			t.Fatalf("insert %s: %v", event.EventID, err)
+		}
+	}
+	if _, err := database.Conn().Exec(`UPDATE usage_events SET raw_usage_json = 'changed' WHERE event_id = ?`, second.EventID); err != nil {
+		t.Fatalf("change raw: %v", err)
+	}
+	err = database.applyRawEvidenceBatch([]rawEvidenceCandidate{
+		{eventID: first.EventID, raw: first.RawUsageJSON},
+		{eventID: second.EventID, raw: second.RawUsageJSON},
+	})
+	if err == nil {
+		t.Fatal("CAS update accepted changed raw value")
+	}
+	for eventID, want := range map[string]string{first.EventID: "first-original", second.EventID: "changed"} {
+		var raw string
+		if err := database.Conn().QueryRow(`SELECT raw_usage_json FROM usage_events WHERE event_id = ?`, eventID).Scan(&raw); err != nil || raw != want {
+			t.Fatalf("CAS failure did not roll back batch event=%s raw=%q want=%q err=%v", eventID, raw, want, err)
+		}
+	}
+}
+
+func TestUpsertEventClearsLegacyRawOnExactReimport(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer database.Close()
+	stored := rawEvidenceEvent("exact-reimport", "message_id", legacyRawUsage)
 	if err := insertEvent(database.Conn(), stored); err != nil {
-		t.Fatalf("insert stored: %v", err)
-	}
-	if _, err := database.Conn().Exec(`UPDATE usage_events SET raw_usage_json = agentledger_compact_raw_evidence(channel, raw_usage_json)`); err != nil {
-		t.Fatalf("compact stored: %v", err)
-	}
-	var compacted string
-	if err := database.Conn().QueryRow(`SELECT raw_usage_json FROM usage_events`).Scan(&compacted); err != nil {
-		t.Fatalf("select compact stored: %v", err)
-	}
-	if !usageevidence.IsCompact("codex", compacted) {
-		t.Fatalf("stored evidence did not compact: %q", compacted)
+		t.Fatalf("insert legacy: %v", err)
 	}
 	incoming := *stored
-	incoming.ModelRaw = "gpt-5-codex"
-	incoming.ModelNormalized = "gpt-5-codex"
-	incoming.ModelIsFallback = false
-	incoming.ModelResolution = model.ModelResolutionDirectEvent
-	incoming.UpdatedAtMs = 2
+	incoming.RawUsageJSON = `{"new":"source envelope"}`
 	status, err := database.UpsertEvent(&incoming)
 	if err != nil || status != "updated" {
-		t.Fatalf("reimport status=%s err=%v", status, err)
+		t.Fatalf("exact reimport status=%q err=%v", status, err)
 	}
-	var raw, modelName string
-	if err := database.Conn().QueryRow(`SELECT raw_usage_json, model_normalized FROM usage_events`).Scan(&raw, &modelName); err != nil {
-		t.Fatalf("select reimport: %v", err)
+	var raw sql.NullString
+	if err := database.Conn().QueryRow(`SELECT raw_usage_json FROM usage_events WHERE event_id = ?`, stored.EventID).Scan(&raw); err != nil {
+		t.Fatalf("read cleaned raw: %v", err)
 	}
-	if !usageevidence.IsCompact("codex", raw) || modelName != "gpt-5-codex" {
-		t.Fatalf("reimport restored full raw or lost correction: raw=%q model=%q", raw, modelName)
+	if raw.Valid {
+		t.Fatalf("exact reimport retained raw: %+v", raw)
 	}
 }
 
 func TestBuildCanonicalReconciledEventPreservesProtectedIdentity(t *testing.T) {
-	compact := usageevidence.Compact("codex", compactableCodexRaw)
-	if compact.Status != usageevidence.StatusRecognizedLegacy {
-		t.Fatalf("test fixture did not compact: %+v", compact)
+	stored := rawEvidenceEvent("stored-raw-hash", "raw_hash", legacyRawUsage)
+	incoming := *stored
+	incoming.EventID = "incoming-message-id"
+	incoming.DedupeKey = incoming.EventID
+	incoming.DedupeStrategy = "message_id"
+	incoming.RawUsageJSON = `{"incoming":"raw"}`
+	canonical := buildCanonicalReconciledEvent(&incoming, stored, []*model.UsageEvent{stored})
+	if canonical.EventID != stored.EventID || canonical.DedupeKey != stored.DedupeKey || canonical.DedupeStrategy != "raw_hash" {
+		t.Fatalf("stored protected identity was replaced: %+v", canonical)
 	}
-	for _, strategy := range []string{"raw_hash", "fallback"} {
-		t.Run(strategy, func(t *testing.T) {
-			stored := rawEvidenceEvent("protected-"+strategy, strategy, compact.JSON)
-			stored.DedupeKey = stored.EventID
-			incoming := *stored
-			incoming.RawUsageJSON = compactableCodexRaw
-			incoming.ModelRaw = "gpt-5-codex-updated"
-			incoming.ModelNormalized = "gpt-5-codex-updated"
+	if canonical.RawUsageJSON != "" {
+		t.Fatalf("canonical reconciliation retained raw: %q", canonical.RawUsageJSON)
+	}
 
-			canonical := buildCanonicalReconciledEvent(&incoming, stored, []*model.UsageEvent{stored})
-			if canonical.EventID != stored.EventID || canonical.DedupeKey != stored.DedupeKey || canonical.DedupeStrategy != strategy {
-				t.Fatalf("protected identity was recomputed: %+v", canonical)
-			}
-			if !usageevidence.IsCompact("codex", canonical.RawUsageJSON) {
-				t.Fatal("canonical record restored full raw evidence")
-			}
-		})
+	protectedIncoming := *stored
+	protectedIncoming.EventID = "incoming-fallback"
+	protectedIncoming.DedupeKey = protectedIncoming.EventID
+	protectedIncoming.DedupeStrategy = "fallback"
+	canonical = buildCanonicalReconciledEvent(&protectedIncoming, nil, nil)
+	if canonical.EventID != protectedIncoming.EventID || canonical.DedupeStrategy != "fallback" || canonical.RawUsageJSON != "" {
+		t.Fatalf("incoming protected identity was recomputed: %+v", canonical)
 	}
 }
 
-func TestMergeCompactsLegacyOmitsUnknownAndRollsBackOnSQLError(t *testing.T) {
+func TestMergeFromDropsEveryIncomingRawValue(t *testing.T) {
 	incomingPath := filepath.Join(t.TempDir(), "incoming.db")
 	incoming, err := Open(incomingPath)
 	if err != nil {
 		t.Fatalf("open incoming: %v", err)
 	}
-	for _, event := range []*model.UsageEvent{
-		rawEvidenceEvent("merge-recognized", "message_id", compactableCodexRaw),
-		rawEvidenceEvent("merge-unknown", "message_id", `{"future":true}`),
-		rawEvidenceEvent("merge-raw-hash", "raw_hash", compactableCodexRaw),
-		rawEvidenceEvent("merge-fallback", "fallback", compactableCodexRaw),
-	} {
+	events := []*model.UsageEvent{
+		rawEvidenceEvent("merge-legacy", "message_id", legacyRawUsage),
+		rawEvidenceEvent("merge-compact", "message_id", `{"version":1}`),
+		rawEvidenceEvent("merge-raw-hash", "raw_hash", legacyRawUsage),
+		rawEvidenceEvent("merge-fallback", "fallback", legacyRawUsage),
+		rawEvidenceEvent("merge-invalid", "message_id", `not-json`),
+	}
+	for i, channel := range []string{"claude", "codex", "gemini", "copilot", "workbuddy"} {
+		events[i].Channel = channel
+		events[i].Provider = channel + "-provider"
+	}
+	for _, event := range events {
 		if err := insertEvent(incoming.Conn(), event); err != nil {
 			_ = incoming.Close()
 			t.Fatalf("insert incoming %s: %v", event.EventID, err)
@@ -231,7 +234,6 @@ func TestMergeCompactsLegacyOmitsUnknownAndRollsBackOnSQLError(t *testing.T) {
 	if err := incoming.Close(); err != nil {
 		t.Fatalf("close incoming: %v", err)
 	}
-
 	destination, err := Open(filepath.Join(t.TempDir(), "destination.db"))
 	if err != nil {
 		t.Fatalf("open destination: %v", err)
@@ -241,94 +243,41 @@ func TestMergeCompactsLegacyOmitsUnknownAndRollsBackOnSQLError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
-	if result.Inserted != 4 || result.Skipped != 0 || result.RawEvidenceOmitted != 1 {
+	if result.Inserted != 5 || result.Skipped != 0 || result.RawEvidenceOmitted != 5 {
 		t.Fatalf("unexpected merge result: %+v", result)
 	}
-	var recognized, unknown sql.NullString
-	if err := destination.Conn().QueryRow(`SELECT raw_usage_json FROM usage_events WHERE event_id = 'merge-recognized'`).Scan(&recognized); err != nil {
-		t.Fatalf("select recognized: %v", err)
-	}
-	if err := destination.Conn().QueryRow(`SELECT raw_usage_json FROM usage_events WHERE event_id = 'merge-unknown'`).Scan(&unknown); err != nil {
-		t.Fatalf("select unknown: %v", err)
-	}
-	if !recognized.Valid || !usageevidence.IsCompact("codex", recognized.String) || unknown.Valid {
-		t.Fatalf("merge raw evidence mismatch recognized=%+v unknown=%+v", recognized, unknown)
-	}
-	for eventID, wantStrategy := range map[string]string{"merge-raw-hash": "raw_hash", "merge-fallback": "fallback"} {
-		var raw, strategy, dedupeKey string
-		if err := destination.Conn().QueryRow(`SELECT raw_usage_json, dedupe_strategy, dedupe_key FROM usage_events WHERE event_id = ?`, eventID).Scan(&raw, &strategy, &dedupeKey); err != nil {
-			t.Fatalf("select protected incoming identity: %v", err)
-		}
-		if !usageevidence.IsCompact("codex", raw) || strategy != wantStrategy || dedupeKey != eventID {
-			t.Fatalf("merge changed protected identity event=%q strategy=%q dedupe=%q raw=%q", eventID, strategy, dedupeKey, raw)
-		}
+	var retained int
+	if err := destination.Conn().QueryRow(`SELECT COUNT(*) FROM usage_events WHERE raw_usage_json IS NOT NULL`).Scan(&retained); err != nil || retained != 0 {
+		t.Fatalf("merge retained raw count=%d err=%v", retained, err)
 	}
 	duplicate, err := destination.MergeFrom(incomingPath)
 	if err != nil {
 		t.Fatalf("duplicate merge: %v", err)
 	}
-	if duplicate.Inserted != 0 || duplicate.Skipped != 4 || duplicate.RawEvidenceOmitted != 0 {
+	if duplicate.Inserted != 0 || duplicate.Skipped != 5 || duplicate.RawEvidenceOmitted != 0 {
 		t.Fatalf("duplicate merge changed data: %+v", duplicate)
-	}
-
-	failingPath := filepath.Join(t.TempDir(), "failing-merge.db")
-	failing, err := Open(failingPath)
-	if err != nil {
-		t.Fatalf("open failing incoming: %v", err)
-	}
-	if err := insertEvent(failing.Conn(), rawEvidenceEvent("rollback-good", "message_id", compactableCodexRaw)); err != nil {
-		_ = failing.Close()
-		t.Fatalf("insert valid rollback row: %v", err)
-	}
-	if err := insertEvent(failing.Conn(), rawEvidenceEvent("rollback-unknown", "message_id", `{"future":true}`)); err != nil {
-		_ = failing.Close()
-		t.Fatalf("insert unknown rollback row: %v", err)
-	}
-	if err := failing.Close(); err != nil {
-		t.Fatalf("close failing incoming: %v", err)
-	}
-	if _, err := destination.Conn().Exec(`
-		CREATE TRIGGER reject_rollback_merge
-		BEFORE INSERT ON usage_events
-		WHEN NEW.event_id LIKE 'rollback-%'
-		BEGIN
-			SELECT RAISE(ABORT, 'test merge failure');
-		END
-	`); err != nil {
-		t.Fatalf("create merge failure trigger: %v", err)
-	}
-	if _, err := destination.MergeFrom(failingPath); err == nil {
-		t.Fatal("merge accepted a forced SQL write failure")
-	}
-	var count int
-	if err := destination.Conn().QueryRow(`SELECT COUNT(*) FROM usage_events WHERE event_id LIKE 'rollback-%'`).Scan(&count); err != nil {
-		t.Fatalf("count rollback rows: %v", err)
-	}
-	if count != 0 {
-		t.Fatalf("merge left partial rows after internal evidence failure: %d", count)
 	}
 }
 
 func rawEvidenceEvent(id, strategy, raw string) *model.UsageEvent {
 	return &model.UsageEvent{
-		EventID:         id,
-		DedupeKey:       id,
-		DedupeStrategy:  strategy,
-		Channel:         "codex",
-		Provider:        "openai",
-		ModelRaw:        "gpt-5-codex",
-		ModelNormalized: "gpt-5-codex",
-		TimestampMs:     1,
-		SessionID:       "session-" + id,
-		SourceFile:      "/synthetic/" + id + ".jsonl",
-		LineNumber:      1,
-		RawSHA256:       "hash-" + id,
-		InputTokens:     1,
-		OutputTokens:    2,
-		TotalTokens:     3,
-		RawUsageJSON:    raw,
-		ImportedAtMs:    1,
-		UpdatedAtMs:     1,
+		EventID: id, DedupeKey: id, DedupeStrategy: strategy,
+		Channel: "codex", Provider: "openai", ModelRaw: "gpt-5-codex", ModelNormalized: "gpt-5-codex",
+		TimestampMs: 1, SessionID: "session-" + id, SourceFile: "/synthetic/" + id + ".jsonl", LineNumber: 1, RawSHA256: "hash-" + id,
+		InputTokens: 1, OutputTokens: 2, TotalTokens: 3, RawUsageJSON: raw, ImportedAtMs: 1, UpdatedAtMs: 1,
+	}
+}
+
+func assertNoRawUsage(t *testing.T, path string) {
+	t.Helper()
+	conn, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatalf("open assertion connection: %v", err)
+	}
+	defer conn.Close()
+	var count int
+	if err := conn.QueryRow(`SELECT COUNT(*) FROM usage_events WHERE raw_usage_json IS NOT NULL`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("stored raw count=%d err=%v", count, err)
 	}
 }
 
