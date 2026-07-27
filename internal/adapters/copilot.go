@@ -201,7 +201,12 @@ func (a *CopilotAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, er
 		}
 		rawJSON, _ := json.Marshal(obj)
 		rawHash := sha256Hex(rawJSON)
-		requestCounts := copilotSessionRequestCountsFromLine(line)
+		var requestCounts map[string]*int64
+		// Only session shutdown records carry model metrics. Avoid shadow-decoding
+		// ordinary OTel records after their primary map decode.
+		if getString(obj, "type") == "session.shutdown" {
+			requestCounts = copilotSessionRequestCountsFromLine(line)
+		}
 		if sessionCandidates := copilotSessionMetricCandidatesFromObject(obj, path, lineNum, sessionContext, requestCounts); len(sessionCandidates) > 0 {
 			candidates = append(candidates, sessionCandidates...)
 			sessionContext.observe(obj, path)
