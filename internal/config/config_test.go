@@ -71,3 +71,28 @@ func TestLoadReadOnlyBackfillsWorkBuddyDefaults(t *testing.T) {
 		t.Fatal("expected explicit legacy Claude setting to remain disabled")
 	}
 }
+
+func TestValidateUsageEvidenceWritePolicy(t *testing.T) {
+	tests := []struct {
+		name    string
+		mode    string
+		wantErr bool
+	}{
+		{name: "envelope", mode: PrivacyModeEnvelope},
+		{name: "full", mode: "full", wantErr: true},
+		{name: "none", mode: "none", wantErr: true},
+		{name: "empty", mode: "", wantErr: true},
+		{name: "case variant", mode: "Envelope", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Default()
+			cfg.Privacy.Mode = tt.mode
+			err := cfg.ValidateUsageEvidenceWritePolicy()
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("ValidateUsageEvidenceWritePolicy() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}

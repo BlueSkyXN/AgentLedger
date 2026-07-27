@@ -221,6 +221,162 @@ func TestOpenReadOnlyRejectsMissingDatabaseWithoutCreatingPath(t *testing.T) {
 	}
 }
 
+func TestOpenReadWriteV2RejectsMissingDatabaseWithoutCreatingPath(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "missing")
+	path := filepath.Join(dir, "agent-ledger.db")
+
+	_, err := OpenReadWriteV2(path)
+	if err == nil {
+		t.Fatal("expected missing database error")
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("strict read-write open created database directory: %v", err)
+	}
+}
+
+func TestOpenReadWriteV2DoesNotRunSchemaMaintenance(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agent-ledger.db")
+	database, err := Open(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if _, err := database.Conn().Exec(`INSERT INTO usage_events (
+		event_id, dedupe_key, dedupe_strategy, channel, source_agent, observability_level, timestamp_ms,
+		input_tokens, output_tokens, reasoning_tokens, cache_creation_tokens, cache_read_tokens, total_tokens,
+		imported_at_ms, updated_at_ms
+	) VALUES ('event-1', 'event-1', 'message_id', 'codex', 'codex', 'full', 1, 1, 1, 0, 0, 0, 2, 1, 1)`); err != nil {
+		_ = database.Close()
+		t.Fatalf("insert event: %v", err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("close initial database: %v", err)
+	}
+
+	conn, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatalf("raw open: %v", err)
+	}
+	if _, err := conn.Exec(`DROP INDEX idx_usage_source_identity`); err != nil {
+		_ = conn.Close()
+		t.Fatalf("drop source identity index: %v", err)
+	}
+	if _, err := conn.Exec(`
+		CREATE TRIGGER reject_usage_maintenance
+		BEFORE UPDATE OF source_agent, observability_level ON usage_events
+		BEGIN
+			SELECT RAISE(ABORT, 'unexpected usage maintenance');
+		END
+	`); err != nil {
+		_ = conn.Close()
+		t.Fatalf("create maintenance trigger: %v", err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatalf("close raw database: %v", err)
+	}
+
+	strict, err := OpenReadWriteV2(path)
+	if err != nil {
+		t.Fatalf("strict read-write open ran schema maintenance: %v", err)
+	}
+	defer strict.Close()
+	var queryOnly int
+	if err := strict.Conn().QueryRow(`PRAGMA query_only`).Scan(&queryOnly); err != nil {
+		t.Fatalf("query_only: %v", err)
+	}
+	if queryOnly != 0 {
+		t.Fatalf("strict read-write open query_only = %d", queryOnly)
+	}
+	var indexCount int
+	if err := strict.Conn().QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_usage_source_identity'`).Scan(&indexCount); err != nil {
+		t.Fatalf("read source identity index: %v", err)
+	}
+	if indexCount != 0 {
+		t.Fatal("strict read-write open recreated source identity index")
+	}
+}
+
+func TestOpenReadWriteV2RejectsIncompleteSchemaWithoutRepairingIt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agent-ledger.db")
+	database, err := Open(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("close initial database: %v", err)
+	}
+
+	conn, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatalf("raw open: %v", err)
+	}
+	if _, err := conn.Exec(`ALTER TABLE usage_events DROP COLUMN turn_id`); err != nil {
+		_ = conn.Close()
+		t.Fatalf("drop compatibility column: %v", err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatalf("close raw database: %v", err)
+	}
+
+	if _, err := OpenReadWriteV2(path); err == nil {
+		t.Fatal("strict read-write open accepted an incomplete v2 schema")
+	}
+	conn, err = sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatalf("reopen raw database: %v", err)
+	}
+	defer conn.Close()
+	var count int
+	if err := conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('usage_events') WHERE name = 'turn_id'`).Scan(&count); err != nil {
+		t.Fatalf("inspect compatibility column: %v", err)
+	}
+	if count != 0 {
+		t.Fatal("strict read-write open repaired the incomplete schema")
+	}
+}
+
+func TestCompatibilityBackfillSkipsCompleteRows(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agent-ledger.db")
+	database, err := Open(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if _, err := database.Conn().Exec(`INSERT INTO usage_events (
+		event_id, dedupe_key, dedupe_strategy, channel, source_agent, observability_level, timestamp_ms,
+		input_tokens, output_tokens, reasoning_tokens, cache_creation_tokens, cache_read_tokens, total_tokens,
+		imported_at_ms, updated_at_ms
+	) VALUES ('event-1', 'event-1', 'message_id', 'codex', 'codex', 'full', 1, 1, 1, 0, 0, 0, 2, 1, 1)`); err != nil {
+		_ = database.Close()
+		t.Fatalf("insert event: %v", err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("close initial database: %v", err)
+	}
+
+	conn, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatalf("raw open: %v", err)
+	}
+	if _, err := conn.Exec(`
+		CREATE TRIGGER reject_complete_backfill
+		BEFORE UPDATE OF source_agent, observability_level ON usage_events
+		BEGIN
+			SELECT RAISE(ABORT, 'complete row should not be backfilled');
+		END
+	`); err != nil {
+		_ = conn.Close()
+		t.Fatalf("create trigger: %v", err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatalf("close raw database: %v", err)
+	}
+
+	database, err = Open(path)
+	if err != nil {
+		t.Fatalf("compatibility backfill touched complete row: %v", err)
+	}
+	defer database.Close()
+}
+
 func TestOpenReadOnlyV2RejectsIncompleteSchemaWithoutRepairingIt(t *testing.T) {
 	for _, tc := range []struct {
 		name         string

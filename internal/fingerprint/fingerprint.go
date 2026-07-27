@@ -47,10 +47,17 @@ type ParsedRecord struct {
 	TotalDurationMs       int64
 	TTFTMs                int64
 	OutputDurationMs      int64
-	RawJSON               string
-	SourceFile            string
-	LineNumber            int
-	RawSHA256             string
+	// FingerprintJSON is full source JSON retained only while importing so the
+	// raw-hash fingerprint remains stable after RawJSON is compacted.
+	FingerprintJSON string
+	// EvidenceOmitted and EvidenceWarning let import orchestration aggregate a
+	// sanitised warning without persisting full source evidence.
+	EvidenceOmitted bool
+	EvidenceWarning string
+	RawJSON         string
+	SourceFile      string
+	LineNumber      int
+	RawSHA256       string
 }
 
 // Strategy represents the fingerprint strategy used
@@ -89,8 +96,12 @@ func Compute(rec *ParsedRecord) (fingerprint string, strategy Strategy) {
 		return hash, StrategySessionToken
 	}
 
-	if rec.RawJSON != "" {
-		canonical := stableJSON(rec.RawJSON)
+	rawForFingerprint := rec.FingerprintJSON
+	if rawForFingerprint == "" {
+		rawForFingerprint = rec.RawJSON
+	}
+	if rawForFingerprint != "" {
+		canonical := stableJSON(rawForFingerprint)
 		hash := sha256Hex(fmt.Sprintf("raw_hash|%s|%s|%s", rec.Agent, rec.Provider, canonical))
 		return hash, StrategyRawHash
 	}

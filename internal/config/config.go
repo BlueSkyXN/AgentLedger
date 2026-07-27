@@ -27,6 +27,8 @@ type PrivacyConfig struct {
 	RedactPathsOnExport bool   `toml:"redact_paths_on_export"`
 }
 
+const PrivacyModeEnvelope = "envelope"
+
 type ImportConfig struct {
 	GracingMinutes int  `toml:"gracing_minutes"`
 	SingleThread   bool `toml:"single_thread"`
@@ -196,6 +198,19 @@ func (c *Config) Save() error {
 
 func (c *Config) DBPath() string {
 	return ExpandHome(c.Database.Path)
+}
+
+// ValidateUsageEvidenceWritePolicy rejects unsupported modes before commands
+// persist or transform usage evidence.
+func (c *Config) ValidateUsageEvidenceWritePolicy() error {
+	mode := strings.TrimSpace(c.Privacy.Mode)
+	if mode == PrivacyModeEnvelope {
+		return nil
+	}
+	if mode == "" {
+		mode = "<empty>"
+	}
+	return fmt.Errorf("unsupported privacy.mode %q: this version only supports %q", mode, PrivacyModeEnvelope)
 }
 
 func ExpandHome(path string) string {

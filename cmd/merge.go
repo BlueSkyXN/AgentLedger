@@ -19,6 +19,9 @@ var mergeCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("failed to load config: %w", err)
 		}
+		if err := cfg.ValidateUsageEvidenceWritePolicy(); err != nil {
+			return err
+		}
 
 		database, err := db.Open(cfg.DBPath())
 		if err != nil {
@@ -26,14 +29,15 @@ var mergeCmd = &cobra.Command{
 		}
 		defer database.Close()
 
-		inserted, skipped, err := database.MergeFrom(incomingPath)
+		result, err := database.MergeFrom(incomingPath)
 		if err != nil {
 			return fmt.Errorf("merge failed: %w", err)
 		}
 
 		fmt.Printf("Merge complete:\n")
-		fmt.Printf("  Events inserted: %d\n", inserted)
-		fmt.Printf("  Events skipped:  %d (duplicates)\n", skipped)
+		fmt.Printf("  Events inserted:     %d\n", result.Inserted)
+		fmt.Printf("  Events skipped:      %d (duplicates)\n", result.Skipped)
+		fmt.Printf("  Raw evidence omitted: %d\n", result.RawEvidenceOmitted)
 		return nil
 	},
 }

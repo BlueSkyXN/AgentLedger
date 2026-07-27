@@ -113,6 +113,21 @@ func TestComputeRawHash(t *testing.T) {
 	}
 }
 
+func TestComputeRawHashPrefersTransientFingerprintJSON(t *testing.T) {
+	fullSource := `{"private":"source-only","usage":{"input_tokens":1}}`
+	compactEvidence := `{"schema":"agentledger.codex-usage.v1","source_variant":"headless_root","usage":{"input_tokens":1}}`
+	fullFingerprint, fullStrategy := Compute(&ParsedRecord{Agent: "codex", Provider: "openai", RawJSON: fullSource})
+	compactFingerprint, compactStrategy := Compute(&ParsedRecord{
+		Agent:           "codex",
+		Provider:        "openai",
+		RawJSON:         compactEvidence,
+		FingerprintJSON: fullSource,
+	})
+	if fullStrategy != StrategyRawHash || compactStrategy != StrategyRawHash || compactFingerprint != fullFingerprint {
+		t.Fatalf("transient source JSON must preserve raw fingerprint: full=%s/%s compact=%s/%s", fullFingerprint, fullStrategy, compactFingerprint, compactStrategy)
+	}
+}
+
 func TestComputeFallback(t *testing.T) {
 	rec := &ParsedRecord{
 		Agent:      "copilot",

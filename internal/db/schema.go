@@ -316,8 +316,16 @@ func (d *Database) ensureV2CompatibilityColumns() error {
 	if _, err = tx.Exec(`
         UPDATE usage_events
         SET
-            source_agent = COALESCE(NULLIF(source_agent, ''), channel),
-            observability_level = COALESCE(NULLIF(observability_level, ''), 'unknown')
+			source_agent = CASE
+				WHEN COALESCE(NULLIF(source_agent, ''), '') = '' THEN channel
+				ELSE source_agent
+			END,
+			observability_level = CASE
+				WHEN COALESCE(NULLIF(observability_level, ''), '') = '' THEN 'unknown'
+				ELSE observability_level
+			END
+		WHERE COALESCE(NULLIF(source_agent, ''), '') = ''
+			OR COALESCE(NULLIF(observability_level, ''), '') = ''
     `); err != nil {
 		return err
 	}

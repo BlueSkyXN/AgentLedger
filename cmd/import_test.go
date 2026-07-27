@@ -113,6 +113,34 @@ func TestImportUsesParsedNormalizedModelOverride(t *testing.T) {
 	}
 }
 
+func TestImportAggregatesOmittedUsageEvidenceWarnings(t *testing.T) {
+	database, err := db.Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer database.Close()
+
+	records := []*fingerprint.ParsedRecord{
+		{Agent: "claude", DedupeID: "one", TimestampMs: 1, TotalTokens: 1, EvidenceOmitted: true},
+		{Agent: "claude", DedupeID: "two", TimestampMs: 2, TotalTokens: 1, EvidenceOmitted: true},
+	}
+	added, updated, skipped, warnings := importParsedRecords(database, "claude", records)
+	if added != 2 || updated != 0 || skipped != 0 {
+		t.Fatalf("unexpected import result added=%d updated=%d skipped=%d", added, updated, skipped)
+	}
+	if len(warnings) != 1 || warnings[0] != "claude usage evidence omitted for 2 parsed record(s)" {
+		t.Fatalf("expected one aggregate evidence warning, got %v", warnings)
+	}
+
+	var rawCount int
+	if err := database.Conn().QueryRow(`SELECT COUNT(*) FROM usage_events WHERE raw_usage_json IS NOT NULL`).Scan(&rawCount); err != nil {
+		t.Fatalf("count raw evidence: %v", err)
+	}
+	if rawCount != 0 {
+		t.Fatalf("expected omitted evidence to remain NULL/empty, got %d persisted values", rawCount)
+	}
+}
+
 func TestParseImportFileProcessesStableRecentFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "recent.jsonl")
 	if err := os.WriteFile(path, []byte("{}\n"), 0o644); err != nil {
