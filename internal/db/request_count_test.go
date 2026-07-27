@@ -165,6 +165,157 @@ func TestMergePreservesRequestCountAndAcceptsOlderV2Input(t *testing.T) {
 	})
 }
 
+func TestRequestCountPreservedOnMoreCompleteUnknownIncoming(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer database.Close()
+
+	known := int64(7)
+	existing := &model.UsageEvent{
+		EventID: "exact-preserve-count", DedupeKey: "exact-preserve-count", DedupeStrategy: "message_id",
+		Channel: "copilot", SourceAgent: "copilot", SourceProduct: "copilot-session-state",
+		Provider: "github", ModelRaw: "gpt-5.4", ModelNormalized: "gpt-5.4",
+		TimestampMs: 1, InputTokens: 10, OutputTokens: 5, TotalTokens: 15,
+		RequestCount: &known, ImportedAtMs: 1, UpdatedAtMs: 1,
+	}
+	if status, err := database.UpsertEvent(existing); err != nil || status != "inserted" {
+		t.Fatalf("insert status=%q err=%v", status, err)
+	}
+
+	// More complete via timing fields, but request count unknown.
+	incoming := *existing
+	incoming.RequestCount = nil
+	incoming.TotalDurationMs = int64Ptr(1200)
+	incoming.InputTokens = 20
+	incoming.OutputTokens = 10
+	incoming.TotalTokens = 30
+	incoming.UpdatedAtMs = 2
+	if status, err := database.UpsertEvent(&incoming); err != nil || status != "updated" {
+		t.Fatalf("more complete upsert status=%q err=%v", status, err)
+	}
+
+	var total, count int64
+	if err := database.Conn().QueryRow(`SELECT total_tokens, request_count FROM usage_events WHERE event_id='exact-preserve-count'`).Scan(&total, &count); err != nil {
+		t.Fatalf("select: %v", err)
+	}
+	if total != 30 || count != known {
+		t.Fatalf("total=%d count=%d want total=30 count=%d", total, count, known)
+	}
+}
+
+func TestRequestCountMetadataEnrichmentAcrossTokenBucketChange(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer database.Close()
+
+	base := &model.UsageEvent{
+		EventID: "metadata-count-fill", DedupeKey: "metadata-count-fill", DedupeStrategy: "message_id",
+		Channel: "copilot", SourceAgent: "copilot", SourceProduct: "copilot-session-state",
+		Provider: "github", ModelRaw: "gpt-5.4", ModelNormalized: "gpt-5.4",
+		TimestampMs: 1, InputTokens: 10, OutputTokens: 5, CacheReadTokens: 0, TotalTokens: 15,
+		ImportedAtMs: 1, UpdatedAtMs: 1,
+	}
+	if status, err := database.UpsertEvent(base); err != nil || status != "inserted" {
+		t.Fatalf("insert status=%q err=%v", status, err)
+	}
+
+	// Token buckets change but score does not increase enough to win full update
+	// (same total, no timing/cost). Count should still enrich via metadata path.
+	count := int64(5)
+	incoming := *base
+	incoming.InputTokens = 8
+	incoming.OutputTokens = 7
+	incoming.TotalTokens = 15
+	incoming.RequestCount = &count
+	incoming.UpdatedAtMs = 2
+	if status, err := database.UpsertEvent(&incoming); err != nil || status != "updated" {
+		t.Fatalf("metadata count fill status=%q err=%v", status, err)
+	}
+
+	var input, output, total, stored int64
+	if err := database.Conn().QueryRow(`SELECT input_tokens, output_tokens, total_tokens, request_count FROM usage_events WHERE event_id='metadata-count-fill'`).Scan(&input, &output, &total, &stored); err != nil {
+		t.Fatalf("select: %v", err)
+	}
+	if input != 10 || output != 5 || total != 15 {
+		t.Fatalf("usage winner should stay existing tokens input=%d output=%d total=%d", input, output, total)
+	}
+	if stored != count {
+		t.Fatalf("request_count=%d want=%d", stored, count)
+	}
+}
+
+func TestRequestCountCanonicalReconciliationPriority(t *testing.T) {
+	incomingCount := int64(11)
+	exactCount := int64(22)
+	olderStoredCount := int64(33)
+	newerStoredCount := int64(44)
+
+	incoming := &model.UsageEvent{
+		EventID: "incoming-a", DedupeKey: "incoming-a", DedupeStrategy: "message_id",
+		Channel: "copilot", Provider: "github", ModelRaw: "gpt-5.4", ModelNormalized: "gpt-5.4",
+		TimestampMs: 10, InputTokens: 1, OutputTokens: 1, TotalTokens: 2,
+		RequestCount: &incomingCount, ImportedAtMs: 10, UpdatedAtMs: 10,
+	}
+	exact := &model.UsageEvent{
+		EventID: "exact-b", DedupeKey: "exact-b", DedupeStrategy: "message_id",
+		Channel: "copilot", Provider: "github", ModelRaw: "gpt-5.4", ModelNormalized: "gpt-5.4",
+		TimestampMs: 10, InputTokens: 1, OutputTokens: 1, TotalTokens: 2,
+		RequestCount: &exactCount, ImportedAtMs: 5, UpdatedAtMs: 20,
+	}
+	storedOlder := &model.UsageEvent{
+		EventID: "stored-c", DedupeKey: "stored-c", DedupeStrategy: "message_id",
+		Channel: "copilot", Provider: "github", ModelRaw: "gpt-5.4", ModelNormalized: "gpt-5.4",
+		TimestampMs: 10, InputTokens: 5, OutputTokens: 5, TotalTokens: 10,
+		RequestCount: &olderStoredCount, ImportedAtMs: 1, UpdatedAtMs: 30,
+	}
+	storedNewer := &model.UsageEvent{
+		EventID: "stored-d", DedupeKey: "stored-d", DedupeStrategy: "message_id",
+		Channel: "copilot", Provider: "github", ModelRaw: "gpt-5.4", ModelNormalized: "gpt-5.4",
+		TimestampMs: 10, InputTokens: 1, OutputTokens: 1, TotalTokens: 2,
+		RequestCount: &newerStoredCount, ImportedAtMs: 2, UpdatedAtMs: 40,
+	}
+
+	canonical := buildCanonicalReconciledEvent(incoming, exact, []*model.UsageEvent{storedOlder, storedNewer, exact})
+	if canonical.RequestCount == nil || *canonical.RequestCount != incomingCount {
+		t.Fatalf("incoming non-nil should win, got %v", canonical.RequestCount)
+	}
+	if canonical.TotalTokens != 10 {
+		t.Fatalf("token winner should remain independent, total=%d", canonical.TotalTokens)
+	}
+
+	incomingUnknown := *incoming
+	incomingUnknown.RequestCount = nil
+	canonical = buildCanonicalReconciledEvent(&incomingUnknown, exact, []*model.UsageEvent{storedOlder, storedNewer, exact})
+	if canonical.RequestCount == nil || *canonical.RequestCount != exactCount {
+		t.Fatalf("exact non-nil should beat stored, got %v", canonical.RequestCount)
+	}
+
+	canonical = buildCanonicalReconciledEvent(&incomingUnknown, nil, []*model.UsageEvent{storedOlder, storedNewer})
+	if canonical.RequestCount == nil || *canonical.RequestCount != newerStoredCount {
+		t.Fatalf("most recently updated stored count should win, got %v", canonical.RequestCount)
+	}
+
+	// Stable event_id tie-break when UpdatedAtMs is equal.
+	tieA := *storedOlder
+	tieA.EventID = "tie-b"
+	tieA.UpdatedAtMs = 50
+	tieA.RequestCount = int64Ptr(8)
+	tieB := *storedOlder
+	tieB.EventID = "tie-a"
+	tieB.UpdatedAtMs = 50
+	tieB.RequestCount = int64Ptr(9)
+	canonical = buildCanonicalReconciledEvent(&incomingUnknown, nil, []*model.UsageEvent{&tieA, &tieB})
+	if canonical.RequestCount == nil || *canonical.RequestCount != 9 {
+		t.Fatalf("event_id tie-break should pick tie-a count=9, got %v", canonical.RequestCount)
+	}
+}
+
+func int64Ptr(v int64) *int64 { return &v }
+
 func insertMergeRequestEvent(t *testing.T, database *Database, eventID string, requestCount *int64) {
 	t.Helper()
 	event := &model.UsageEvent{

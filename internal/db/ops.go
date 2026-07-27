@@ -166,6 +166,9 @@ func (d *Database) UpsertEvent(ev *model.UsageEvent) (string, error) {
 
 	ev.ImportedAtMs = existing.ImportedAtMs
 	preserveExistingSourceMetadata(ev, existing)
+	// RequestCount is independent of token/timing completeness. An unknown
+	// incoming value must never clear a previously known count.
+	ev.RequestCount = selectRequestCount(ev, existing, nil)
 	if err = updateEvent(tx, ev); err != nil {
 		return "", err
 	}
@@ -364,6 +367,7 @@ func buildCanonicalReconciledEvent(incoming, exact *model.UsageEvent, stored []*
 	preserveReconciledSourceMetadata(&canonical, stored)
 	preserveStrongerCodexClassification(&canonical, incoming, exact, stored)
 	applyUsageWinner(&canonical, &usageWinner)
+	canonical.RequestCount = selectRequestCount(incoming, exact, stored)
 	for _, candidate := range stored {
 		if canonical.ImportedAtMs <= 0 || (candidate.ImportedAtMs > 0 && candidate.ImportedAtMs < canonical.ImportedAtMs) {
 			canonical.ImportedAtMs = candidate.ImportedAtMs
@@ -512,7 +516,6 @@ func applyUsageWinner(target, winner *model.UsageEvent) {
 	target.CacheCreationTokens = winner.CacheCreationTokens
 	target.CacheReadTokens = winner.CacheReadTokens
 	target.TotalTokens = winner.TotalTokens
-	target.RequestCount = winner.RequestCount
 	target.RequestStartedAtMs = winner.RequestStartedAtMs
 	target.FirstTokenAtMs = winner.FirstTokenAtMs
 	target.CompletedAtMs = winner.CompletedAtMs
@@ -898,7 +901,7 @@ func updateEventByID(tx *sql.Tx, existingEventID string, ev *model.UsageEvent) e
             channel = ?, provider = ?, model_raw = ?, model_normalized = ?, model_resolution = ?,
             source_agent = ?, source_product = ?, observability_level = ?, model_is_fallback = ?, source_total_tokens = ?, raw_input_tokens = ?, token_accounting_method = ?, accounting_profile = ?,
             timestamp_ms = ?, session_id = ?, session_path_id = ?, turn_id = ?, project_path = ?, message_id = ?, request_id = ?, source_file = ?, line_number = ?, raw_sha256 = ?,
-	            input_tokens = ?, output_tokens = ?, reasoning_tokens = ?, cache_creation_tokens = ?, cache_read_tokens = ?, total_tokens = ?, request_count = ?,
+	            input_tokens = ?, output_tokens = ?, reasoning_tokens = ?, cache_creation_tokens = ?, cache_read_tokens = ?, total_tokens = ?, request_count = COALESCE(?, request_count),
             request_started_at_ms = ?, first_token_at_ms = ?, completed_at_ms = ?, total_duration_ms = ?, ttft_ms = ?, output_duration_ms = ?, output_tps = ?,
             recorded_cost_usd = ?, raw_usage_json = ?,
             updated_at_ms = ?
@@ -1068,7 +1071,7 @@ func (d *Database) MergeFrom(incomingPath string) (result MergeResult, err error
 		SELECT COUNT(*)
 		FROM incoming.usage_events AS candidate
 		WHERE NOT EXISTS (SELECT 1 FROM usage_events WHERE event_id = candidate.event_id)
-			AND COALESCE(candidate.raw_usage_json, '') <> ''
+			AND candidate.raw_usage_json IS NOT NULL
 	`).Scan(&result.RawEvidenceOmitted); err != nil {
 		return result, errors.New("inspect incoming raw usage evidence")
 	}
@@ -1244,6 +1247,41 @@ func (d *Database) GetStats() (map[string]interface{}, error) {
 	return stats, nil
 }
 
+// selectRequestCount chooses a source-backed request count independently of
+// token/timing winners. Priority is fixed:
+// 1) current incoming non-nil value
+// 2) exact-row non-nil value
+// 3) most recently updated non-nil stored candidate, with event_id tie-break
+func selectRequestCount(incoming, exact *model.UsageEvent, stored []*model.UsageEvent) *int64 {
+	if incoming != nil && incoming.RequestCount != nil {
+		return incoming.RequestCount
+	}
+	if exact != nil && exact.RequestCount != nil {
+		return exact.RequestCount
+	}
+	var best *model.UsageEvent
+	for _, candidate := range stored {
+		if candidate == nil || candidate.RequestCount == nil {
+			continue
+		}
+		if best == nil {
+			best = candidate
+			continue
+		}
+		if candidate.UpdatedAtMs > best.UpdatedAtMs {
+			best = candidate
+			continue
+		}
+		if candidate.UpdatedAtMs == best.UpdatedAtMs && candidate.EventID < best.EventID {
+			best = candidate
+		}
+	}
+	if best != nil {
+		return best.RequestCount
+	}
+	return nil
+}
+
 func mergeMissingMetadata(target, candidate *model.UsageEvent) bool {
 	changed := false
 	if target.SourceAgent == "" && candidate.SourceAgent != "" {
@@ -1272,11 +1310,13 @@ func mergeMissingMetadata(target, candidate *model.UsageEvent) bool {
 		target.ModelIsFallback = true
 		changed = true
 	}
+	// RequestCount is independent of token-bucket equality. Known incoming
+	// values may correct or fill the stored count even when token fields differ.
+	if candidate.RequestCount != nil && (target.RequestCount == nil || *target.RequestCount != *candidate.RequestCount) {
+		target.RequestCount = candidate.RequestCount
+		changed = true
+	}
 	if sameTokenUsage(target, candidate) {
-		if candidate.RequestCount != nil && (target.RequestCount == nil || *target.RequestCount != *candidate.RequestCount) {
-			target.RequestCount = candidate.RequestCount
-			changed = true
-		}
 		if target.SourceTotalTokens == nil && candidate.SourceTotalTokens != nil {
 			target.SourceTotalTokens = candidate.SourceTotalTokens
 			changed = true

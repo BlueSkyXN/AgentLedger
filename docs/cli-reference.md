@@ -87,7 +87,7 @@ agent-ledger merge usage.aldb
 |---|---|
 | `file.aldb` | 必填，另一个 schema v2 AgentLedger SQLite export。 |
 
-当前 merge 会验证输入是普通 SQLite 文件，并要求 incoming 数据库 `meta.schema_version` 为 `2`。合并只插入本地未见过的 `usage_events`；重复 `event_id` 不覆盖本地 evidence。未见事件的 Claude/Codex legacy raw 会在同一目标事务中收敛，合法 compact/空值保持，未知 raw 不写入目标库并计入 `Raw evidence omitted`。
+当前 merge 会验证输入是普通 SQLite 文件，并要求 incoming 数据库 `meta.schema_version` 为 `2`。合并只插入本地未见过的 `usage_events`；重复 `event_id` 不覆盖本地结构化统计事实。所有未见事件的 incoming `raw_usage_json`（包括 legacy、compact 和空字符串）均省略并写为 `NULL`，且 `raw_usage_json IS NOT NULL` 的未见事件计入 `Raw evidence omitted`。
 
 ## `report`
 

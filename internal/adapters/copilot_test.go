@@ -169,37 +169,144 @@ func TestCopilotSessionShutdownModelMetrics(t *testing.T) {
 
 func TestCopilotSessionRequestCountValidation(t *testing.T) {
 	tests := []struct {
-		name  string
-		value interface{}
-		want  *int64
+		name       string
+		countJSON  string
+		wantCount  *int64
+		wantEvents int
 	}{
-		{name: "zero", value: float64(0), want: int64Ptr(0)},
-		{name: "positive integer", value: float64(53), want: int64Ptr(53)},
-		{name: "json number", value: json.Number("9223372036854775807"), want: int64Ptr(9223372036854775807)},
-		{name: "negative", value: float64(-1)},
-		{name: "fractional", value: 1.5},
-		{name: "string", value: "2"},
-		{name: "overflow", value: float64(9_223_372_036_854_775_808)},
+		{name: "positive integer", countJSON: "53", wantCount: int64Ptr(53), wantEvents: 1},
+		{name: "explicit zero", countJSON: "0", wantCount: int64Ptr(0), wantEvents: 1},
+		{name: "max int64", countJSON: "9223372036854775807", wantCount: int64Ptr(9223372036854775807), wantEvents: 1},
+		{name: "above float53", countJSON: "9007199254740993", wantCount: int64Ptr(9007199254740993), wantEvents: 1},
+		{name: "missing count", countJSON: "", wantEvents: 1},
+		{name: "negative", countJSON: "-1", wantEvents: 1},
+		{name: "fractional", countJSON: "1.5", wantEvents: 1},
+		{name: "exponent", countJSON: "1e2", wantEvents: 1},
+		{name: "string", countJSON: `"2"`, wantEvents: 1},
+		{name: "boolean", countJSON: "true", wantEvents: 1},
+		{name: "null", countJSON: "null", wantEvents: 1},
+		{name: "overflow", countJSON: "9223372036854775808", wantEvents: 1},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got := copilotSessionRequestCount(map[string]interface{}{"count": test.value})
-			if test.want == nil {
+			requests := `{}`
+			if test.countJSON != "" {
+				requests = `{"count":` + test.countJSON + `}`
+			}
+			line := `{"type":"session.shutdown","timestamp":"2026-01-01T00:00:00Z","data":{"sessionId":"session-count","modelMetrics":{"gpt-5.4":{"usage":{"inputTokens":10,"outputTokens":2,"cacheReadTokens":0,"cacheWriteTokens":0,"reasoningTokens":0},"requests":` + requests + `}}}}`
+			path := filepath.Join(t.TempDir(), "events.jsonl")
+			if err := os.WriteFile(path, []byte(line), 0o644); err != nil {
+				t.Fatalf("write fixture: %v", err)
+			}
+			records, err := NewCopilotAdapter().ParseFile(path)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			if len(records) != test.wantEvents {
+				t.Fatalf("events=%d want=%d", len(records), test.wantEvents)
+			}
+			if test.wantEvents == 0 {
+				return
+			}
+			got := records[0].RequestCount
+			if test.wantCount == nil {
 				if got != nil {
 					t.Fatalf("expected unknown count, got %d", *got)
 				}
 				return
 			}
-			if got == nil || *got != *test.want {
-				t.Fatalf("expected %d, got %v", *test.want, got)
+			if got == nil || *got != *test.wantCount {
+				t.Fatalf("request count=%v want=%d", got, *test.wantCount)
+			}
+			if records[0].InputTokens != 10 || records[0].OutputTokens != 2 || records[0].TotalTokens != 12 {
+				t.Fatalf("strict count parsing changed tokens: input=%d output=%d total=%d", records[0].InputTokens, records[0].OutputTokens, records[0].TotalTokens)
 			}
 		})
 	}
-	if got := copilotSessionRequestCount(nil); got != nil {
-		t.Fatalf("missing requests should remain unknown: %v", got)
+}
+
+func TestCopilotZeroTokenMetricsStillEmitWithRequestCount(t *testing.T) {
+	tests := []struct {
+		name      string
+		countJSON string
+		wantCount *int64
+		wantEvent bool
+	}{
+		{name: "positive count", countJSON: "4", wantCount: int64Ptr(4), wantEvent: true},
+		{name: "explicit zero count", countJSON: "0", wantCount: int64Ptr(0), wantEvent: true},
+		{name: "missing count", countJSON: "", wantEvent: false},
+		{name: "invalid count", countJSON: "1.25", wantEvent: false},
 	}
-	if got := copilotSessionRequestCount(map[string]interface{}{}); got != nil {
-		t.Fatalf("missing count should remain unknown: %v", got)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			requests := `{}`
+			if test.countJSON != "" {
+				requests = `{"count":` + test.countJSON + `}`
+			}
+			line := `{"type":"session.shutdown","timestamp":"2026-01-01T00:00:00Z","data":{"sessionId":"session-zero","modelMetrics":{"gpt-5.4":{"usage":{"inputTokens":0,"outputTokens":0,"cacheReadTokens":0,"cacheWriteTokens":0,"reasoningTokens":0},"requests":` + requests + `}}}}`
+			path := filepath.Join(t.TempDir(), "events.jsonl")
+			if err := os.WriteFile(path, []byte(line), 0o644); err != nil {
+				t.Fatalf("write fixture: %v", err)
+			}
+			records, err := NewCopilotAdapter().ParseFile(path)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			if !test.wantEvent {
+				if len(records) != 0 {
+					t.Fatalf("expected zero-token metric without valid count to be skipped, got %d", len(records))
+				}
+				return
+			}
+			if len(records) != 1 {
+				t.Fatalf("expected 1 zero-token request event, got %d", len(records))
+			}
+			rec := records[0]
+			if rec.TotalTokens != 0 || rec.InputTokens != 0 || rec.OutputTokens != 0 {
+				t.Fatalf("expected zero tokens, got input=%d output=%d total=%d", rec.InputTokens, rec.OutputTokens, rec.TotalTokens)
+			}
+			if rec.RequestCount == nil || *rec.RequestCount != *test.wantCount {
+				t.Fatalf("request count=%v want=%d", rec.RequestCount, *test.wantCount)
+			}
+			if rec.FingerprintJSON == "" || rec.DedupeID == "" || rec.RawSHA256 == "" {
+				t.Fatalf("zero-token request event lost identity fields: %+v", rec)
+			}
+		})
+	}
+}
+
+func TestParseStrictNonNegativeInt64JSON(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want *int64
+	}{
+		{name: "zero", raw: "0", want: int64Ptr(0)},
+		{name: "positive", raw: "42", want: int64Ptr(42)},
+		{name: "max", raw: "9223372036854775807", want: int64Ptr(9223372036854775807)},
+		{name: "above float53", raw: "9007199254740993", want: int64Ptr(9007199254740993)},
+		{name: "negative", raw: "-1"},
+		{name: "fraction", raw: "1.0"},
+		{name: "exponent", raw: "1e2"},
+		{name: "string", raw: `"7"`},
+		{name: "bool", raw: "false"},
+		{name: "null", raw: "null"},
+		{name: "overflow", raw: "9223372036854775808"},
+		{name: "empty", raw: ""},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := parseStrictNonNegativeInt64JSON(json.RawMessage(test.raw))
+			if test.want == nil {
+				if got != nil {
+					t.Fatalf("expected nil, got %d", *got)
+				}
+				return
+			}
+			if got == nil || *got != *test.want {
+				t.Fatalf("got %v want %d", got, *test.want)
+			}
+		})
 	}
 }
 
