@@ -97,8 +97,8 @@ func (a *WorkBuddyAdapter) ParseFileWithWarnings(path string) ([]*fingerprint.Pa
 
 		obj, ok := decodeWorkBuddyObject(line)
 		if !ok {
-			// A malformed JSONL entry must not prevent subsequent request usage
-			// entries in the same session from being imported.
+			// A malformed or non-usage JSONL entry must not prevent subsequent
+			// request usage entries in the same session from being imported.
 			diagnostics.add(lineNumber, "invalid_json")
 			continue
 		}
@@ -183,6 +183,14 @@ func workBuddyRecordFromObject(obj map[string]interface{}, path string, lineNumb
 	requestModelID := getString(providerData, "requestModelId")
 	requestModelName := getString(providerData, "requestModelName")
 	routeKind := workBuddyRouteKind(requestModelID)
+	modelNormalized := normalizeWorkBuddyModel(modelRaw)
+	modelResolution := model.ModelResolutionDirectEvent
+	modelIsFallback := false
+	if strings.EqualFold(strings.TrimSpace(modelNormalized), "auto") {
+		modelNormalized = "unknown"
+		modelResolution = model.ModelResolutionUnknown
+		modelIsFallback = true
+	}
 	observability := "full"
 	if !hasCacheRead || !hasCacheWrite || !hasReasoning {
 		observability = "partial"
@@ -197,7 +205,9 @@ func workBuddyRecordFromObject(obj map[string]interface{}, path string, lineNumb
 		Agent:                 "workbuddy",
 		Provider:              workBuddyProvider(routeKind),
 		Model:                 modelRaw,
-		ModelNormalized:       normalizeWorkBuddyModel(modelRaw),
+		ModelNormalized:       modelNormalized,
+		ModelResolution:       modelResolution,
+		ModelIsFallback:       modelIsFallback,
 		TimestampMs:           normalizeEpoch(timestamp),
 		SessionID:             sessionID,
 		ProjectPath:           projectPath,

@@ -56,6 +56,7 @@ func (d *Database) FinishImportRunWithStatus(runID string, filesScanned, eventsA
 }
 
 func (d *Database) UpsertEvent(ev *model.UsageEvent) (string, error) {
+	ev.ModelResolution = modelResolutionForStorage(ev)
 	tx, err := d.conn.Begin()
 	if err != nil {
 		return "", err
@@ -111,6 +112,21 @@ func (d *Database) UpsertEvent(ev *model.UsageEvent) (string, error) {
 		}
 		return status, nil
 	}
+	if shouldReplaceWorkBuddyAutoModel(existing, ev) {
+		existing.Provider = ev.Provider
+		existing.ModelRaw = ev.ModelRaw
+		existing.ModelNormalized = ev.ModelNormalized
+		existing.ModelResolution = ev.ModelResolution
+		existing.ModelIsFallback = ev.ModelIsFallback
+		existing.UpdatedAtMs = ev.UpdatedAtMs
+		if err = updateEvent(tx, existing); err != nil {
+			return "", err
+		}
+		if err = tx.Commit(); err != nil {
+			return "", err
+		}
+		return "updated", nil
+	}
 	if existing == nil {
 		if err = insertEvent(tx, ev); err != nil {
 			return "", err
@@ -148,9 +164,19 @@ func (d *Database) UpsertEvent(ev *model.UsageEvent) (string, error) {
 	return "updated", nil
 }
 
+func shouldReplaceWorkBuddyAutoModel(existing, incoming *model.UsageEvent) bool {
+	return existing != nil && incoming != nil &&
+		incoming.Channel == "workbuddy" && existing.Channel == "workbuddy" &&
+		strings.EqualFold(strings.TrimSpace(existing.ModelRaw), "auto") &&
+		strings.EqualFold(strings.TrimSpace(incoming.ModelRaw), "auto") &&
+		strings.EqualFold(strings.TrimSpace(existing.ModelNormalized), "auto") &&
+		strings.EqualFold(strings.TrimSpace(incoming.ModelNormalized), "unknown") &&
+		incoming.ModelIsFallback && incoming.ModelResolution == model.ModelResolutionUnknown
+}
+
 const eventComparisonColumns = `
     event_id, dedupe_key, dedupe_strategy,
-    channel, COALESCE(provider, ''), COALESCE(model_raw, ''), COALESCE(model_normalized, ''),
+    channel, COALESCE(provider, ''), COALESCE(model_raw, ''), COALESCE(model_normalized, ''), COALESCE(model_resolution, ''),
     COALESCE(source_agent, ''), COALESCE(source_product, ''), COALESCE(observability_level, ''), model_is_fallback,
     source_total_tokens, raw_input_tokens, COALESCE(token_accounting_method, ''), COALESCE(accounting_profile, ''),
     timestamp_ms, COALESCE(session_id, ''), COALESCE(session_path_id, ''), COALESCE(turn_id, ''), COALESCE(project_path, ''),
@@ -564,6 +590,7 @@ func codexClassificationNeedsReconciliation(existing, incoming *model.UsageEvent
 	classificationChanged := existing.Provider != incoming.Provider ||
 		existing.ModelRaw != incoming.ModelRaw ||
 		existing.ModelNormalized != incoming.ModelNormalized ||
+		existing.ModelResolution != incoming.ModelResolution ||
 		existing.ModelIsFallback != incoming.ModelIsFallback
 	if !classificationChanged {
 		return false
@@ -581,6 +608,7 @@ func preserveStrongerCodexClassification(target, incoming, exact *model.UsageEve
 	modelSource := selectCodexModel(incoming, exact, stored)
 	target.ModelRaw = modelSource.ModelRaw
 	target.ModelNormalized = modelSource.ModelNormalized
+	target.ModelResolution = modelSource.ModelResolution
 	target.ModelIsFallback = modelSource.ModelIsFallback
 }
 
@@ -617,10 +645,36 @@ func selectCodexModel(incoming, exact *model.UsageEvent, stored []*model.UsageEv
 	if hasExplicitCodexModel(incoming) {
 		return incoming
 	}
+	if shouldReplaceLegacyCodexDefaultFallback(incoming, exact, stored) {
+		return incoming
+	}
 	if candidate := selectBestStoredCodexClassification(exact, stored, hasKnownCodexModel); candidate != nil {
 		return candidate
 	}
 	return incoming
+}
+
+func shouldReplaceLegacyCodexDefaultFallback(incoming, exact *model.UsageEvent, stored []*model.UsageEvent) bool {
+	if incoming == nil || !incoming.ModelIsFallback ||
+		!strings.EqualFold(strings.TrimSpace(incoming.ModelRaw), "unknown") ||
+		!strings.EqualFold(strings.TrimSpace(incoming.ModelNormalized), "unknown") {
+		return false
+	}
+	foundLegacyDefault := false
+	for _, candidate := range append([]*model.UsageEvent{exact}, stored...) {
+		if candidate == nil || !candidate.ModelIsFallback {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(candidate.ModelRaw), "gpt-5") &&
+			strings.EqualFold(strings.TrimSpace(candidate.ModelNormalized), "gpt-5") {
+			foundLegacyDefault = true
+			continue
+		}
+		if hasKnownCodexModel(candidate) {
+			return false
+		}
+	}
+	return foundLegacyDefault
 }
 
 func selectBestStoredCodexClassification(exact *model.UsageEvent, stored []*model.UsageEvent, eligible func(*model.UsageEvent) bool) *model.UsageEvent {
@@ -680,6 +734,7 @@ func preserveStrongerExactCodexClassification(existing, incoming *model.UsageEve
 	if candidate.Provider == incoming.Provider &&
 		candidate.ModelRaw == incoming.ModelRaw &&
 		candidate.ModelNormalized == incoming.ModelNormalized &&
+		candidate.ModelResolution == incoming.ModelResolution &&
 		candidate.ModelIsFallback == incoming.ModelIsFallback {
 		return incoming, false
 	}
@@ -728,6 +783,7 @@ func scanEventForComparison(row eventComparisonScanner, additionalDestinations .
 		&ev.Provider,
 		&ev.ModelRaw,
 		&ev.ModelNormalized,
+		&ev.ModelResolution,
 		&ev.SourceAgent,
 		&ev.SourceProduct,
 		&ev.ObservabilityLevel,
@@ -817,7 +873,7 @@ func insertEvent(exec interface {
 	_, err := exec.Exec(`
         INSERT INTO usage_events (
             event_id, dedupe_key, dedupe_strategy,
-            channel, provider, model_raw, model_normalized,
+            channel, provider, model_raw, model_normalized, model_resolution,
             source_agent, source_product, observability_level, model_is_fallback, source_total_tokens, raw_input_tokens, token_accounting_method, accounting_profile,
             timestamp_ms, session_id, session_path_id, turn_id, project_path, message_id, request_id, source_file, line_number, raw_sha256,
             input_tokens, output_tokens, reasoning_tokens, cache_creation_tokens, cache_read_tokens, total_tokens,
@@ -826,7 +882,7 @@ func insertEvent(exec interface {
             imported_at_ms, updated_at_ms
         ) VALUES (
             ?, ?, ?,
-            ?, ?, ?, ?,
+            ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?,
@@ -845,7 +901,7 @@ func updateEvent(tx *sql.Tx, ev *model.UsageEvent) error {
 func updateEventByID(tx *sql.Tx, existingEventID string, ev *model.UsageEvent) error {
 	args := []any{
 		ev.EventID, ev.DedupeKey, ev.DedupeStrategy,
-		ev.Channel, ev.Provider, ev.ModelRaw, ev.ModelNormalized,
+		ev.Channel, ev.Provider, ev.ModelRaw, ev.ModelNormalized, modelResolutionForStorage(ev),
 		nullIfEmpty(ev.SourceAgent), nullIfEmpty(ev.SourceProduct), nullIfEmpty(ev.ObservabilityLevel), boolToInt(ev.ModelIsFallback), nullableInt64(ev.SourceTotalTokens), nullableInt64(ev.RawInputTokens), nullIfEmpty(ev.TokenAccountingMethod), nullIfEmpty(ev.AccountingProfile),
 		ev.TimestampMs, ev.SessionID, ev.SessionPathID, ev.TurnID, ev.ProjectPath, ev.MessageID, ev.RequestID, ev.SourceFile, ev.LineNumber, ev.RawSHA256,
 		ev.InputTokens, ev.OutputTokens, ev.ReasoningTokens, ev.CacheCreationTokens, ev.CacheReadTokens, ev.TotalTokens,
@@ -857,7 +913,7 @@ func updateEventByID(tx *sql.Tx, existingEventID string, ev *model.UsageEvent) e
 	_, err := tx.Exec(`
         UPDATE usage_events SET
             event_id = ?, dedupe_key = ?, dedupe_strategy = ?,
-            channel = ?, provider = ?, model_raw = ?, model_normalized = ?,
+            channel = ?, provider = ?, model_raw = ?, model_normalized = ?, model_resolution = ?,
             source_agent = ?, source_product = ?, observability_level = ?, model_is_fallback = ?, source_total_tokens = ?, raw_input_tokens = ?, token_accounting_method = ?, accounting_profile = ?,
             timestamp_ms = ?, session_id = ?, session_path_id = ?, turn_id = ?, project_path = ?, message_id = ?, request_id = ?, source_file = ?, line_number = ?, raw_sha256 = ?,
             input_tokens = ?, output_tokens = ?, reasoning_tokens = ?, cache_creation_tokens = ?, cache_read_tokens = ?, total_tokens = ?,
@@ -876,6 +932,7 @@ func updateEventMetadata(tx *sql.Tx, ev *model.UsageEvent) error {
             source_product = ?,
             observability_level = ?,
             model_is_fallback = ?,
+            model_resolution = ?,
             source_total_tokens = ?,
             raw_input_tokens = ?,
             token_accounting_method = ?,
@@ -890,6 +947,7 @@ func updateEventMetadata(tx *sql.Tx, ev *model.UsageEvent) error {
 		nullIfEmpty(ev.SourceProduct),
 		nullIfEmpty(ev.ObservabilityLevel),
 		boolToInt(ev.ModelIsFallback),
+		modelResolutionForStorage(ev),
 		nullableInt64(ev.SourceTotalTokens),
 		nullableInt64(ev.RawInputTokens),
 		nullIfEmpty(ev.TokenAccountingMethod),
@@ -911,7 +969,7 @@ func deleteEventByID(tx *sql.Tx, eventID string) error {
 func eventArgs(ev *model.UsageEvent) []any {
 	return []any{
 		ev.EventID, ev.DedupeKey, ev.DedupeStrategy,
-		ev.Channel, ev.Provider, ev.ModelRaw, ev.ModelNormalized,
+		ev.Channel, ev.Provider, ev.ModelRaw, ev.ModelNormalized, modelResolutionForStorage(ev),
 		nullIfEmpty(ev.SourceAgent), nullIfEmpty(ev.SourceProduct), nullIfEmpty(ev.ObservabilityLevel), boolToInt(ev.ModelIsFallback), nullableInt64(ev.SourceTotalTokens), nullableInt64(ev.RawInputTokens), nullIfEmpty(ev.TokenAccountingMethod), nullIfEmpty(ev.AccountingProfile),
 		ev.TimestampMs, ev.SessionID, ev.SessionPathID, ev.TurnID, ev.ProjectPath, ev.MessageID, ev.RequestID, ev.SourceFile, ev.LineNumber, ev.RawSHA256,
 		ev.InputTokens, ev.OutputTokens, ev.ReasoningTokens, ev.CacheCreationTokens, ev.CacheReadTokens, ev.TotalTokens,
@@ -919,6 +977,16 @@ func eventArgs(ev *model.UsageEvent) []any {
 		ev.RecordedCostUSD, ev.RawUsageJSON,
 		ev.ImportedAtMs, ev.UpdatedAtMs,
 	}
+}
+
+func modelResolutionForStorage(ev *model.UsageEvent) string {
+	if value := strings.TrimSpace(ev.ModelResolution); value != "" {
+		return value
+	}
+	if ev.ModelIsFallback || !hasKnownCodexModel(ev) {
+		return model.ModelResolutionUnknown
+	}
+	return model.ModelResolutionLegacyUnclassified
 }
 
 // MergeFrom attaches another v2 .aldb database and imports unseen events.
@@ -974,7 +1042,7 @@ func (d *Database) MergeFrom(incomingPath string) (inserted int64, skipped int64
 	query := fmt.Sprintf(`
         INSERT OR IGNORE INTO usage_events (
             event_id, dedupe_key, dedupe_strategy,
-            channel, provider, model_raw, model_normalized,
+            channel, provider, model_raw, model_normalized, model_resolution,
             source_agent, source_product, observability_level, model_is_fallback, source_total_tokens, raw_input_tokens, token_accounting_method, accounting_profile,
             timestamp_ms, session_id, session_path_id, turn_id, project_path, message_id, request_id, source_file, line_number, raw_sha256,
             input_tokens, output_tokens, reasoning_tokens, cache_creation_tokens, cache_read_tokens, total_tokens,
@@ -984,7 +1052,7 @@ func (d *Database) MergeFrom(incomingPath string) (inserted int64, skipped int64
         )
         SELECT
             event_id, dedupe_key, dedupe_strategy,
-            channel, provider, model_raw, model_normalized,
+            channel, provider, model_raw, model_normalized, %s,
             %s, %s, %s, %s, %s, %s, %s, %s,
             timestamp_ms, session_id, %s, %s, project_path, message_id, request_id, source_file, line_number, raw_sha256,
             input_tokens, output_tokens, reasoning_tokens, cache_creation_tokens, cache_read_tokens, total_tokens,
@@ -992,7 +1060,7 @@ func (d *Database) MergeFrom(incomingPath string) (inserted int64, skipped int64
             recorded_cost_usd, raw_usage_json,
             imported_at_ms, updated_at_ms
         FROM incoming.usage_events
-    `, selects.sourceAgent, selects.sourceProduct, selects.observabilityLevel, selects.modelIsFallback, selects.sourceTotalTokens, selects.rawInputTokens, selects.tokenAccountingMethod, selects.accountingProfile, selects.sessionPathID, selects.turnID)
+    `, selects.modelResolution, selects.sourceAgent, selects.sourceProduct, selects.observabilityLevel, selects.modelIsFallback, selects.sourceTotalTokens, selects.rawInputTokens, selects.tokenAccountingMethod, selects.accountingProfile, selects.sessionPathID, selects.turnID)
 	result, err := d.conn.Exec(query)
 	if err != nil {
 		return 0, 0, fmt.Errorf("failed to merge events: %w", err)
@@ -1003,6 +1071,7 @@ func (d *Database) MergeFrom(incomingPath string) (inserted int64, skipped int64
 }
 
 type incomingSelects struct {
+	modelResolution       string
 	sourceAgent           string
 	sourceProduct         string
 	observabilityLevel    string
@@ -1020,6 +1089,7 @@ func incomingCompatibilitySelects(conn *sql.DB) (incomingSelects, error) {
 		return attachedColumnExists(conn, "incoming", "usage_events", column)
 	}
 	selects := incomingSelects{
+		modelResolution:       "'legacy_unclassified'",
 		sourceAgent:           "channel",
 		sourceProduct:         "NULL",
 		observabilityLevel:    "'unknown'",
@@ -1036,6 +1106,7 @@ func incomingCompatibilitySelects(conn *sql.DB) (incomingSelects, error) {
 		set    func()
 	}{
 		{"source_agent", func() { selects.sourceAgent = "COALESCE(NULLIF(source_agent, ''), channel)" }},
+		{"model_resolution", func() { selects.modelResolution = "COALESCE(NULLIF(model_resolution, ''), 'legacy_unclassified')" }},
 		{"source_product", func() { selects.sourceProduct = "source_product" }},
 		{"observability_level", func() { selects.observabilityLevel = "COALESCE(NULLIF(observability_level, ''), 'unknown')" }},
 		{"model_is_fallback", func() { selects.modelIsFallback = "model_is_fallback" }},
@@ -1133,6 +1204,13 @@ func mergeMissingMetadata(target, candidate *model.UsageEvent) bool {
 		target.ObservabilityLevel = candidate.ObservabilityLevel
 		changed = true
 	}
+	if target.ModelRaw == candidate.ModelRaw &&
+		target.ModelNormalized == candidate.ModelNormalized &&
+		target.ModelIsFallback == candidate.ModelIsFallback &&
+		modelResolutionRank(candidate.ModelResolution) > modelResolutionRank(target.ModelResolution) {
+		target.ModelResolution = candidate.ModelResolution
+		changed = true
+	}
 	if !target.ModelIsFallback && candidate.ModelIsFallback {
 		target.ModelIsFallback = true
 		changed = true
@@ -1174,6 +1252,21 @@ func mergeMissingMetadata(target, candidate *model.UsageEvent) bool {
 		target.UpdatedAtMs = candidate.UpdatedAtMs
 	}
 	return changed
+}
+
+func modelResolutionRank(value string) int {
+	switch strings.TrimSpace(value) {
+	case model.ModelResolutionDirectEvent:
+		return 4
+	case model.ModelResolutionThreadSettings, model.ModelResolutionTurnContext:
+		return 3
+	case model.ModelResolutionUnknown:
+		return 2
+	case model.ModelResolutionLegacyUnclassified, "":
+		return 1
+	default:
+		return 1
+	}
 }
 
 func sameTokenUsage(left, right *model.UsageEvent) bool {

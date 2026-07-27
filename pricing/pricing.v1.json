@@ -1,28 +1,242 @@
 {
   "schema_version": 1,
-  "id": "agentledger-pricing-2026-07-01",
+  "id": "agentledger-pricing-2026-07-25",
   "currency": "USD",
   "unit": "usd_per_1m_tokens",
-  "checked_at": "2026-07-01",
+  "checked_at": "2026-07-25",
   "defaults": {
-    "unknown_model_policy": "missing",
+    "unknown_model_policy": "zero",
     "reasoning_policy": "included_in_output",
     "cache_write_assumption": "treat_as_input",
     "confidence": "estimated"
   },
   "sources": [
     {
+      "provider": "openai",
+      "name": "OpenAI API pricing",
+      "url": "https://developers.openai.com/api/docs/pricing",
+      "checked_at": "2026-07-20"
+    },
+    {
+      "provider": "zai",
+      "name": "Z.AI model pricing",
+      "url": "https://docs.z.ai/guides/overview/pricing",
+      "checked_at": "2026-07-22"
+    },
+    {
+      "provider": "kimi",
+      "name": "Kimi model pricing",
+      "url": "https://platform.kimi.ai/docs/pricing/chat",
+      "checked_at": "2026-07-23"
+    },
+    {
+      "provider": "xai",
+      "name": "xAI Grok 4.5 pricing",
+      "url": "https://docs.x.ai/developers/models/grok-4.5",
+      "checked_at": "2026-07-23"
+    },
+    {
+      "provider": "anthropic",
+      "name": "Anthropic Claude pricing",
+      "url": "https://www.anthropic.com/pricing",
+      "checked_at": "2026-07-25"
+    },
+    {
       "provider": "model_id",
-      "name": "Official model list prices by model ID",
+      "name": "Existing official model list prices by model ID",
       "checked_at": "2026-06-01"
     },
     {
       "provider": "user_supplied",
-      "name": "User supplied model list prices for Claude Fable, Kimi K2.5, Doubao Seed, and Grok Composer",
-      "checked_at": "2026-07-01"
+      "name": "User supplied model list prices and official-source summary for Claude, Kimi, Doubao, and Grok models",
+      "checked_at": "2026-07-25"
     }
   ],
   "rules": [
+    {
+      "id": "unknown",
+      "model_patterns": [
+        "unknown"
+      ],
+      "priority": 1000,
+      "basis": "unknown_model_zero_policy",
+      "rates": {
+        "input": 0,
+        "cached_input": 0,
+        "cache_write": 0,
+        "output": 0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "policy",
+      "notes": "Events without a source model ID use a local zero-value policy. This is not an official free model price and does not count as priced coverage.",
+      "model_id": "unknown",
+      "as_of": "2026-07-25"
+    },
+    {
+      "id": "gpt-5.6-sol-long",
+      "model_patterns": [
+        "gpt-5.6-sol",
+        "gpt-5.6"
+      ],
+      "priority": 100,
+      "basis": "official_model_list_price",
+      "condition": {
+        "min_input_side_tokens": 272000
+      },
+      "rates": {
+        "input": 10.0,
+        "cached_input": 1.0,
+        "cache_write": 12.5,
+        "output": 45.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "At 272000 full input-side tokens, the long-context rate applies to the entire request.",
+      "model_id": "gpt-5.6-sol",
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
+      "as_of": "2026-07-20"
+    },
+    {
+      "id": "gpt-5.6-sol",
+      "model_patterns": [
+        "gpt-5.6-sol",
+        "gpt-5.6"
+      ],
+      "priority": 30,
+      "basis": "official_model_list_price",
+      "rates": {
+        "input": 5.0,
+        "cached_input": 0.5,
+        "cache_write": 6.25,
+        "output": 30.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "model_id": "gpt-5.6-sol",
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
+      "as_of": "2026-07-20"
+    },
+    {
+      "id": "gpt-5.6-terra-long",
+      "model_patterns": [
+        "gpt-5.6-terra"
+      ],
+      "priority": 100,
+      "basis": "official_model_list_price",
+      "condition": {
+        "min_input_side_tokens": 272000
+      },
+      "rates": {
+        "input": 5.0,
+        "cached_input": 0.5,
+        "cache_write": 6.25,
+        "output": 22.5
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "At 272000 full input-side tokens, the long-context rate applies to the entire request.",
+      "model_id": "gpt-5.6-terra",
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/models/gpt-5.6-terra",
+      "as_of": "2026-07-20"
+    },
+    {
+      "id": "gpt-5.6-terra",
+      "model_patterns": [
+        "gpt-5.6-terra"
+      ],
+      "priority": 30,
+      "basis": "official_model_list_price",
+      "rates": {
+        "input": 2.5,
+        "cached_input": 0.25,
+        "cache_write": 3.125,
+        "output": 15.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "model_id": "gpt-5.6-terra",
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/models/gpt-5.6-terra",
+      "as_of": "2026-07-20"
+    },
+    {
+      "id": "gpt-5.6-luna-long",
+      "model_patterns": [
+        "gpt-5.6-luna"
+      ],
+      "priority": 100,
+      "basis": "official_model_list_price",
+      "condition": {
+        "min_input_side_tokens": 272000
+      },
+      "rates": {
+        "input": 2.0,
+        "cached_input": 0.2,
+        "cache_write": 2.5,
+        "output": 9.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "At 272000 full input-side tokens, the long-context rate applies to the entire request.",
+      "model_id": "gpt-5.6-luna",
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/models/gpt-5.6-luna",
+      "as_of": "2026-07-20"
+    },
+    {
+      "id": "gpt-5.6-luna",
+      "model_patterns": [
+        "gpt-5.6-luna"
+      ],
+      "priority": 30,
+      "basis": "official_model_list_price",
+      "rates": {
+        "input": 1.0,
+        "cached_input": 0.1,
+        "cache_write": 1.25,
+        "output": 6.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "model_id": "gpt-5.6-luna",
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/models/gpt-5.6-luna",
+      "as_of": "2026-07-20"
+    },
+    {
+      "id": "gpt-5.5-long",
+      "model_patterns": [
+        "gpt-5.5"
+      ],
+      "priority": 100,
+      "basis": "official_model_list_price",
+      "condition": {
+        "min_input_side_tokens": 272000
+      },
+      "rates": {
+        "input": 10.0,
+        "cached_input": 1.0,
+        "output": 45.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "At 272000 full input-side tokens, the long-context rate applies to the entire request.",
+      "model_id": "gpt-5.5",
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/models/gpt-5.5",
+      "as_of": "2026-07-20"
+    },
     {
       "id": "gpt-5.5",
       "model_patterns": [
@@ -39,7 +253,34 @@
       "reasoning_policy": "included_in_output",
       "cache_write_assumption": "treat_as_input",
       "confidence": "estimated",
-      "model_id": "gpt-5.5"
+      "model_id": "gpt-5.5",
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/models/gpt-5.5",
+      "as_of": "2026-07-20"
+    },
+    {
+      "id": "gpt-5.4-long",
+      "model_patterns": [
+        "gpt-5.4"
+      ],
+      "priority": 100,
+      "basis": "official_model_list_price",
+      "condition": {
+        "min_input_side_tokens": 272000
+      },
+      "rates": {
+        "input": 5.0,
+        "cached_input": 0.5,
+        "output": 22.5
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "At 272000 full input-side tokens, the long-context rate applies to the entire request.",
+      "model_id": "gpt-5.4",
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/models/gpt-5.4",
+      "as_of": "2026-07-20"
     },
     {
       "id": "gpt-5.4",
@@ -57,7 +298,10 @@
       "reasoning_policy": "included_in_output",
       "cache_write_assumption": "treat_as_input",
       "confidence": "estimated",
-      "model_id": "gpt-5.4"
+      "model_id": "gpt-5.4",
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/models/gpt-5.4",
+      "as_of": "2026-07-20"
     },
     {
       "id": "gpt-5.4-mini",
@@ -76,6 +320,27 @@
       "cache_write_assumption": "treat_as_input",
       "confidence": "estimated",
       "model_id": "gpt-5.4-mini"
+    },
+    {
+      "id": "gpt-5.3-codex-spark",
+      "model_patterns": [
+        "gpt-5.3-codex-spark"
+      ],
+      "priority": 100,
+      "basis": "official_model_list_price",
+      "rates": {
+        "input": 0,
+        "cached_input": 0,
+        "cache_write": 0,
+        "output": 0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Explicit free rate card; zero is intentional and does not represent missing pricing.",
+      "model_id": "gpt-5.3-codex-spark",
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "as_of": "2026-07-25"
     },
     {
       "id": "gpt-5.3-codex",
@@ -132,6 +397,48 @@
       "cache_write_assumption": "treat_as_input",
       "confidence": "estimated",
       "model_id": "gpt-4.1"
+    },
+    {
+      "id": "claude-sonnet-5-intro",
+      "model_patterns": [
+        "claude-sonnet-5"
+      ],
+      "priority": 100,
+      "basis": "user_provided_official_summary",
+      "effective_to": "2026-08-31",
+      "rates": {
+        "input": 2.0,
+        "cached_input": 0.2,
+        "output": 10.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Intro pricing through 2026-08-31. No long-context uplift. Cache creation uses the input rate because a cache-write TTL rate was not supplied.",
+      "model_id": "claude-sonnet-5",
+      "source_url": "https://www.anthropic.com/pricing",
+      "as_of": "2026-07-25"
+    },
+    {
+      "id": "claude-sonnet-5-standard",
+      "model_patterns": [
+        "claude-sonnet-5"
+      ],
+      "priority": 100,
+      "basis": "user_provided_official_summary",
+      "effective_from": "2026-09-01",
+      "rates": {
+        "input": 3.0,
+        "cached_input": 0.3,
+        "output": 15.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Standard pricing from 2026-09-01. No long-context uplift. Cached input is estimated at 10% of input; cache creation uses the input rate pending an explicit TTL rate.",
+      "model_id": "claude-sonnet-5",
+      "source_url": "https://www.anthropic.com/pricing",
+      "as_of": "2026-07-25"
     },
     {
       "id": "claude-opus-4",
@@ -272,6 +579,183 @@
       "confidence": "estimated",
       "notes": "User supplied input 3.00, cached input 0.50, output 15.00 USD per 1M tokens.",
       "model_id": "grok-composer-2.5-fast"
+    },
+    {
+      "id": "glm-5.2",
+      "model_patterns": [
+        "glm-5.2"
+      ],
+      "priority": 30,
+      "basis": "official_model_list_price",
+      "rates": {
+        "input": 1.4,
+        "cached_input": 0.26,
+        "cache_write": 0,
+        "output": 4.4
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "The source lists cache-write storage as temporarily free; explicit zero is intentional.",
+      "model_id": "glm-5.2",
+      "source_url": "https://docs.z.ai/guides/overview/pricing",
+      "pricing_notes_url": "https://docs.z.ai/guides/llm/glm-5.2",
+      "as_of": "2026-07-22"
+    },
+    {
+      "id": "kimi-k3",
+      "model_patterns": [
+        "kimi-k3",
+        "k3"
+      ],
+      "priority": 30,
+      "basis": "official_model_list_price",
+      "rates": {
+        "input": 3.0,
+        "cached_input": 0.3,
+        "output": 15.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "model_id": "kimi-k3",
+      "source_url": "https://platform.kimi.ai/docs/pricing/chat-k3",
+      "pricing_notes_url": "https://platform.kimi.ai/docs/guide/kimi-k3-quickstart",
+      "as_of": "2026-07-23"
+    },
+    {
+      "id": "kimi-k2.7-code",
+      "model_patterns": [
+        "kimi-k2.7-code",
+        "kimi-for-coding"
+      ],
+      "priority": 30,
+      "basis": "official_model_list_price",
+      "rates": {
+        "input": 0.95,
+        "cached_input": 0.19,
+        "output": 4.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "model_id": "kimi-k2.7-code",
+      "source_url": "https://platform.kimi.ai/docs/pricing/chat-k27-code",
+      "pricing_notes_url": "https://platform.kimi.ai/docs/guide/kimi-k2-7-code-quickstart",
+      "as_of": "2026-07-23"
+    },
+    {
+      "id": "kimi-k2.7-code-highspeed",
+      "model_patterns": [
+        "kimi-k2.7-code-highspeed",
+        "kimi-for-coding-highspee",
+        "kimi-for-coding-highspeed"
+      ],
+      "priority": 30,
+      "basis": "official_model_list_price",
+      "rates": {
+        "input": 1.9,
+        "cached_input": 0.38,
+        "output": 8.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "model_id": "kimi-k2.7-code-highspeed",
+      "source_url": "https://platform.kimi.ai/docs/pricing/chat-k27-code",
+      "pricing_notes_url": "https://platform.kimi.ai/docs/guide/kimi-k2-7-code-quickstart",
+      "as_of": "2026-07-23"
+    },
+    {
+      "id": "grok-4.5-long",
+      "model_patterns": [
+        "grok-4.5",
+        "grok-4.5-build",
+        "grok-4.5-latest",
+        "grok-build-latest"
+      ],
+      "priority": 100,
+      "basis": "official_model_list_price",
+      "condition": {
+        "min_input_side_tokens": 200000
+      },
+      "rates": {
+        "input": 4.0,
+        "cached_input": 0.6,
+        "output": 12.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "At 200000 full input-side tokens, the long-context rate applies to the entire request.",
+      "model_id": "grok-4.5",
+      "source_url": "https://docs.x.ai/developers/models/grok-4.5",
+      "as_of": "2026-07-23"
+    },
+    {
+      "id": "grok-4.5",
+      "model_patterns": [
+        "grok-4.5",
+        "grok-4.5-build",
+        "grok-4.5-latest",
+        "grok-build-latest"
+      ],
+      "priority": 30,
+      "basis": "official_model_list_price",
+      "rates": {
+        "input": 2.0,
+        "cached_input": 0.3,
+        "output": 6.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "model_id": "grok-4.5",
+      "source_url": "https://docs.x.ai/developers/models/grok-4.5",
+      "as_of": "2026-07-23"
+    },
+    {
+      "id": "grok-4.3-long",
+      "model_patterns": [
+        "grok-4.3"
+      ],
+      "priority": 100,
+      "basis": "user_provided_official_summary",
+      "condition": {
+        "min_input_side_tokens": 200000
+      },
+      "rates": {
+        "input": 2.5,
+        "cached_input": 0.4,
+        "output": 5.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "At 200000 full input-side tokens, the long-context rate applies to the entire request. Batch discount and tool-call fees are outside token pricing.",
+      "model_id": "grok-4.3",
+      "source_url": "https://x.ai/docs/developers/pricing",
+      "as_of": "2026-07-25"
+    },
+    {
+      "id": "grok-4.3",
+      "model_patterns": [
+        "grok-4.3"
+      ],
+      "priority": 30,
+      "basis": "user_provided_official_summary",
+      "rates": {
+        "input": 1.25,
+        "cached_input": 0.2,
+        "output": 2.5
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Batch discount and tool-call fees are outside token pricing.",
+      "model_id": "grok-4.3",
+      "source_url": "https://x.ai/docs/developers/pricing",
+      "as_of": "2026-07-25"
     },
     {
       "id": "gemini-3.1-pro",

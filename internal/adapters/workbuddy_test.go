@@ -78,7 +78,7 @@ func TestWorkBuddyAdapterPartialUsageAndAliases(t *testing.T) {
 	if records[1].ModelNormalized != "kimi-k3" || records[1].ObservabilityLevel != "partial" {
 		t.Fatalf("unexpected kimi record: %#v", records[1])
 	}
-	if records[2].ModelNormalized != "auto" || records[2].Provider != "workbuddy" || records[2].ObservabilityLevel != "full" {
+	if records[2].Model != "auto" || records[2].ModelNormalized != "unknown" || records[2].ModelResolution != model.ModelResolutionUnknown || !records[2].ModelIsFallback || records[2].Provider != "workbuddy" || records[2].ObservabilityLevel != "full" {
 		t.Fatalf("unexpected auto record: %#v", records[2])
 	}
 	if records[3].ModelNormalized != "other-model-v9" {
@@ -199,7 +199,7 @@ func TestWorkBuddyLiveCorpus(t *testing.T) {
 			if rec.Provider == "custom" {
 				custom++
 			}
-			if rec.ModelNormalized == "auto" {
+			if rec.Model == "auto" && rec.ModelNormalized == "unknown" {
 				auto++
 			}
 			if rec.Agent != "workbuddy" || rec.SourceProduct != "workbuddy" || rec.DedupeID == "" || rec.ProjectPath == "" || rec.TotalTokens <= 0 {

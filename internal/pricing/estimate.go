@@ -10,6 +10,7 @@ type Estimate struct {
 	RuleID        string
 	Basis         string
 	Confidence    string
+	Resolution    string
 	Priced        bool
 	MissingReason string
 }
@@ -21,19 +22,25 @@ func (e *Estimator) Estimate(ev Event) (Estimate, error) {
 
 func (e *Estimator) EstimateMatch(ev Event, match Match) (Estimate, error) {
 	if match.Rule == nil {
-		return Estimate{Confidence: "missing", MissingReason: match.MissingReason}, nil
+		return Estimate{Confidence: "missing", Resolution: match.Resolution, MissingReason: match.MissingReason}, nil
 	}
 	cost, err := estimateWithRule(ev, match.Rule, e.profile)
 	if err != nil {
 		return Estimate{}, err
 	}
-	return Estimate{
+	estimate := Estimate{
 		CostMicroUSD: cost,
 		RuleID:       match.RuleID,
 		Basis:        match.Basis,
 		Confidence:   match.Confidence,
 		Priced:       true,
-	}, nil
+		Resolution:   match.Resolution,
+	}
+	if match.Resolution == ResolutionPolicyZero {
+		estimate.Priced = false
+		estimate.MissingReason = ResolutionMissingModel
+	}
+	return estimate, nil
 }
 
 func estimateWithRule(ev Event, rule *Rule, profile *Profile) (int64, error) {

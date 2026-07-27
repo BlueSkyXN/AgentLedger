@@ -508,10 +508,14 @@ func newReportCostAccumulator(estimator *pricing.Estimator, profile *pricing.Pro
 func (a *reportCostAccumulator) Add(ev pricing.Event) error {
 	match := a.estimator.Resolve(ev)
 	if match.Rule == nil {
-		a.coverage.Add(ev, pricing.Estimate{Confidence: "missing", MissingReason: match.MissingReason})
+		a.coverage.Add(ev, pricing.Estimate{Confidence: "missing", Resolution: match.Resolution, MissingReason: match.MissingReason})
 		return nil
 	}
-	a.coverage.Add(ev, pricing.Estimate{Priced: true, Confidence: match.Confidence})
+	if match.Resolution == pricing.ResolutionPolicyZero {
+		a.coverage.Add(ev, pricing.Estimate{Confidence: match.Confidence, Resolution: match.Resolution, MissingReason: pricing.ResolutionMissingModel})
+		return nil
+	}
+	a.coverage.Add(ev, pricing.Estimate{Priced: true, Confidence: match.Confidence, Resolution: match.Resolution})
 	bucket := a.buckets[match.RuleID]
 	if bucket == nil {
 		copied := ev

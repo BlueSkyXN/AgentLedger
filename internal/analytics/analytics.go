@@ -96,6 +96,7 @@ type Event struct {
 	Provider            *string  `json:"provider"`
 	ModelRaw            *string  `json:"model_raw"`
 	ModelNormalized     *string  `json:"model_normalized"`
+	ModelResolution     *string  `json:"model_resolution"`
 	Timestamp           *string  `json:"timestamp"`
 	SessionID           *string  `json:"session_id"`
 	SessionPathID       *string  `json:"session_path_id"`
@@ -438,7 +439,7 @@ func addFilters(query string, args *[]any, filters Filters, timestampExpr string
 }
 
 func eventSelect() string {
-	return `SELECT event_id, dedupe_strategy, channel, provider, model_raw, model_normalized,
+	return `SELECT event_id, dedupe_strategy, channel, provider, model_raw, model_normalized, model_resolution,
 		timestamp_ms, session_id, session_path_id, turn_id, project_path, message_id, request_id,
 		` + effectiveInputTokensExpr() + `, COALESCE(output_tokens, 0),
 		COALESCE(cache_creation_tokens, 0), COALESCE(cache_read_tokens, 0), COALESCE(reasoning_tokens, 0),
@@ -459,7 +460,7 @@ func scanEvents(conn *sql.DB, query string, args ...any) ([]Event, error) {
 	var results []Event
 	for rows.Next() {
 		var item Event
-		var provider, modelRaw, modelNormalized, sessionID, sessionPathID, turnID, projectPath, messageID, requestID sql.NullString
+		var provider, modelRaw, modelNormalized, modelResolution, sessionID, sessionPathID, turnID, projectPath, messageID, requestID sql.NullString
 		var ts sql.NullInt64
 		var totalDuration, ttft, outputDuration sql.NullInt64
 		var outputTPS, recordedCost sql.NullFloat64
@@ -470,6 +471,7 @@ func scanEvents(conn *sql.DB, query string, args ...any) ([]Event, error) {
 			&provider,
 			&modelRaw,
 			&modelNormalized,
+			&modelResolution,
 			&ts,
 			&sessionID,
 			&sessionPathID,
@@ -494,6 +496,7 @@ func scanEvents(conn *sql.DB, query string, args ...any) ([]Event, error) {
 		item.Provider = nullableString(provider)
 		item.ModelRaw = nullableString(modelRaw)
 		item.ModelNormalized = nullableString(modelNormalized)
+		item.ModelResolution = nullableString(modelResolution)
 		item.SessionID = nullableString(sessionID)
 		item.SessionPathID = nullableString(sessionPathID)
 		item.TurnID = nullableString(turnID)
@@ -741,10 +744,14 @@ func newCostAccumulator(estimator *pricing.Estimator, profile *pricing.Profile) 
 func (a *costAccumulator) Add(ev pricing.Event) error {
 	match := a.estimator.Resolve(ev)
 	if match.Rule == nil {
-		a.coverage.Add(ev, pricing.Estimate{Confidence: "missing", MissingReason: match.MissingReason})
+		a.coverage.Add(ev, pricing.Estimate{Confidence: "missing", Resolution: match.Resolution, MissingReason: match.MissingReason})
 		return nil
 	}
-	a.coverage.Add(ev, pricing.Estimate{Priced: true, Confidence: match.Confidence})
+	if match.Resolution == pricing.ResolutionPolicyZero {
+		a.coverage.Add(ev, pricing.Estimate{Confidence: match.Confidence, Resolution: match.Resolution, MissingReason: pricing.ResolutionMissingModel})
+		return nil
+	}
+	a.coverage.Add(ev, pricing.Estimate{Priced: true, Confidence: match.Confidence, Resolution: match.Resolution})
 	bucket := a.buckets[match.RuleID]
 	if bucket == nil {
 		copied := ev

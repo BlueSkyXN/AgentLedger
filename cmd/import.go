@@ -193,6 +193,15 @@ func importParsedRecords(database *db.Database, adapterName string, records []*f
 		if rec.ModelNormalized != "" {
 			normalized = rec.ModelNormalized
 		}
+		modelResolution := rec.ModelResolution
+		if modelResolution == "" {
+			switch {
+			case rec.ModelIsFallback || strings.EqualFold(strings.TrimSpace(normalized), "unknown") || strings.TrimSpace(normalized) == "":
+				modelResolution = model.ModelResolutionUnknown
+			default:
+				modelResolution = model.ModelResolutionDirectEvent
+			}
+		}
 		provider := rec.Provider
 		if provider == "" || provider == "unknown" {
 			provider = modelProvider
@@ -222,6 +231,7 @@ func importParsedRecords(database *db.Database, adapterName string, records []*f
 			Provider:              provider,
 			ModelRaw:              rec.Model,
 			ModelNormalized:       normalized,
+			ModelResolution:       modelResolution,
 			SourceAgent:           sourceAgent,
 			SourceProduct:         sourceProduct,
 			ObservabilityLevel:    observability,

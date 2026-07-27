@@ -19,13 +19,13 @@ func testDB(t *testing.T) *db.Database {
 	base := time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC).UnixMilli()
 	_, err = database.Conn().Exec(`INSERT INTO usage_events (
 		event_id, dedupe_key, dedupe_strategy,
-		channel, provider, model_raw, model_normalized, timestamp_ms, session_id, project_path, message_id,
+		channel, provider, model_raw, model_normalized, model_resolution, timestamp_ms, session_id, project_path, message_id,
 		input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, reasoning_tokens, total_tokens,
 		request_started_at_ms, first_token_at_ms, completed_at_ms, total_duration_ms, ttft_ms, output_duration_ms, output_tps,
 		recorded_cost_usd, raw_usage_json, imported_at_ms, updated_at_ms
 	) VALUES
-		('fp1', 'fp1', 'message_id', 'codex', 'openai', 'gpt-5', 'gpt-5', ?, 's1', '/Users/test/Github/project-a', 'm1', 100, 50, 10, 5, 20, 185, ?, ?, ?, 3000, 500, 2500, 20.0, 0.1, '{"secret":"hidden"}', 1, 1),
-		('fp2', 'fp2', 'message_id', 'claude', 'anthropic', 'claude-sonnet', 'claude-sonnet', ?, 's2', '/Users/test/Github/project-b', 'm2', 200, 80, 0, 0, 0, 280, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0.2, '{"secret":"hidden"}', 2, 2)`,
+		('fp1', 'fp1', 'message_id', 'codex', 'openai', 'gpt-5', 'gpt-5', 'direct_event', ?, 's1', '/Users/test/Github/project-a', 'm1', 100, 50, 10, 5, 20, 185, ?, ?, ?, 3000, 500, 2500, 20.0, 0.1, '{"secret":"hidden"}', 1, 1),
+		('fp2', 'fp2', 'message_id', 'claude', 'anthropic', 'claude-sonnet', 'claude-sonnet', 'direct_event', ?, 's2', '/Users/test/Github/project-b', 'm2', 200, 80, 0, 0, 0, 280, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0.2, '{"secret":"hidden"}', 2, 2)`,
 		base, base, base+500, base+3000, base+86400000)
 	if err != nil {
 		t.Fatalf("insert events: %v", err)
@@ -141,6 +141,9 @@ func TestSessionsImportRunsEventsSlowAndOptions(t *testing.T) {
 	if events[1].EventID != "fp1" || events[1].InputTokens != 100 {
 		t.Fatalf("expected Codex event input to use stored non-cache input tokens, got %+v", events[1])
 	}
+	if events[1].ModelResolution == nil || *events[1].ModelResolution != "direct_event" {
+		t.Fatalf("expected event model resolution, got %+v", events[1])
+	}
 	slow, err := BuildSlow(database.Conn(), "output_tps", Filters{}, 10)
 	if err != nil {
 		t.Fatalf("slow: %v", err)
@@ -225,5 +228,45 @@ func TestAttachEstimatesPreserveExplicitZeroPrice(t *testing.T) {
 	attachTimeEstimate(&timeRow, estimate)
 	if timeRow.EstimatedCostUSD == nil || *timeRow.EstimatedCostUSD != 0 || timeRow.EstimatedCostMicroUSD == nil || *timeRow.EstimatedCostMicroUSD != 0 {
 		t.Fatalf("time row should expose an explicit zero price: %+v", timeRow)
+	}
+}
+
+func TestAnalyticsSeparatesPolicyZeroMissingPricingAndOfficialFree(t *testing.T) {
+	database, err := db.Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	_, err = database.Conn().Exec(`INSERT INTO usage_events (
+		event_id, dedupe_key, dedupe_strategy, channel, provider, model_raw, model_normalized, model_resolution,
+		timestamp_ms, input_tokens, output_tokens, total_tokens, imported_at_ms, updated_at_ms
+	) VALUES
+		('unknown', 'unknown', 'message_id', 'codex', 'openai', 'unknown', 'unknown', 'unknown', 1, 10, 0, 10, 1, 1),
+		('missing', 'missing', 'message_id', 'workbuddy', 'custom', 'unpriced-model', 'unpriced-model', 'direct_event', 2, 20, 0, 20, 1, 1),
+		('free', 'free', 'message_id', 'codex', 'openai', 'gpt-5.3-codex-spark', 'gpt-5.3-codex-spark', 'direct_event', 3, 30, 0, 30, 1, 1)`)
+	if err != nil {
+		t.Fatalf("insert pricing events: %v", err)
+	}
+
+	summary, err := BuildSummary(database.Conn(), Filters{})
+	if err != nil {
+		t.Fatalf("summary: %v", err)
+	}
+	if summary.Pricing == nil || summary.Pricing.PricedEvents != 1 || summary.Pricing.PricedTokens != 30 || summary.Pricing.PolicyZeroEvents != 1 || summary.Pricing.PolicyZeroTokens != 10 {
+		t.Fatalf("unexpected pricing summary: %+v", summary.Pricing)
+	}
+	if len(summary.Pricing.PolicyZeroModels) != 1 || len(summary.Pricing.MissingModels) != 1 || summary.Pricing.MissingModels[0].Reason != pricing.ResolutionMissingPricingRule {
+		t.Fatalf("unexpected pricing diagnostics: %+v", summary.Pricing)
+	}
+	if summary.EstimatedCostUSD == nil || *summary.EstimatedCostUSD != 0 {
+		t.Fatalf("official free model should preserve explicit zero estimate: %+v", summary)
+	}
+
+	unknownOnly, err := BuildSummary(database.Conn(), Filters{Model: "unknown"})
+	if err != nil {
+		t.Fatalf("unknown-only summary: %v", err)
+	}
+	if unknownOnly.EstimatedCostUSD != nil || unknownOnly.Pricing == nil || unknownOnly.Pricing.PolicyZeroEvents != 1 || unknownOnly.Pricing.PricedEvents != 0 {
+		t.Fatalf("unknown-only cost should remain unavailable with policy-zero diagnostics: %+v", unknownOnly)
 	}
 }

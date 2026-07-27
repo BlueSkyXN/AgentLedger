@@ -15,6 +15,7 @@ var v2CompatibilityColumns = []string{
 	"source_product TEXT",
 	"observability_level TEXT",
 	"model_is_fallback INTEGER NOT NULL DEFAULT 0",
+	"model_resolution TEXT NOT NULL DEFAULT 'legacy_unclassified'",
 	"source_total_tokens INTEGER",
 	"raw_input_tokens INTEGER",
 	"token_accounting_method TEXT",
@@ -116,6 +117,7 @@ CREATE TABLE IF NOT EXISTS usage_events (
     provider TEXT,
     model_raw TEXT,
     model_normalized TEXT,
+    model_resolution TEXT NOT NULL DEFAULT 'legacy_unclassified',
 
     source_agent TEXT,
     source_product TEXT,

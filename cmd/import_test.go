@@ -94,6 +94,7 @@ func TestImportUsesParsedNormalizedModelOverride(t *testing.T) {
 		Provider:        "custom",
 		Model:           "deepseek-v4-pro-202606",
 		ModelNormalized: "deepseek-v4-pro",
+		ModelResolution: model.ModelResolutionThreadSettings,
 		TimestampMs:     1,
 		DedupeID:        "source-event",
 		TotalTokens:     10,
@@ -103,12 +104,12 @@ func TestImportUsesParsedNormalizedModelOverride(t *testing.T) {
 		t.Fatalf("unexpected import result added=%d updated=%d skipped=%d warnings=%v", added, updated, skipped, warnings)
 	}
 
-	var raw, normalized, provider string
-	if err := database.Conn().QueryRow(`SELECT model_raw, model_normalized, provider FROM usage_events`).Scan(&raw, &normalized, &provider); err != nil {
+	var raw, normalized, provider, resolution string
+	if err := database.Conn().QueryRow(`SELECT model_raw, model_normalized, provider, model_resolution FROM usage_events`).Scan(&raw, &normalized, &provider, &resolution); err != nil {
 		t.Fatalf("read event: %v", err)
 	}
-	if raw != "deepseek-v4-pro-202606" || normalized != "deepseek-v4-pro" || provider != "custom" {
-		t.Fatalf("unexpected model/provider raw=%q normalized=%q provider=%q", raw, normalized, provider)
+	if raw != "deepseek-v4-pro-202606" || normalized != "deepseek-v4-pro" || provider != "custom" || resolution != model.ModelResolutionThreadSettings {
+		t.Fatalf("unexpected model/provider raw=%q normalized=%q provider=%q resolution=%q", raw, normalized, provider, resolution)
 	}
 }
 

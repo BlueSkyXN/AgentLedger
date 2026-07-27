@@ -1,6 +1,7 @@
 package adapters
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,6 +39,9 @@ func TestCodexLastTokenUsageDirectCounts(t *testing.T) {
 	}
 	if rec.Model != "gpt-5-codex" || rec.ModelIsFallback {
 		t.Fatalf("unexpected model=%s fallback=%v", rec.Model, rec.ModelIsFallback)
+	}
+	if rec.ModelResolution != model.ModelResolutionDirectEvent {
+		t.Fatalf("unexpected model resolution=%q", rec.ModelResolution)
 	}
 }
 
@@ -231,14 +235,70 @@ func TestCodexCachedInputClampReasoningFallbackAndTurnContextModel(t *testing.T)
 		t.Fatalf("expected 2 records, got %d", len(records))
 	}
 	fallback := records[0]
-	if fallback.Model != "gpt-5" || !fallback.ModelIsFallback {
-		t.Fatalf("expected gpt-5 fallback, model=%s fallback=%v", fallback.Model, fallback.ModelIsFallback)
+	if fallback.Model != "unknown" || !fallback.ModelIsFallback {
+		t.Fatalf("expected unknown fallback, model=%s fallback=%v", fallback.Model, fallback.ModelIsFallback)
+	}
+	if fallback.ModelResolution != model.ModelResolutionUnknown {
+		t.Fatalf("expected unknown resolution, got %q", fallback.ModelResolution)
 	}
 	if fallback.InputTokens != 0 || fallback.CacheReadTokens != 100 || fallback.TotalTokens != 150 {
 		t.Fatalf("expected cached clamp and computed total, input=%d cache=%d total=%d", fallback.InputTokens, fallback.CacheReadTokens, fallback.TotalTokens)
 	}
 	if records[1].Model != "gpt-5-codex" || records[1].ModelIsFallback {
 		t.Fatalf("expected turn_context model, model=%s fallback=%v", records[1].Model, records[1].ModelIsFallback)
+	}
+	if records[1].ModelResolution != model.ModelResolutionTurnContext {
+		t.Fatalf("expected turn_context resolution, got %q", records[1].ModelResolution)
+	}
+}
+
+func TestCodexModelStateFollowsDeclarationsBySessionAndTime(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "codex.jsonl")
+	usage := func(session, modelName string, second int) string {
+		modelField := ""
+		if modelName != "" {
+			modelField = fmt.Sprintf(`,"model":%q`, modelName)
+		}
+		return fmt.Sprintf(`{"type":"event_msg","timestamp":"2026-01-01T00:00:%02dZ","session_id":%q%s,"payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}}`, second, session, modelField)
+	}
+	data := strings.Join([]string{
+		`{"type":"event_msg","session_id":"A","payload":{"type":"thread_settings_applied","thread_settings":{"model":"gpt-5.6-sol"}}}`,
+		usage("A", "", 1),
+		`{"type":"turn_context","payload":{"model":"gpt-5.6-terra"}}`,
+		usage("A", "", 2),
+		`{"type":"event_msg","session_id":"B","payload":{"type":"thread_settings_applied","thread_settings":{"model":"kimi-k3"}}}`,
+		usage("A", "", 3),
+		usage("B", "", 4),
+		usage("A", "gpt-5.5", 5),
+		usage("A", "", 6),
+	}, "\n")
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	records, err := NewCodexAdapter().ParseFile(path)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	want := []struct {
+		model      string
+		resolution string
+		fallback   bool
+	}{
+		{"gpt-5.6-sol", model.ModelResolutionThreadSettings, false},
+		{"gpt-5.6-terra", model.ModelResolutionTurnContext, false},
+		{"gpt-5.6-terra", model.ModelResolutionTurnContext, false},
+		{"kimi-k3", model.ModelResolutionThreadSettings, false},
+		{"gpt-5.5", model.ModelResolutionDirectEvent, false},
+		{"gpt-5.6-terra", model.ModelResolutionTurnContext, false},
+	}
+	if len(records) != len(want) {
+		t.Fatalf("expected %d records, got %d", len(want), len(records))
+	}
+	for i, expected := range want {
+		if records[i].Model != expected.model || records[i].ModelResolution != expected.resolution || records[i].ModelIsFallback != expected.fallback {
+			t.Fatalf("record %d model=%q resolution=%q fallback=%v, want model=%q resolution=%q fallback=%v", i, records[i].Model, records[i].ModelResolution, records[i].ModelIsFallback, expected.model, expected.resolution, expected.fallback)
+		}
 	}
 }
 
@@ -356,5 +416,22 @@ func TestCodexHeadlessUsage(t *testing.T) {
 		if rec.ObservabilityLevel != "full" {
 			t.Fatalf("record %d observability=%s", i, rec.ObservabilityLevel)
 		}
+	}
+}
+
+func TestCodexParsesJSONLLineLargerThanLegacyTenMiBLimit(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "codex-large-line.jsonl")
+	padding := strings.Repeat("x", 10*1024*1024)
+	data := fmt.Sprintf(`{"type":"event_msg","padding":%q,"timestamp":"2026-01-01T00:00:00Z","session_id":"A","model":"gpt-5.6-sol","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}}}`, padding)
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	records, err := NewCodexAdapter().ParseFile(path)
+	if err != nil {
+		t.Fatalf("parse large line: %v", err)
+	}
+	if len(records) != 1 || records[0].Model != "gpt-5.6-sol" || records[0].TotalTokens != 15 {
+		t.Fatalf("unexpected large-line records: %+v", records)
 	}
 }

@@ -9,6 +9,12 @@ const (
 	AccCopilotOtelTotalFallback = "copilot_otel_total_fallback"
 	AccCopilotSessionMetrics    = "copilot_session_model_metrics"
 	AccWorkBuddyRawUsage        = "workbuddy_raw_usage"
+
+	ModelResolutionDirectEvent        = "direct_event"
+	ModelResolutionThreadSettings     = "thread_settings"
+	ModelResolutionTurnContext        = "turn_context"
+	ModelResolutionUnknown            = "unknown"
+	ModelResolutionLegacyUnclassified = "legacy_unclassified"
 )
 
 // UsageEvent is the v2 fact-table representation for one local agent usage event.
@@ -21,6 +27,7 @@ type UsageEvent struct {
 	Provider        string `json:"provider" db:"provider"`
 	ModelRaw        string `json:"model_raw" db:"model_raw"`
 	ModelNormalized string `json:"model_normalized" db:"model_normalized"`
+	ModelResolution string `json:"model_resolution" db:"model_resolution"`
 
 	SourceAgent           string `json:"source_agent" db:"source_agent"`
 	SourceProduct         string `json:"source_product" db:"source_product"`

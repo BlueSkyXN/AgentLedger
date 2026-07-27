@@ -16,6 +16,7 @@ type ParsedRecord struct {
 	// ModelNormalized optionally overrides the generic model normalizer at import
 	// time. Adapters use it only when their source has an explicit canonical ID.
 	ModelNormalized       string
+	ModelResolution       string
 	TimestampMs           int64
 	SessionID             string
 	ProjectPath           string
