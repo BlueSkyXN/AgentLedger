@@ -89,4 +89,4 @@ agent-ledger merge usage.aldb
 
 ## 隐私提示
 
-本地数据库、`.aldb` 文件和面板截图可能包含 session id、项目路径、模型名、token 用量和 raw usage envelope。公开传播前应按私有使用数据处理。
+本地数据库、`.aldb` 文件和面板截图可能包含 session id、项目路径、模型名、token 用量和 compact usage evidence；未迁移旧库还可能包含 legacy full raw。公开传播前应按私有使用数据处理。

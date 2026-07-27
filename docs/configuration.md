@@ -60,13 +60,13 @@ paths = ["~/.copilot/otel", "~/.copilot/session-state"]
 | `[agents.*].enabled` | 是否启用对应 adapter。 |
 | `[agents.*].paths` | adapter 扫描的根路径列表；支持 `~/` 展开。 |
 | `[reports].timezone` | daily / weekly / monthly 报表分桶和 `--since` / `--until` 日期过滤使用的时区。支持 `Local`、`UTC`、固定偏移如 `+08:00`，以及 Go 可加载的 IANA 时区如 `Asia/Shanghai`。 |
+| `[privacy].mode` | 当前只支持 `envelope`：Claude/Codex 写入版本化、allowlisted compact usage evidence。`import`、`merge`、`compact-raw` 在打开写连接前拒绝 `full`、`none` 或其它值。 |
 | `[privacy].redact_paths_on_export` | `export` 是否在导出副本中清空 `project_path`、`source_file` 和 `raw_usage_json`。默认开启。 |
 
 ## 当前预留的键
 
 | Key | 当前状态 |
 |---|---|
-| `[privacy].mode` | 已保存到配置，但当前 import/export 逻辑尚未按该值切换隐私模式。 |
 | `[import].single_thread` | 预留；当前 import 是顺序遍历。 |
 | `[cleanup].*` | 预留；当前 CLI 没有 `cleanup` 命令。 |
 | `[reports].currency` | 预留；当前没有 currency conversion。 |

@@ -28,7 +28,8 @@ agent-ledger init --reset
 
 - **多 agent 导入**：Claude Code、Codex、GitHub Copilot、Gemini CLI、WorkBuddy。
 - **三表 SQLite schema**：只保留 `meta`、`import_runs`、`usage_events`。
-- **扁平事实表**：`usage_events` 直接保存 channel、provider、model、time、session、project、token、timing、source line 和 raw usage envelope。
+- **扁平事实表**：`usage_events` 直接保存 channel、provider、model、time、session、project、token、timing、source line 和最小用量证据。
+- **最小用量证据**：Claude/Codex 只持久化版本化 usage evidence，不保存对话正文、thinking、tool 参数或无关 source wrapper。
 - **确定性去重 + 完整度 upsert**：重复事件优先保留有 timing、有 recorded cost、有 model、token 总量更高的记录。
 - **常用报表**：`daily`、`weekly`、`monthly`、`models`、`channels`、`projects`、`sessions`、`slow`。
 - **只读 Web 面板**：Overview、趋势、渠道 / provider、模型、project / session、慢请求、导入 / 设置。
@@ -98,6 +99,8 @@ agent-ledger merge usage.aldb
 
 # 维护命令
 agent-ledger verify
+agent-ledger compact-raw --dry-run
+agent-ledger compact-raw --apply
 agent-ledger vacuum
 agent-ledger doctor
 agent-ledger doctor codex
@@ -125,6 +128,7 @@ agent-ledger serve
 | `status` | 显示数据库统计信息。 |
 | `doctor` | 显示配置、数据库路径和 agent 日志发现诊断；`doctor codex` 输出 Codex token/timing/口径覆盖诊断。 |
 | `verify` | 运行 SQLite `PRAGMA integrity_check`。 |
+| `compact-raw --dry-run\|--apply` | 检查或批量收敛旧 `raw_usage_json`；不会自动运行 `VACUUM`。 |
 | `vacuum` | 运行 SQLite `VACUUM`。 |
 | `serve` | 启动本机只读 Web 面板和 `/api/v1/*` JSON API。 |
 | `completion` | 通过 Cobra 生成 shell completion 脚本。 |
@@ -304,7 +308,7 @@ paths = ["~/.workbuddy/projects"]
 - Config: `<data-dir>/config.toml`
 - Database: 默认 `<data-dir>/agent-ledger.db`，也可通过 `[database].path` 修改
 
-当前 `[reports].timezone` 已用于 daily / weekly / monthly 报表分桶和 `--since` / `--until` 日期过滤；支持 `Local`、`UTC`、固定偏移如 `+08:00`，以及 Go 可加载的 IANA 时区如 `Asia/Shanghai`。`[privacy].redact_paths_on_export = true` 时，`export` 会移除导出副本里的 `project_path`、`source_file` 和 `raw_usage_json`。`[cleanup]` 和 `[reports].currency` 仍是配置占位；现有命令尚未实现 cleanup 或 currency 转换。report 的 estimated cost 由 `pricing/pricing.v1.json` 或 `--pricing` 指定文件驱动，不使用 `[reports].currency` 做换算。
+当前 `[reports].timezone` 已用于 daily / weekly / monthly 报表分桶和 `--since` / `--until` 日期过滤；支持 `Local`、`UTC`、固定偏移如 `+08:00`，以及 Go 可加载的 IANA 时区如 `Asia/Shanghai`。`[privacy].mode = "envelope"` 是当前唯一支持的写入策略：Claude/Codex 只落 allowlisted compact usage evidence；`import`、`merge` 和 `compact-raw` 会在打开写连接前拒绝其它值。`[privacy].redact_paths_on_export = true` 时，`export` 会移除导出副本里的 `project_path`、`source_file` 和 `raw_usage_json`。`[cleanup]` 和 `[reports].currency` 仍是配置占位；现有命令尚未实现 cleanup 或 currency 转换。report 的 estimated cost 由 `pricing/pricing.v1.json` 或 `--pricing` 指定文件驱动，不使用 `[reports].currency` 做换算。
 
 ## 文档
 

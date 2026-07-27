@@ -64,6 +64,8 @@ _foreign_keys=ON
 
 `db.OpenReadOnly(path)` 和 `db.OpenReadOnlyV2(path)` 不设置 journal mode 或 synchronous mode，不使用 `immutable=1`，因此在另一个 AgentLedger 进程写入 WAL 时仍能读取后续已提交数据。只读命令在配置文件不存在时使用内存中的默认配置，不会为了读取操作创建 config 或数据库目录。
 
+`db.OpenReadWriteV2(path)` 只打开已经存在且完整的 v2 数据库，SQLite 使用 `mode=rw`。它不创建目录或数据库，不运行 `initSchema()`/compatibility maintenance，不改变 journal mode；仅设置 connection-local busy timeout 和 foreign keys。`compact-raw --apply` 与 `vacuum` 使用该入口。
+
 ## Table: `meta`
 
 | Column | Type | Constraint |
@@ -123,7 +125,7 @@ _foreign_keys=ON
 | `request_id` | `TEXT` | nullable | 日志中的 request id。 |
 | `source_file` | `TEXT` | nullable | 来源文件路径。 |
 | `line_number` | `INTEGER` | nullable | JSONL 行号。 |
-| `raw_sha256` | `TEXT` | nullable | 原始 usage envelope hash。 |
+| `raw_sha256` | `TEXT` | nullable | adapter 完整源解析对象的 canonical JSON hash；不等于 compact evidence 的 hash。 |
 | `input_tokens` | `INTEGER` | `NOT NULL DEFAULT 0` | 非缓存输入 token；source 把 cached input 包含在 input 内时，adapter 入库前会拆分。 |
 | `output_tokens` | `INTEGER` | `NOT NULL DEFAULT 0` | 输出 token。 |
 | `reasoning_tokens` | `INTEGER` | `NOT NULL DEFAULT 0` | reasoning token。 |
@@ -138,7 +140,7 @@ _foreign_keys=ON
 | `output_duration_ms` | `INTEGER` | nullable | 从首 token 到完成的输出耗时。 |
 | `output_tps` | `REAL` | nullable | 输出 TPS。 |
 | `recorded_cost_usd` | `REAL` | nullable | 来源明确给出的 USD cost；v2 不计算价格，Copilot `requests.cost` 不写入此列。 |
-| `raw_usage_json` | `TEXT` | nullable | 解析到的原始 usage envelope。 |
+| `raw_usage_json` | `TEXT` | nullable | allowlisted compact usage evidence。Claude/Codex 使用 `agentledger.*-usage.v1`；无法安全收敛的新 import 会写 `NULL`，旧库 unknown 在显式迁移中保留。 |
 | `imported_at_ms` | `INTEGER` | `NOT NULL` | 首次导入时间。 |
 | `updated_at_ms` | `INTEGER` | `NOT NULL` | 最近更新时间。 |
 
@@ -167,7 +169,7 @@ output_tps = output_tokens / (output_duration_ms / 1000.0)
 
 `import` 不再使用 `INSERT OR IGNORE`。重复事件会按完整度决定是否覆盖旧记录；对于 Codex，如果 parser 或 fingerprint 规则修正导致 `event_id` 改变，但 `source_file + line_number + raw_sha256` 仍指向同一原始 JSONL 行，upsert 会把当前 `event_id` 精确匹配行和同来源历史 sibling 放进同一个候选集合。存在 exact match 时，还会把 session、timestamp、line、raw hash 和 channel 都一致的脱敏行加入候选；无论 legacy/corrected sibling 全部来自默认脱敏导出，还是 legacy 脱敏行后 merge 到已有本地 canonical row，都能在真实本地来源再次 import 时收敛。
 
-收敛时，incoming candidate 和候选集合共同选择最完整的 token、timing、cost 用量 winner。删除 sibling 前，只从 token 六分项相同、并包含 winner 已有 accounting 字段相同值的单一最佳 donor 补齐 `source_total_tokens`、`raw_input_tokens`、`token_accounting_method` 和 `accounting_profile`，避免跨冲突 profile 或 method 拼出来源中不存在的 bundle。`session_path_id`、`turn_id`、`project_path` 等 source metadata 不使用 usage score 决定冲突赢家：最早历史候选提供稳定基准，其余候选只做 missing、已知纠正和路径具体度升级。provider/model classification 采用独立的可信度顺序：当前 Codex parser 明确解析出的 `openai` provider 和非 fallback model 可以修正历史值，并同步保存 `model_resolution`；stored `openai` 和 explicit model 优先于新的 fallback/`unknown`。唯一例外是旧 parser 硬编码生成且仍带 `model_is_fallback = true` 的 `gpt-5` 占位符：当前同来源行重新解析为 `unknown` fallback 时允许替换该旧占位符。最终记录使用可信 classification、当前 identity、本地 source 和 raw envelope，并根据最终实际落库字段重新计算事件身份；重复导入同一 canonical 内容会返回 `skipped`。
+收敛时，incoming candidate 和候选集合共同选择最完整的 token、timing、cost 用量 winner。删除 sibling 前，只从 token 六分项相同、并包含 winner 已有 accounting 字段相同值的单一最佳 donor 补齐 `source_total_tokens`、`raw_input_tokens`、`token_accounting_method` 和 `accounting_profile`，避免跨冲突 profile 或 method 拼出来源中不存在的 bundle。`session_path_id`、`turn_id`、`project_path` 等 source metadata 不使用 usage score 决定冲突赢家：最早历史候选提供稳定基准，其余候选只做 missing、已知纠正和路径具体度升级。provider/model classification 采用独立的可信度顺序：当前 Codex parser 明确解析出的 `openai` provider 和非 fallback model 可以修正历史值，并同步保存 `model_resolution`；stored `openai` 和 explicit model 优先于新的 fallback/`unknown`。唯一例外是旧 parser 硬编码生成且仍带 `model_is_fallback = true` 的 `gpt-5` 占位符：当前同来源行重新解析为 `unknown` fallback 时允许替换该旧占位符。最终记录使用可信 classification、当前 identity、本地 source 和 compact evidence；合法 compact Codex evidence 不会被 full raw 恢复。已有 `raw_hash` / `fallback` 事件在 reconciliation 中保留其 ID 与 dedupe strategy，不从 compact evidence 重算 identity。
 
 优先级：
 
@@ -209,4 +211,5 @@ output_tps = output_tokens / (output_duration_ms / 1000.0)
 | `serve` | 无 | `meta`、`import_runs`、`usage_events` | 通过只读连接提供 API 和 Web 面板。 |
 | `doctor` | 无 | config 与 source paths | 使用内存默认值或现有配置扫描 source paths；配置缺失时不创建本地状态。 |
 | `verify` | 无 | 现有 SQLite 数据库 | 通过基础只读连接执行 `PRAGMA integrity_check`，不要求当前 AgentLedger v2 schema。 |
+| `compact-raw` | `usage_events.raw_usage_json`（仅 `--apply`） | `usage_events` | dry-run 零写入；apply 分批收敛 recognized legacy evidence，unknown 与 identity-protected 行保留。 |
 | `vacuum` | SQLite 内部重写 | 当前 SQLite 数据库 | 执行 `VACUUM`。 |

@@ -100,7 +100,7 @@ _foreign_keys=ON
 3. `raw_hash`: agent + provider + canonical raw JSON
 4. `fallback`: source file + line number + raw sha256
 
-这些策略用于让同一事件在重复导入或 v2 数据库合并时保持稳定主键。对于一行只产生一个 usage event 的 Codex 日志，`import` 还会用 `source_file + line_number + raw_sha256` 识别同一原始 JSONL 行，并把当前 `event_id` 精确匹配行与同来源 sibling 联合收敛；存在 exact match 时，默认脱敏导出中 `source_file = NULL` 的候选会额外用 session、timestamp、line 和 raw hash 受限匹配，因此无论脱敏 sibling 在本地 canonical row 前后 merge，都能在后续本地 import 时参与去重。exact-row 查询会在同一事务快照中同时比较 raw envelope，并用同一组受限 identity 检查是否真的存在脱敏候选；只有该快照确认无匹配候选时才跳过额外的 redacted lookup，不缓存可能被其他数据库连接或进程写旧的状态。对于当前 source identity 可证明一致的 exact row，provider 或 model classification bundle 即使没有改变 fingerprint，也会触发同一 canonical reconciliation；当前明确解析出的 Codex classification 可以修正历史值，stored `openai` 和 explicit model 优先于 legacy/fallback/`unknown`。weak incoming 如果遇到多个冲突 explicit model，会保留全部 sibling 并等待后续明确 model，而不是使用 `imported_at_ms` / `updated_at_ms` 猜测赢家后删除数据。没有 exact event anchor、也不匹配当前非空 `source_file` 的 changed-fingerprint 跨路径记录不会仅凭弱 identity 主动折叠。收敛先选择最完整的用量 bundle，再从 token 完全相同且与 winner 已有 accounting 字段相容的单一 donor 补齐缺失 accounting metadata；source metadata 使用最早历史候选作为稳定基准，再按 missing 和路径具体度规则吸收全部候选中的互补字段。最终记录保留当前本地 source 和 raw envelope，并按实际落库字段重新计算 fingerprint。其他 adapter 可能从一行拆出多个合法事件，不使用这一兼容身份。
+这些策略用于让同一事件在重复导入或 v2 数据库合并时保持稳定主键。对于一行只产生一个 usage event 的 Codex 日志，`import` 还会用 `source_file + line_number + raw_sha256` 识别同一原始 JSONL 行，并把当前 `event_id` 精确匹配行与同来源 sibling 联合收敛；存在 exact match 时，默认脱敏导出中 `source_file = NULL` 的候选会额外用 session、timestamp、line 和 raw hash 受限匹配，因此无论脱敏 sibling 在本地 canonical row 前后 merge，都能在后续本地 import 时参与去重。exact-row 查询会在同一事务快照中同时比较 compact evidence，并用同一组受限 identity 检查是否真的存在脱敏候选；只有该快照确认无匹配候选时才跳过额外的 redacted lookup，不缓存可能被其他数据库连接或进程写旧的状态。对于当前 source identity 可证明一致的 exact row，provider 或 model classification bundle 即使没有改变 fingerprint，也会触发同一 canonical reconciliation；当前明确解析出的 Codex classification 可以修正历史值，stored `openai` 和 explicit model 优先于 legacy/fallback/`unknown`。weak incoming 如果遇到多个冲突 explicit model，会保留全部 sibling 并等待后续明确 model，而不是使用 `imported_at_ms` / `updated_at_ms` 猜测赢家后删除数据。没有 exact event anchor、也不匹配当前非空 `source_file` 的 changed-fingerprint 跨路径记录不会仅凭弱 identity 主动折叠。收敛先选择最完整的用量 bundle，再从 token 完全相同且与 winner 已有 accounting 字段相容的单一 donor 补齐缺失 accounting metadata；source metadata 使用最早历史候选作为稳定基准，再按 missing 和路径具体度规则吸收全部候选中的互补字段。最终记录保留当前本地 source 和 compact evidence；已有 `raw_hash` / `fallback` 事件保留原 ID/strategy，避免从 compact evidence 漂移。其他 adapter 可能从一行拆出多个合法事件，不使用这一兼容身份。
 
 ## Token 和 timing
 
@@ -179,13 +179,13 @@ API 统一支持 `since`、`until`、`channel`、`provider`、`model`、`session
 3. 检查 SQLite header。
 4. 要求 incoming `meta.schema_version` 为 `2`。
 5. `ATTACH DATABASE` 为 `incoming`。
-6. 插入本地未见过的 `usage_events`。
-7. 返回 inserted/skipped 数。
+6. 在同一 destination transaction 内插入本地未见过的 `usage_events`，同时 compact recognized legacy evidence、保留合法 compact/empty 并省略 unknown raw。
+7. 返回 inserted/skipped/raw-evidence-omitted 数。
 
 `merge` 仍是本地数据库文件合并工具，但 v2 不再记录设备观测历史或 conflict 审计表。
 
 ## 安全与隐私
 
-当前工具不主动联网。隐私风险主要来自本地数据库和导出的 `.aldb` 文件。`usage_events.raw_usage_json` 会保存解析到的 usage envelope；在分享数据库、截图或面板结果前，需要把它当作私有使用数据处理。
+当前工具不主动联网。隐私风险主要来自本地数据库和导出的 `.aldb` 文件。`usage_events.raw_usage_json` 保存 allowlisted compact usage evidence；旧库在运行显式迁移前仍可能含 legacy full raw。在分享数据库、截图或面板结果前，仍需把它当作私有使用数据处理。
 
-当前 `export` 默认会在导出副本中清空路径字段和 raw usage envelope。设计中的 cleanup/quarantine、加密 raw archive 尚未落地到当前 CLI。
+当前 `export` 默认会在导出副本中清空路径字段和 `raw_usage_json` evidence。设计中的 cleanup/quarantine、加密 raw archive 尚未落地到当前 CLI。
