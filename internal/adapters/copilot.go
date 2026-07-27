@@ -4,9 +4,9 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
-	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/BlueSkyXN/AgentLedger/internal/fingerprint"
@@ -201,7 +201,8 @@ func (a *CopilotAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, er
 		}
 		rawJSON, _ := json.Marshal(obj)
 		rawHash := sha256Hex(rawJSON)
-		if sessionCandidates := copilotSessionMetricCandidatesFromObject(obj, path, lineNum, sessionContext); len(sessionCandidates) > 0 {
+		requestCounts := copilotSessionRequestCountsFromLine(line)
+		if sessionCandidates := copilotSessionMetricCandidatesFromObject(obj, path, lineNum, sessionContext, requestCounts); len(sessionCandidates) > 0 {
 			candidates = append(candidates, sessionCandidates...)
 			sessionContext.observe(obj, path)
 			continue
@@ -229,7 +230,7 @@ type copilotCandidate struct {
 	key       string
 }
 
-func copilotSessionMetricCandidatesFromObject(obj map[string]interface{}, path string, lineNum int, context copilotSessionContext) []copilotCandidate {
+func copilotSessionMetricCandidatesFromObject(obj map[string]interface{}, path string, lineNum int, context copilotSessionContext, requestCounts map[string]*int64) []copilotCandidate {
 	if getString(obj, "type") != "session.shutdown" {
 		return nil
 	}
@@ -271,12 +272,16 @@ func copilotSessionMetricCandidatesFromObject(obj map[string]interface{}, path s
 			input = saturatingSub(rawInput, cacheRead)
 		}
 		total := input + output + cacheRead + cacheWrite + reasoning
-		if total == 0 {
+		requests := getMap(metric, "requests")
+		var requestCount *int64
+		if requestCounts != nil {
+			requestCount = requestCounts[modelName]
+		}
+		// Zero-token model metrics are still source-backed request facts when
+		// requests.count is an explicit non-negative integer, including 0.
+		if total == 0 && requestCount == nil {
 			continue
 		}
-
-		requests := getMap(metric, "requests")
-		requestCount := copilotSessionRequestCount(requests)
 		fingerprintJSON := copilotSessionMetricFingerprintJSON(sessionID, sessionPathID, shutdownID, getString(obj, "timestamp"), modelName, usage, requests, data)
 		rawHash := sha256Hex([]byte(fingerprintJSON))
 		dedupeScope := firstNonEmpty(sessionID, sessionPathID, path)
@@ -322,41 +327,64 @@ func copilotSessionMetricCandidatesFromObject(obj map[string]interface{}, path s
 	return candidates
 }
 
-func copilotSessionRequestCount(requests map[string]interface{}) *int64 {
-	if requests == nil {
+// copilotSessionRequestCountsFromLine performs a minimal shadow decode of one
+// JSONL line and extracts modelMetrics.<model>.requests.count with strict
+// integer text parsing. The main object decode stays map-based so token,
+// identity, and OTel behavior remain unchanged.
+func copilotSessionRequestCountsFromLine(line []byte) map[string]*int64 {
+	var shadow struct {
+		Type string `json:"type"`
+		Data *struct {
+			ModelMetrics map[string]json.RawMessage `json:"modelMetrics"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(line, &shadow); err != nil || shadow.Type != "session.shutdown" || shadow.Data == nil {
 		return nil
 	}
-	value, ok := requests["count"]
-	if !ok {
+	if len(shadow.Data.ModelMetrics) == 0 {
 		return nil
 	}
-	var count int64
-	switch typed := value.(type) {
-	case float64:
-		if math.IsNaN(typed) || math.IsInf(typed, 0) || typed < 0 || typed >= 9_223_372_036_854_775_808 || math.Trunc(typed) != typed {
-			return nil
+	counts := make(map[string]*int64, len(shadow.Data.ModelMetrics))
+	for modelName, rawMetric := range shadow.Data.ModelMetrics {
+		var metric struct {
+			Requests *struct {
+				Count json.RawMessage `json:"count"`
+			} `json:"requests"`
 		}
-		count = int64(typed)
-	case json.Number:
-		parsed, err := typed.Int64()
-		if err != nil || parsed < 0 {
-			return nil
+		if err := json.Unmarshal(rawMetric, &metric); err != nil || metric.Requests == nil {
+			continue
 		}
-		count = parsed
-	case int64:
-		if typed < 0 {
-			return nil
+		if count := parseStrictNonNegativeInt64JSON(metric.Requests.Count); count != nil {
+			counts[modelName] = count
 		}
-		count = typed
-	case int:
-		if typed < 0 {
-			return nil
-		}
-		count = int64(typed)
-	default:
+	}
+	if len(counts) == 0 {
 		return nil
 	}
-	return int64Ptr(count)
+	return counts
+}
+
+// parseStrictNonNegativeInt64JSON accepts only decimal non-negative integer text.
+// Fractions, exponents, negatives, strings, booleans, null, and int64 overflow
+// all remain unknown (nil).
+func parseStrictNonNegativeInt64JSON(raw json.RawMessage) *int64 {
+	if len(raw) == 0 {
+		return nil
+	}
+	text := strings.TrimSpace(string(raw))
+	if text == "" || text == "null" {
+		return nil
+	}
+	for _, r := range text {
+		if r < '0' || r > '9' {
+			return nil
+		}
+	}
+	parsed, err := strconv.ParseInt(text, 10, 64)
+	if err != nil {
+		return nil
+	}
+	return int64Ptr(parsed)
 }
 
 func copilotCandidatesFromObject(obj map[string]interface{}, rawJSON, rawHash, path string, lineNum int) []copilotCandidate {

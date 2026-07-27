@@ -220,8 +220,9 @@ func TestMergeFromDropsEveryIncomingRawValue(t *testing.T) {
 		rawEvidenceEvent("merge-raw-hash", "raw_hash", legacyRawUsage),
 		rawEvidenceEvent("merge-fallback", "fallback", legacyRawUsage),
 		rawEvidenceEvent("merge-invalid", "message_id", `not-json`),
+		rawEvidenceEvent("merge-empty", "message_id", "placeholder"),
 	}
-	for i, channel := range []string{"claude", "codex", "gemini", "copilot", "workbuddy"} {
+	for i, channel := range []string{"claude", "codex", "gemini", "copilot", "workbuddy", "copilot"} {
 		events[i].Channel = channel
 		events[i].Provider = channel + "-provider"
 	}
@@ -230,6 +231,11 @@ func TestMergeFromDropsEveryIncomingRawValue(t *testing.T) {
 			_ = incoming.Close()
 			t.Fatalf("insert incoming %s: %v", event.EventID, err)
 		}
+	}
+	// insertEvent nullifies empty raw; force a genuine empty-string legacy value.
+	if _, err := incoming.Conn().Exec(`UPDATE usage_events SET raw_usage_json = '' WHERE event_id = 'merge-empty'`); err != nil {
+		_ = incoming.Close()
+		t.Fatalf("force empty raw: %v", err)
 	}
 	if err := incoming.Close(); err != nil {
 		t.Fatalf("close incoming: %v", err)
@@ -243,7 +249,7 @@ func TestMergeFromDropsEveryIncomingRawValue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
-	if result.Inserted != 5 || result.Skipped != 0 || result.RawEvidenceOmitted != 5 {
+	if result.Inserted != 6 || result.Skipped != 0 || result.RawEvidenceOmitted != 6 {
 		t.Fatalf("unexpected merge result: %+v", result)
 	}
 	var retained int
@@ -254,9 +260,127 @@ func TestMergeFromDropsEveryIncomingRawValue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("duplicate merge: %v", err)
 	}
-	if duplicate.Inserted != 0 || duplicate.Skipped != 5 || duplicate.RawEvidenceOmitted != 0 {
+	if duplicate.Inserted != 0 || duplicate.Skipped != 6 || duplicate.RawEvidenceOmitted != 0 {
 		t.Fatalf("duplicate merge changed data: %+v", duplicate)
 	}
+}
+
+func TestMergeFromRollsBackEntireTransactionOnSQLError(t *testing.T) {
+	destination, err := Open(filepath.Join(t.TempDir(), "destination.db"))
+	if err != nil {
+		t.Fatalf("open destination: %v", err)
+	}
+	defer destination.Close()
+
+	failingPath := filepath.Join(t.TempDir(), "failing-merge.db")
+	failing, err := Open(failingPath)
+	if err != nil {
+		t.Fatalf("open failing incoming: %v", err)
+	}
+	for _, event := range []*model.UsageEvent{
+		rawEvidenceEvent("rollback-good", "message_id", legacyRawUsage),
+		rawEvidenceEvent("rollback-also", "message_id", `{"version":1}`),
+	} {
+		if err := insertEvent(failing.Conn(), event); err != nil {
+			_ = failing.Close()
+			t.Fatalf("insert failing row %s: %v", event.EventID, err)
+		}
+	}
+	if err := failing.Close(); err != nil {
+		t.Fatalf("close failing incoming: %v", err)
+	}
+	if _, err := destination.Conn().Exec(`
+		CREATE TRIGGER reject_rollback_merge
+		BEFORE INSERT ON usage_events
+		WHEN NEW.event_id LIKE 'rollback-%'
+		BEGIN
+			SELECT RAISE(ABORT, 'test merge failure');
+		END
+	`); err != nil {
+		t.Fatalf("create merge failure trigger: %v", err)
+	}
+	if _, err := destination.MergeFrom(failingPath); err == nil {
+		t.Fatal("merge accepted a forced SQL write failure")
+	}
+	var count int
+	if err := destination.Conn().QueryRow(`SELECT COUNT(*) FROM usage_events WHERE event_id LIKE 'rollback-%'`).Scan(&count); err != nil {
+		t.Fatalf("count rollback rows: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("merge left partial rows after forced SQL failure: %d", count)
+	}
+}
+
+func TestCompactRawEvidenceMultiBatchInterruptAndRerun(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agent-ledger.db")
+	database, err := Open(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	const total = rawEvidenceBatchSize + 3
+	for i := 0; i < total; i++ {
+		event := rawEvidenceEvent(fmt.Sprintf("batch-%04d", i), "message_id", fmt.Sprintf(`{"n":%d}`, i))
+		if err := insertEvent(database.Conn(), event); err != nil {
+			_ = database.Close()
+			t.Fatalf("insert batch-%04d: %v", i, err)
+		}
+	}
+	// Fail only the first event of the second keyset batch.
+	failEventID := fmt.Sprintf("batch-%04d", rawEvidenceBatchSize)
+	if _, err := database.Conn().Exec(fmt.Sprintf(`
+		CREATE TRIGGER reject_second_batch
+		BEFORE UPDATE ON usage_events
+		WHEN NEW.event_id = '%s'
+		BEGIN
+			SELECT RAISE(ABORT, 'test compact batch failure');
+		END
+	`, failEventID)); err != nil {
+		_ = database.Close()
+		t.Fatalf("create compact failure trigger: %v", err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("close seeder: %v", err)
+	}
+
+	writer, err := OpenReadWriteV2(path)
+	if err != nil {
+		t.Fatalf("open strict writer: %v", err)
+	}
+	first, err := writer.CompactRawEvidence()
+	if err == nil {
+		_ = writer.Close()
+		t.Fatalf("expected multi-batch interrupt, stats=%+v", first)
+	}
+	if first.Updated != int64(rawEvidenceBatchSize) || first.BatchesCompleted != 1 {
+		_ = writer.Close()
+		t.Fatalf("first batch should commit before interrupt: %+v err=%v", first, err)
+	}
+	var remaining int
+	if err := writer.Conn().QueryRow(`SELECT COUNT(*) FROM usage_events WHERE raw_usage_json IS NOT NULL`).Scan(&remaining); err != nil {
+		_ = writer.Close()
+		t.Fatalf("count remaining after interrupt: %v", err)
+	}
+	if remaining != 3 {
+		_ = writer.Close()
+		t.Fatalf("remaining candidates after interrupt=%d want=3", remaining)
+	}
+	if _, err := writer.Conn().Exec(`DROP TRIGGER reject_second_batch`); err != nil {
+		_ = writer.Close()
+		t.Fatalf("drop interrupt trigger: %v", err)
+	}
+	second, err := writer.CompactRawEvidence()
+	if err != nil {
+		_ = writer.Close()
+		t.Fatalf("rerun after interrupt: %v stats=%+v", err, second)
+	}
+	if second.Updated != 3 || second.RemainingCandidates != 0 {
+		_ = writer.Close()
+		t.Fatalf("rerun should finish remaining rows: %+v", second)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+	assertNoRawUsage(t, path)
 }
 
 func rawEvidenceEvent(id, strategy, raw string) *model.UsageEvent {
