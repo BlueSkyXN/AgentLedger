@@ -9,6 +9,7 @@ import (
 
 	"github.com/BlueSkyXN/AgentLedger/internal/fingerprint"
 	"github.com/BlueSkyXN/AgentLedger/internal/model"
+	"github.com/BlueSkyXN/AgentLedger/internal/usageevidence"
 )
 
 const (
@@ -200,6 +201,7 @@ func (a *CodexAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, erro
 
 		rawJSON, _ := json.Marshal(obj)
 		rawHash := sha256Hex(rawJSON)
+		compactEvidence := usageevidence.Compact("codex", string(rawJSON))
 		totalTokens := storedUsage.totalTokens()
 		rec := &fingerprint.ParsedRecord{
 			Agent:                 "codex",
@@ -222,7 +224,10 @@ func (a *CodexAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, erro
 			TokenAccountingMethod: method,
 			AccountingProfile:     a.duplicatePolicy,
 			SessionPathID:         sessionPathID,
-			RawJSON:               string(rawJSON),
+			RawJSON:               compactEvidence.JSON,
+			FingerprintJSON:       string(rawJSON),
+			EvidenceOmitted:       compactEvidence.Status != usageevidence.StatusRecognizedLegacy && compactEvidence.Status != usageevidence.StatusAlreadyCompact,
+			EvidenceWarning:       evidenceWarning("codex", compactEvidence),
 			SourceFile:            path,
 			LineNumber:            lineNum,
 			RawSHA256:             rawHash,

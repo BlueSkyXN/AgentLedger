@@ -20,11 +20,12 @@ agent-ledger [command]
 | `status` | 已实现 | 输出数据库统计。 |
 | `doctor` | 已实现 | 输出配置、数据库和源文件发现诊断。 |
 | `verify` | 已实现 | 运行 SQLite integrity check。 |
+| `compact-raw` | 已实现 | 显式 dry-run 或 apply，将旧 raw 收敛为最小用量证据。 |
 | `vacuum` | 已实现 | 运行 SQLite vacuum。 |
 | `serve` | 已实现 | 启动本机只读 Web 面板和 `/api/v1/*` JSON API。 |
 | `completion` | 已实现 | Cobra 自动生成的 shell completion 命令。 |
 
-当前没有 `cleanup`、`restore`、`pricing` 或 `workspace` 命令。当前 `serve` 是只读面板，不提供浏览器触发 import/merge/vacuum 的写操作。
+当前没有 `cleanup`、`restore`、`pricing` 或 `workspace` 命令。当前 `serve` 是只读面板，不提供浏览器触发 import/merge/compact-raw/vacuum 的写操作。
 
 ## `init`
 
@@ -86,7 +87,7 @@ agent-ledger merge usage.aldb
 |---|---|
 | `file.aldb` | 必填，另一个 schema v2 AgentLedger SQLite export。 |
 
-当前 merge 会验证输入是普通 SQLite 文件，并要求 incoming 数据库 `meta.schema_version` 为 `2`。合并只插入本地未见过的 `usage_events`。
+当前 merge 会验证输入是普通 SQLite 文件，并要求 incoming 数据库 `meta.schema_version` 为 `2`。合并只插入本地未见过的 `usage_events`；重复 `event_id` 不覆盖本地 evidence。未见事件的 Claude/Codex legacy raw 会在同一目标事务中收敛，合法 compact/空值保持，未知 raw 不写入目标库并计入 `Raw evidence omitted`。
 
 ## `report`
 
@@ -175,6 +176,15 @@ PRAGMA integrity_check;
 
 `verify` 使用基础只读 SQLite 连接，不要求数据库已经具备当前完整 v2 schema，因此可在 additive migration 前检查旧版或待升级数据库。它不会初始化、升级或替换数据库。
 
+## `compact-raw`
+
+```bash
+agent-ledger compact-raw --dry-run
+agent-ledger compact-raw --apply
+```
+
+必须且只能指定一个 action。`--dry-run` 通过严格只读 v2 连接统计 candidate、already compact、empty、unknown preserved、identity protected 和预计逻辑字节变化，零数据库写入。`--apply` 通过严格 `mode=rw` v2 连接启用 connection-local `secure_delete=ON`，按 `rowid` 每批最多 1000 行原子更新，并用 `event_id + 原 raw_usage_json` 防止并发覆盖。它只修改 `raw_usage_json`，unknown、`raw_hash` 和 `fallback` 行保持不变；命令可中断后重跑，且不会自动运行 `VACUUM`。
+
 ## `vacuum`
 
 ```bash
@@ -186,6 +196,8 @@ agent-ledger vacuum
 ```sql
 VACUUM;
 ```
+
+`vacuum` 使用严格的现有 v2 `mode=rw` 打开路径，不创建数据库、不初始化或升级 schema，也不改变 journal mode。运行前应停止访问同一数据库的 `serve` 和其它 writer。
 
 ## `serve`
 

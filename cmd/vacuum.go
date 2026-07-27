@@ -12,12 +12,12 @@ var vacuumCmd = &cobra.Command{
 	Use:   "vacuum",
 	Short: "Vacuum the database to reclaim space",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		cfg, err := config.Load()
+		cfg, err := config.LoadReadOnly()
 		if err != nil {
 			return err
 		}
 
-		database, err := db.Open(cfg.DBPath())
+		database, err := db.OpenReadWriteV2(cfg.DBPath())
 		if err != nil {
 			return err
 		}

@@ -24,6 +24,8 @@ Claude Code 日志会把同一次 assistant message 以多条流式行写出。A
 
 `model == "<synthetic>"` 且 token total 为 0 的记录不会写入统计；`usage.speed == "fast"` 时，模型名追加 `-fast` 后缀，避免和 standard model 混在同一 model 维度。
 
+Claude 完整 source object 只在解析期间用于结构化字段、`raw_sha256` 和罕见 `raw_hash` fingerprint fallback。落库 evidence 使用 `agentledger.claude-usage.v1`，只保留 parser 实际选中的 usage map、standard/wrapped variant、sidechain、message ID 来源以及明确存在的 source cost；不保存 `content`、thinking、tool 参数、cwd、Git 或完整 message。
+
 ### Codex
 
 Codex 默认只扫描 `~/.codex/sessions/**/*.jsonl`，与 ccusage 的默认范围保持一致；当配置路径写成 Codex home 根目录（例如 `~/.codex`）时，adapter 会优先收敛到其 `sessions` 子目录，避免把 history、临时文件或其他 JSONL 混入 usage。`~/.codex/archived_sessions` 不会自动导入。需要统计归档历史时，可以在 config 的 `agents.codex.paths` 中显式加入归档目录，或用符号链接把归档文件纳入扫描路径。
@@ -47,6 +49,8 @@ Codex 日志里的 `input_tokens` 包含 cached input。入库时 AgentLedger �
 Codex 的 `task_complete.duration_ms`、`task_complete.time_to_first_token_ms` 和 `turn_id` 会按同一 session 内紧邻的上一条 usage 记录落为 turn 级 timing。这个值包含 Codex turn 的端到端耗时边界，不等同于严格的单次模型 API latency。`session_path_id` 保存相对 `sessions` 的路径 ID，例如 `2026/05/27/rollout-...`，用于和 ccusage 的 session 粒度对齐。
 
 `agent-ledger doctor codex` 会扫描 configured paths，输出 raw `token_count` 覆盖、`task_complete` timing 覆盖、默认（准确）口径与 `ccusage_compatible` 口径的事件数/token 差异，以及模型分布。
+
+Codex 完整 source object 同样只在解析期间使用。落库 evidence 使用 `agentledger.codex-usage.v1`：`token_count` 保留源中实际存在的 `total_token_usage` / `last_token_usage` map，headless 保留被选中的 usage map 与 container variant；缺失字段不补零，不保存 `rate_limits`、`model_context_window`、timestamp/type/payload wrapper。`task_complete` 继续只更新独立 timing/turn 列，完整重放依赖源 JSONL。
 
 ### GitHub Copilot
 

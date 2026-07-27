@@ -130,10 +130,12 @@ agent-ledger merge usage.aldb
 4. `ATTACH DATABASE` 为 `incoming`。
 5. 要求 `incoming.meta.schema_version` 为 `2`。
 6. 统计 incoming `usage_events`。
-7. 插入本地未见过的 `usage_events`。
-8. 返回 inserted 和 duplicate skipped 数量。
+7. 在同一个 destination transaction 中插入本地未见过的 `usage_events`；recognized Claude/Codex legacy raw 转成 compact evidence，合法 compact/empty 保持，unknown raw 写 `NULL`。
+8. 返回 inserted、duplicate skipped 和 `Raw evidence omitted` 数量。
 
 去重依据是 `usage_events.event_id` 主键。
+
+重复 `event_id` 不覆盖本地 compact evidence。merge 保持规范化 usage event 的插入/跳过契约，不再承诺 incoming `raw_usage_json` 字节保真；compactor internal error 或 SQL/锁错误会回滚整个 destination transaction。
 
 ## Merge 限制
 

@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -183,7 +184,7 @@ const eventComparisonColumns = `
 	COALESCE(message_id, ''), COALESCE(request_id, ''), COALESCE(source_file, ''), COALESCE(line_number, 0), COALESCE(raw_sha256, ''),
 	input_tokens, output_tokens, reasoning_tokens, cache_creation_tokens, cache_read_tokens, total_tokens,
 	request_started_at_ms, first_token_at_ms, completed_at_ms, total_duration_ms, ttft_ms, output_duration_ms, output_tps,
-	recorded_cost_usd, imported_at_ms, updated_at_ms
+	recorded_cost_usd, COALESCE(raw_usage_json, ''), imported_at_ms, updated_at_ms
 `
 
 func selectEventForComparison(tx *sql.Tx, eventID string) (*model.UsageEvent, error) {
@@ -368,6 +369,9 @@ func buildCanonicalReconciledEvent(incoming, exact *model.UsageEvent, stored []*
 	preserveReconciledSourceMetadata(&canonical, stored)
 	preserveStrongerCodexClassification(&canonical, incoming, exact, stored)
 	applyUsageWinner(&canonical, &usageWinner)
+	if compact := compactStoredCodexEvidence(incoming, stored); compact != "" {
+		canonical.RawUsageJSON = compact
+	}
 	for _, candidate := range stored {
 		if canonical.ImportedAtMs <= 0 || (candidate.ImportedAtMs > 0 && candidate.ImportedAtMs < canonical.ImportedAtMs) {
 			canonical.ImportedAtMs = candidate.ImportedAtMs
@@ -377,10 +381,16 @@ func buildCanonicalReconciledEvent(incoming, exact *model.UsageEvent, stored []*
 		}
 	}
 
-	eventID, strategy := computeEventFingerprint(&canonical)
-	canonical.EventID = eventID
-	canonical.DedupeKey = eventID
-	canonical.DedupeStrategy = string(strategy)
+	if protected := storedIdentityProtection(exact, stored); protected != nil {
+		canonical.EventID = protected.EventID
+		canonical.DedupeKey = protected.DedupeKey
+		canonical.DedupeStrategy = protected.DedupeStrategy
+	} else {
+		eventID, strategy := computeEventFingerprint(&canonical)
+		canonical.EventID = eventID
+		canonical.DedupeKey = eventID
+		canonical.DedupeStrategy = string(strategy)
+	}
 	return &canonical
 }
 
@@ -576,6 +586,9 @@ func codexSourceEnvelopeNeedsRefresh(existing, incoming *model.UsageEvent, rawUs
 	}
 	if strings.TrimSpace(existing.SourceFile) == "" && strings.TrimSpace(incoming.SourceFile) != "" {
 		return true
+	}
+	if compactCodexEvidence(existing.RawUsageJSON) {
+		return false
 	}
 	if incoming.RawUsageJSON == "" {
 		return false
@@ -816,6 +829,7 @@ func scanEventForComparison(row eventComparisonScanner, additionalDestinations .
 		&outputDuration,
 		&outputTPS,
 		&recordedCost,
+		&ev.RawUsageJSON,
 		&ev.ImportedAtMs,
 		&ev.UpdatedAtMs,
 	}
@@ -906,7 +920,7 @@ func updateEventByID(tx *sql.Tx, existingEventID string, ev *model.UsageEvent) e
 		ev.TimestampMs, ev.SessionID, ev.SessionPathID, ev.TurnID, ev.ProjectPath, ev.MessageID, ev.RequestID, ev.SourceFile, ev.LineNumber, ev.RawSHA256,
 		ev.InputTokens, ev.OutputTokens, ev.ReasoningTokens, ev.CacheCreationTokens, ev.CacheReadTokens, ev.TotalTokens,
 		ev.RequestStartedAtMs, ev.FirstTokenAtMs, ev.CompletedAtMs, ev.TotalDurationMs, ev.TTFTMs, ev.OutputDurationMs, ev.OutputTPS,
-		ev.RecordedCostUSD, ev.RawUsageJSON,
+		ev.RecordedCostUSD, nullIfEmpty(ev.RawUsageJSON),
 		ev.UpdatedAtMs,
 		existingEventID,
 	}
@@ -974,7 +988,7 @@ func eventArgs(ev *model.UsageEvent) []any {
 		ev.TimestampMs, ev.SessionID, ev.SessionPathID, ev.TurnID, ev.ProjectPath, ev.MessageID, ev.RequestID, ev.SourceFile, ev.LineNumber, ev.RawSHA256,
 		ev.InputTokens, ev.OutputTokens, ev.ReasoningTokens, ev.CacheCreationTokens, ev.CacheReadTokens, ev.TotalTokens,
 		ev.RequestStartedAtMs, ev.FirstTokenAtMs, ev.CompletedAtMs, ev.TotalDurationMs, ev.TTFTMs, ev.OutputDurationMs, ev.OutputTPS,
-		ev.RecordedCostUSD, ev.RawUsageJSON,
+		ev.RecordedCostUSD, nullIfEmpty(ev.RawUsageJSON),
 		ev.ImportedAtMs, ev.UpdatedAtMs,
 	}
 }
@@ -989,55 +1003,87 @@ func modelResolutionForStorage(ev *model.UsageEvent) string {
 	return model.ModelResolutionLegacyUnclassified
 }
 
+// MergeResult is an aggregate-only merge outcome. It never includes incoming
+// event identifiers, source paths, or raw usage data.
+type MergeResult struct {
+	Inserted           int64
+	Skipped            int64
+	RawEvidenceOmitted int64
+}
+
 // MergeFrom attaches another v2 .aldb database and imports unseen events.
-func (d *Database) MergeFrom(incomingPath string) (inserted int64, skipped int64, err error) {
+// All destination writes, including raw evidence compaction, are atomic.
+func (d *Database) MergeFrom(incomingPath string) (result MergeResult, err error) {
 	absPath, err := filepath.Abs(incomingPath)
 	if err != nil {
-		return 0, 0, fmt.Errorf("invalid path: %w", err)
+		return result, errors.New("invalid incoming database path")
+	}
+	if destinationPath, resolveErr := filepath.Abs(d.path); resolveErr == nil && destinationPath == absPath {
+		return result, errors.New("incoming database must differ from destination")
 	}
 	info, err := os.Stat(absPath)
 	if err != nil {
-		return 0, 0, fmt.Errorf("cannot access file: %w", err)
+		return result, errors.New("cannot access incoming database")
 	}
 	if info.IsDir() {
-		return 0, 0, fmt.Errorf("path is a directory, not a database file")
+		return result, errors.New("incoming database path is a directory")
 	}
 
 	f, err := os.Open(absPath)
 	if err != nil {
-		return 0, 0, fmt.Errorf("cannot open file: %w", err)
+		return result, errors.New("cannot open incoming database")
 	}
 	header := make([]byte, 16)
 	_, err = f.Read(header)
 	_ = f.Close()
 	if err != nil || string(header) != "SQLite format 3\x00" {
-		return 0, 0, fmt.Errorf("file is not a valid SQLite database")
+		return result, errors.New("incoming database is not valid SQLite")
 	}
 
 	escapedPath := strings.ReplaceAll(absPath, "'", "''")
 	if _, err = d.conn.Exec(fmt.Sprintf("ATTACH DATABASE '%s' AS incoming", escapedPath)); err != nil {
-		return 0, 0, fmt.Errorf("failed to attach incoming database: %w", err)
+		return result, errors.New("failed to attach incoming database")
 	}
 	defer func() {
-		_, _ = d.conn.Exec("DETACH DATABASE incoming")
+		if _, detachErr := d.conn.Exec("DETACH DATABASE incoming"); detachErr != nil && err == nil {
+			err = errors.New("failed to detach incoming database")
+		}
 	}()
 
 	var version string
 	if err = d.conn.QueryRow(`SELECT value FROM incoming.meta WHERE key='schema_version'`).Scan(&version); err != nil {
-		return 0, 0, fmt.Errorf("incoming database missing schema metadata: %w", err)
+		return result, errors.New("incoming database missing schema metadata")
 	}
 	if version != SchemaVersion {
-		return 0, 0, fmt.Errorf("incoming database schema version %s is not compatible with AgentLedger v2", version)
+		return result, errors.New("incoming database schema version is not compatible")
 	}
 
 	var totalIncoming int64
 	if err = d.conn.QueryRow("SELECT COUNT(*) FROM incoming.usage_events").Scan(&totalIncoming); err != nil {
-		return 0, 0, fmt.Errorf("failed to count incoming events: %w", err)
+		return result, errors.New("failed to count incoming events")
 	}
 
 	selects, err := incomingCompatibilitySelects(d.conn)
 	if err != nil {
-		return 0, 0, err
+		return result, err
+	}
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return result, fmt.Errorf("start merge transaction: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	if err = tx.QueryRow(`
+		SELECT COUNT(*)
+		FROM incoming.usage_events AS candidate
+		WHERE NOT EXISTS (SELECT 1 FROM usage_events WHERE event_id = candidate.event_id)
+			AND COALESCE(candidate.raw_usage_json, '') <> ''
+			AND agentledger_raw_evidence_status(candidate.channel, candidate.raw_usage_json) = 'unknown'
+	`).Scan(&result.RawEvidenceOmitted); err != nil {
+		return result, errors.New("inspect incoming raw usage evidence")
 	}
 	query := fmt.Sprintf(`
         INSERT OR IGNORE INTO usage_events (
@@ -1057,17 +1103,32 @@ func (d *Database) MergeFrom(incomingPath string) (inserted int64, skipped int64
             timestamp_ms, session_id, %s, %s, project_path, message_id, request_id, source_file, line_number, raw_sha256,
             input_tokens, output_tokens, reasoning_tokens, cache_creation_tokens, cache_read_tokens, total_tokens,
             request_started_at_ms, first_token_at_ms, completed_at_ms, total_duration_ms, ttft_ms, output_duration_ms, output_tps,
-            recorded_cost_usd, raw_usage_json,
+            recorded_cost_usd,
+			CASE agentledger_raw_evidence_status(channel, COALESCE(raw_usage_json, ''))
+				WHEN 'recognized_legacy' THEN agentledger_compact_raw_evidence(channel, COALESCE(raw_usage_json, ''))
+				WHEN 'already_compact' THEN raw_usage_json
+				WHEN 'empty' THEN raw_usage_json
+				WHEN 'unknown' THEN NULL
+				ELSE agentledger_compact_raw_evidence(channel, COALESCE(raw_usage_json, ''))
+			END,
             imported_at_ms, updated_at_ms
         FROM incoming.usage_events
     `, selects.modelResolution, selects.sourceAgent, selects.sourceProduct, selects.observabilityLevel, selects.modelIsFallback, selects.sourceTotalTokens, selects.rawInputTokens, selects.tokenAccountingMethod, selects.accountingProfile, selects.sessionPathID, selects.turnID)
-	result, err := d.conn.Exec(query)
+	insertResult, err := tx.Exec(query)
 	if err != nil {
-		return 0, 0, fmt.Errorf("failed to merge events: %w", err)
+		return result, fmt.Errorf("merge events: %w", err)
 	}
 
-	rowsAffected, _ := result.RowsAffected()
-	return rowsAffected, totalIncoming - rowsAffected, nil
+	rowsAffected, err := insertResult.RowsAffected()
+	if err != nil {
+		return result, fmt.Errorf("inspect merge result: %w", err)
+	}
+	result.Inserted = rowsAffected
+	result.Skipped = totalIncoming - rowsAffected
+	if err = tx.Commit(); err != nil {
+		return result, fmt.Errorf("commit merge transaction: %w", err)
+	}
+	return result, nil
 }
 
 type incomingSelects struct {
@@ -1084,7 +1145,7 @@ type incomingSelects struct {
 	turnID                string
 }
 
-func incomingCompatibilitySelects(conn *sql.DB) (incomingSelects, error) {
+func incomingCompatibilitySelects(conn sqlQueryer) (incomingSelects, error) {
 	has := func(column string) (bool, error) {
 		return attachedColumnExists(conn, "incoming", "usage_events", column)
 	}
@@ -1129,7 +1190,7 @@ func incomingCompatibilitySelects(conn *sql.DB) (incomingSelects, error) {
 	return selects, nil
 }
 
-func attachedColumnExists(conn *sql.DB, schema, table, column string) (bool, error) {
+func attachedColumnExists(conn sqlQueryer, schema, table, column string) (bool, error) {
 	rows, err := conn.Query(fmt.Sprintf("PRAGMA %s.table_info(%s)", schema, table))
 	if err != nil {
 		return false, err

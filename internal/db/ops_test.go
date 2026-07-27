@@ -1546,8 +1546,9 @@ func TestUpsertEventReconcilesRedactedLegacyMergedByAnotherHandleAfterLocalCanon
 		t.Fatalf("open merge database handle: %v", err)
 	}
 	defer mergeDatabase.Close()
-	if inserted, skipped, err := mergeDatabase.MergeFrom(incomingPath); err != nil || inserted != 1 || skipped != 0 {
-		t.Fatalf("merge redacted legacy inserted=%d skipped=%d err=%v", inserted, skipped, err)
+	mergeResult, err := mergeDatabase.MergeFrom(incomingPath)
+	if err != nil || mergeResult.Inserted != 1 || mergeResult.Skipped != 0 {
+		t.Fatalf("merge redacted legacy result=%+v err=%v", mergeResult, err)
 	}
 
 	incoming := *corrected
@@ -2784,12 +2785,12 @@ func TestMergeFromPreservesSourceMetadata(t *testing.T) {
 		t.Fatalf("open destination: %v", err)
 	}
 	defer database.Close()
-	inserted, skipped, err := database.MergeFrom(incomingPath)
+	mergeResult, err := database.MergeFrom(incomingPath)
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
-	if inserted != 1 || skipped != 0 {
-		t.Fatalf("unexpected merge inserted=%d skipped=%d", inserted, skipped)
+	if mergeResult.Inserted != 1 || mergeResult.Skipped != 0 {
+		t.Fatalf("unexpected merge result=%+v", mergeResult)
 	}
 
 	var sourceProduct, observability, accounting string
