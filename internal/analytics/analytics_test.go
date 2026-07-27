@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/BlueSkyXN/AgentLedger/internal/db"
+	"github.com/BlueSkyXN/AgentLedger/internal/pricing"
 )
 
 func testDB(t *testing.T) *db.Database {
@@ -178,5 +179,51 @@ func TestInvalidAnalyticsOptions(t *testing.T) {
 	}
 	if _, err := distinctStrings(database.Conn(), "raw SQL"); err == nil {
 		t.Fatal("expected invalid filter option error")
+	}
+}
+
+func TestAttachEstimatesOmitUnpricedCostButKeepCoverage(t *testing.T) {
+	missing := &pricing.CoverageSummary{TotalEvents: 1, Confidence: "missing"}
+	estimate := costResult{Summary: missing}
+
+	summary := Summary{}
+	attachSummaryEstimate(&summary, estimate)
+	if summary.Pricing != missing || summary.EstimatedCostUSD != nil || summary.EstimatedCostMicroUSD != nil {
+		t.Fatalf("summary should keep missing coverage without a zero cost: %+v", summary)
+	}
+
+	metric := MetricRow{}
+	attachMetricEstimate(&metric, estimate)
+	if metric.Pricing != missing || metric.EstimatedCostUSD != nil || metric.EstimatedCostMicroUSD != nil {
+		t.Fatalf("metric should keep missing coverage without a zero cost: %+v", metric)
+	}
+
+	timeRow := TimeBreakdownRow{}
+	attachTimeEstimate(&timeRow, estimate)
+	if timeRow.Pricing != missing || timeRow.EstimatedCostUSD != nil || timeRow.EstimatedCostMicroUSD != nil {
+		t.Fatalf("time row should keep missing coverage without a zero cost: %+v", timeRow)
+	}
+}
+
+func TestAttachEstimatesPreserveExplicitZeroPrice(t *testing.T) {
+	priced := &pricing.CoverageSummary{TotalEvents: 1, PricedEvents: 1, CoverageRatio: 1, Confidence: "exact"}
+	estimate := costResult{Summary: priced}
+
+	summary := Summary{}
+	attachSummaryEstimate(&summary, estimate)
+	if summary.EstimatedCostUSD == nil || *summary.EstimatedCostUSD != 0 || summary.EstimatedCostMicroUSD == nil || *summary.EstimatedCostMicroUSD != 0 {
+		t.Fatalf("summary should expose an explicit zero price: %+v", summary)
+	}
+
+	metric := MetricRow{}
+	attachMetricEstimate(&metric, estimate)
+	if metric.EstimatedCostUSD == nil || *metric.EstimatedCostUSD != 0 || metric.EstimatedCostMicroUSD == nil || *metric.EstimatedCostMicroUSD != 0 {
+		t.Fatalf("metric should expose an explicit zero price: %+v", metric)
+	}
+
+	timeRow := TimeBreakdownRow{}
+	attachTimeEstimate(&timeRow, estimate)
+	if timeRow.EstimatedCostUSD == nil || *timeRow.EstimatedCostUSD != 0 || timeRow.EstimatedCostMicroUSD == nil || *timeRow.EstimatedCostMicroUSD != 0 {
+		t.Fatalf("time row should expose an explicit zero price: %+v", timeRow)
 	}
 }

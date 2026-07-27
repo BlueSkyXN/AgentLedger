@@ -10,7 +10,7 @@ import (
 var rootCmd = &cobra.Command{
 	Use:   "agent-ledger",
 	Short: "A local-first usage analytics tool for AI coding agents",
-	Long: `AgentLedger imports usage data from multiple AI agents (Claude Code, Codex, Gemini, GitHub Copilot),
+	Long: `AgentLedger imports usage data from multiple AI agents (Claude Code, Codex, Gemini, GitHub Copilot, WorkBuddy),
 stores it in a simple SQLite analytics schema with deterministic deduplication,
 and provides token, timing, TTFT, and output TPS reports.`,
 }

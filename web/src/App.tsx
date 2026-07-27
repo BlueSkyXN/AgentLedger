@@ -1,5 +1,4 @@
-import { lazy, Suspense } from "react";
-import { Route, Routes } from "react-router-dom";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 
 import { Layout } from "@/components/Layout";
 import { FilterProvider } from "@/hooks/filters";
@@ -14,24 +13,46 @@ const SlowPage = lazy(() => import("@/pages/SlowPage").then((module) => ({ defau
 const ImportsPage = lazy(() => import("@/pages/ImportsPage").then((module) => ({ default: module.ImportsPage })));
 const SettingsPage = lazy(() => import("@/pages/SettingsPage").then((module) => ({ default: module.SettingsPage })));
 
+const routes = {
+  "/": OverviewPage,
+  "/trends": TrendsPage,
+  "/models": ModelsPage,
+  "/agents": AgentsPage,
+  "/sessions": SessionsPage,
+  "/slow": SlowPage,
+  "/imports": ImportsPage,
+  "/settings": SettingsPage,
+} as const;
+
+function currentPathname() {
+  return window.location.pathname;
+}
+
 export default function App() {
+  const [pathname, setPathname] = useState(currentPathname);
+  useEffect(() => {
+    const handlePopState = () => setPathname(currentPathname());
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
+
+  const navigate = useCallback((to: string) => {
+    if (to === currentPathname()) {
+      return;
+    }
+    window.history.pushState(null, "", to);
+    setPathname(to);
+    window.scrollTo({ top: 0 });
+  }, []);
+
+  const Page = routes[pathname as keyof typeof routes] ?? OverviewPage;
   return (
     <ThemeProvider>
       <FilterProvider>
         <Suspense fallback={<div className="route-loading">页面加载中...</div>}>
-          <Routes>
-            <Route element={<Layout />}>
-              <Route path="/" element={<OverviewPage />} />
-              <Route path="/trends" element={<TrendsPage />} />
-              <Route path="/models" element={<ModelsPage />} />
-              <Route path="/agents" element={<AgentsPage />} />
-              <Route path="/sessions" element={<SessionsPage />} />
-              <Route path="/slow" element={<SlowPage />} />
-              <Route path="/imports" element={<ImportsPage />} />
-              <Route path="/settings" element={<SettingsPage />} />
-              <Route path="*" element={<OverviewPage />} />
-            </Route>
-          </Routes>
+          <Layout pathname={pathname} onNavigate={navigate}>
+            <Page />
+          </Layout>
         </Suspense>
       </FilterProvider>
     </ThemeProvider>
