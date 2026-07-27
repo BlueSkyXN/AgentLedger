@@ -26,14 +26,30 @@ export function OverviewPage() {
   const { data: daily } = useTimeseries("daily");
   const { data: channels } = useBreakdown("channel");
   const { data: models } = useBreakdown("model");
+  const modelAttributionGaps = useMemo(() => {
+    const policyZero = summary?.pricing?.policy_zero_models ?? [];
+    const missingModel = (summary?.pricing?.missing_models ?? []).filter((row) => row.reason === "missing_model");
+    return [...policyZero, ...missingModel].sort((a, b) => b.tokens - a.tokens);
+  }, [summary?.pricing?.missing_models, summary?.pricing?.policy_zero_models]);
   const missingPricingModels = useMemo(() => {
     const rows = summary?.pricing?.missing_models ?? [];
-    return [...rows].sort((a, b) => b.tokens - a.tokens);
+    return rows.filter((row) => row.reason === "missing_pricing_rule").sort((a, b) => b.tokens - a.tokens);
   }, [summary?.pricing?.missing_models]);
+  const modelAttributionPreview = modelAttributionGaps.slice(0, 10);
   const missingPricingPreview = missingPricingModels.slice(0, 10);
+  const modelAttributionTokens = modelAttributionGaps.reduce((total, row) => total + row.tokens, 0);
+  const modelAttributionEvents = modelAttributionGaps.reduce((total, row) => total + row.events, 0);
   const missingPricingTokens = missingPricingModels.reduce((total, row) => total + row.tokens, 0);
   const missingPricingEvents = missingPricingModels.reduce((total, row) => total + row.events, 0);
+  const hasModelAttributionGap = modelAttributionGaps.length > 0;
   const hasMissingPricing = missingPricingModels.length > 0;
+  const pricingStatus = hasModelAttributionGap && hasMissingPricing
+    ? "存在模型识别与计价缺口"
+    : hasModelAttributionGap
+      ? "存在未识别模型"
+      : hasMissingPricing
+        ? "存在缺价模型"
+        : "计价完整";
   const inputSideTokens = summary == null ? undefined : summary.input_tokens + summary.cache_creation_tokens + summary.cache_read_tokens;
   const cacheReadTokens = summary?.cache_read_tokens;
   const cacheRate = inputSideTokens && inputSideTokens > 0 && cacheReadTokens != null ? cacheReadTokens / inputSideTokens : undefined;
@@ -156,19 +172,31 @@ export function OverviewPage() {
       <section className="panel pricing-panel">
         <div className="panel-heading">
           <div>
-            <h2>计价缺口</h2>
+            <h2>模型识别与计价覆盖</h2>
             <p className="panel-subtitle">
               成本按模型官网正价对 token buckets 聚合计算，不写入数据库；普通模型缓存创建按输入价，Claude 缓存创建按 5 分钟写入价，推理 token 不单独重复计费。
             </p>
           </div>
-          <span className={`status-pill ${hasMissingPricing ? "danger" : "success"}`}>
-            {hasMissingPricing ? "存在缺价模型" : "计价完整"}
+          <span className={`status-pill ${hasModelAttributionGap || hasMissingPricing ? "danger" : "success"}`}>
+            {pricingStatus}
           </span>
         </div>
         <div className="pricing-summary-grid">
           <div>
             <span>Pricing profile</span>
             <strong>{summary?.pricing?.profile_id ?? "pricing.v1"}</strong>
+          </div>
+          <div>
+            <span>价格覆盖率</span>
+            <strong>{formatPercent(summary?.pricing?.token_coverage_ratio ?? summary?.pricing?.coverage_ratio)}</strong>
+          </div>
+          <div>
+            <span>未识别事件</span>
+            <strong>{formatInt(modelAttributionEvents)}</strong>
+          </div>
+          <div>
+            <span>未识别 Tokens</span>
+            <strong>{formatInt(modelAttributionTokens)}</strong>
           </div>
           <div>
             <span>缺价模型</span>
@@ -182,6 +210,45 @@ export function OverviewPage() {
             <span>缺价 Tokens</span>
             <strong>{formatInt(missingPricingTokens)}</strong>
           </div>
+        </div>
+        <div>
+          <h3>模型未识别</h3>
+          <p className="panel-subtitle">来源没有足够的前置 model ID 时按零值政策处理，不计入价格覆盖，也不代表模型免费。</p>
+        </div>
+        <div className="table-wrap">
+          <table className="compact-table">
+            <thead>
+              <tr>
+                <th>Provider</th>
+                <th>Channel</th>
+                <th>Model</th>
+                <th>Events</th>
+                <th>Tokens</th>
+                <th>Reason</th>
+              </tr>
+            </thead>
+            <tbody>
+              {modelAttributionPreview.map((row) => (
+                <tr key={`${row.provider}:${row.channel}:${row.model}:${row.reason}`}>
+                  <td>{row.provider || "-"}</td>
+                  <td>{row.channel || "-"}</td>
+                  <td className="mono">{row.model || "-"}</td>
+                  <td>{formatInt(row.events)}</td>
+                  <td>{formatInt(row.tokens)}</td>
+                  <td>{row.reason}</td>
+                </tr>
+              ))}
+              {!hasModelAttributionGap ? (
+                <tr>
+                  <td className="empty-cell" colSpan={6}>当前范围没有未识别模型。</td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+        <div>
+          <h3>已识别但缺价</h3>
+          <p className="panel-subtitle">来源已经提供 model ID，但当前 pricing profile 没有适用规则；这些 Tokens 不进入成本估算。</p>
         </div>
         <div className="table-wrap">
           <table className="compact-table">
@@ -197,7 +264,7 @@ export function OverviewPage() {
             </thead>
             <tbody>
               {missingPricingPreview.map((row) => (
-                <tr key={`${row.provider}:${row.channel}:${row.model}`}>
+                <tr key={`${row.provider}:${row.channel}:${row.model}:${row.reason}`}>
                   <td>{row.provider || "-"}</td>
                   <td>{row.channel || "-"}</td>
                   <td className="mono">{row.model || "-"}</td>
@@ -208,7 +275,7 @@ export function OverviewPage() {
               ))}
               {!hasMissingPricing ? (
                 <tr>
-                  <td className="empty-cell" colSpan={6}>当前范围没有缺价模型。</td>
+                  <td className="empty-cell" colSpan={6}>当前范围没有已识别但缺价的模型。</td>
                 </tr>
               ) : null}
             </tbody>
@@ -216,11 +283,9 @@ export function OverviewPage() {
         </div>
         {hasMissingPricing ? (
           <p className="note">
-            这里显示 token 影响最大的前 {formatInt(missingPricingPreview.length)} 项，共 {formatInt(missingPricingModels.length)} 个缺价模型。缺价部分不会被塞进成本，避免假成本。
+            缺价表显示 token 影响最大的前 {formatInt(missingPricingPreview.length)} 项，共 {formatInt(missingPricingModels.length)} 个缺价模型。未识别与缺价部分均不会被塞进成本，避免假成本。
           </p>
-        ) : (
-          <p className="note">当前范围的成本已覆盖全部 token。</p>
-        )}
+        ) : !hasModelAttributionGap ? <p className="note">当前范围的成本已覆盖全部 token。</p> : null}
       </section>
       <section className="panel meta-row">
         <span>第一条事件：{formatDate(summary?.first_event_at)}</span>

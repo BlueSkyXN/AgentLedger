@@ -18,6 +18,8 @@ const (
 	// CodexDuplicatePolicyCCUsageCompatible 复刻 ccusage 口径：直接用 last_token_usage，
 	// 靠含时间戳的 fingerprint 去重，便于与 `ccusage codex` 逐数字交叉核对（会继承其高估）。
 	CodexDuplicatePolicyCCUsageCompatible = "ccusage_compatible"
+	codexScannerInitialBufferBytes        = 64 * 1024
+	codexScannerMaxTokenBytes             = 64 * 1024 * 1024
 )
 
 type CodexAdapter struct {
@@ -39,6 +41,12 @@ type codexUsageSnapshot struct {
 	HasOutput      bool
 	HasReasoning   bool
 	HasTotal       bool
+}
+
+type codexModelState struct {
+	model      string
+	resolution string
+	line       int
 }
 
 func NewCodexAdapter() *CodexAdapter {
@@ -98,12 +106,11 @@ func (a *CodexAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, erro
 
 	var records []*fingerprint.ParsedRecord
 	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 10*1024*1024), 10*1024*1024)
+	scanner.Buffer(make([]byte, codexScannerInitialBufferBytes), codexScannerMaxTokenBytes)
 	lineNum := 0
 	defaultSessionID := extractCodexSession(path)
 	sessionPathID := extractCodexSessionPathID(path)
-	currentModel := ""
-	currentModelIsFallback := false
+	modelStates := map[string]codexModelState{}
 	previousTotals := map[string]codexUsageSnapshot{}
 	lastUsageRecords := map[string]*fingerprint.ParsedRecord{}
 
@@ -120,10 +127,22 @@ func (a *CodexAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, erro
 		}
 
 		entryType := getString(obj, "type")
+		contextSessionID := extractCodexExplicitSessionID(obj)
+		if modelName := extractCodexThreadSettingsModel(obj); modelName != "" {
+			modelStates[contextSessionID] = codexModelState{
+				model:      modelName,
+				resolution: model.ModelResolutionThreadSettings,
+				line:       lineNum,
+			}
+			continue
+		}
 		if entryType == "turn_context" {
 			if modelName := extractCodexTurnContextModel(obj); modelName != "" {
-				currentModel = modelName
-				currentModelIsFallback = false
+				modelStates[contextSessionID] = codexModelState{
+					model:      modelName,
+					resolution: model.ModelResolutionTurnContext,
+					line:       lineNum,
+				}
 			}
 			continue
 		}
@@ -160,21 +179,23 @@ func (a *CodexAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, erro
 		}
 
 		parsedModel := extractCodexModel(obj)
-		if parsedModel != "" {
-			currentModel = parsedModel
-			currentModelIsFallback = false
-		}
 		modelName := parsedModel
 		modelIsFallback := false
-		if modelName == "" && currentModel != "" {
-			modelName = currentModel
-			modelIsFallback = currentModelIsFallback
+		modelResolution := model.ModelResolutionDirectEvent
+		if modelName == "" {
+			state, ok := modelStates[""]
+			if sessionState, found := modelStates[sessionID]; found && (!ok || sessionState.line > state.line) {
+				state, ok = sessionState, true
+			}
+			if ok && state.model != "" {
+				modelName = state.model
+				modelResolution = state.resolution
+			}
 		}
 		if modelName == "" {
-			modelName = "gpt-5"
+			modelName = "unknown"
 			modelIsFallback = true
-			currentModel = modelName
-			currentModelIsFallback = true
+			modelResolution = model.ModelResolutionUnknown
 		}
 
 		rawJSON, _ := json.Marshal(obj)
@@ -184,6 +205,7 @@ func (a *CodexAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, erro
 			Agent:                 "codex",
 			Provider:              "openai",
 			Model:                 modelName,
+			ModelResolution:       modelResolution,
 			TimestampMs:           extractCodexTimestamp(obj),
 			SessionID:             sessionID,
 			MessageID:             firstNonEmpty(getString(obj, "id"), getString(obj, "message_id")),
@@ -381,18 +403,34 @@ func extractCodexTurnContextModel(obj map[string]interface{}) string {
 	return ""
 }
 
+func extractCodexThreadSettingsModel(obj map[string]interface{}) string {
+	if getString(obj, "type") != "event_msg" || getNestedString(obj, "payload", "type") != "thread_settings_applied" {
+		return ""
+	}
+	return strings.TrimSpace(getNestedString(obj, "payload", "thread_settings", "model"))
+}
+
 func extractCodexSessionID(obj map[string]interface{}, fallback string) string {
+	if sessionID := extractCodexExplicitSessionID(obj); sessionID != "" {
+		return sessionID
+	}
+	if strings.TrimSpace(fallback) != "" {
+		return fallback
+	}
+	return "unknown"
+}
+
+func extractCodexExplicitSessionID(obj map[string]interface{}) string {
 	for _, value := range []string{
 		getString(obj, "session_id"),
 		getString(obj, "sessionId"),
 		getNestedString(obj, "payload", "session_id"),
-		fallback,
 	} {
 		if strings.TrimSpace(value) != "" {
 			return value
 		}
 	}
-	return "unknown"
+	return ""
 }
 
 func extractCodexTimestamp(obj map[string]interface{}) int64 {

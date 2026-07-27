@@ -175,7 +175,7 @@ agent-ledger report sessions --until 2026-05-31
 agent-ledger report slow --sort ttft_ms --limit 20
 ```
 
-报表会输出事件数、token 分项、平均总耗时、平均 TTFT、平均输出 TPS 和成本列。默认 `--cost recorded` 只显示来源明确记录的 `Recorded Cost(USD)`；`--cost estimated` 或 `--cost both` 会按 `pricing/pricing.v1.json` 或 `--pricing` 指定的 JSON profile 做只读估算，并输出 pricing coverage / confidence。estimated cost 不会写回 SQLite。没有 explicit timing 的事件不会参与 timing 平均值，相关字段保持空值。
+报表会输出事件数、token 分项、平均总耗时、平均 TTFT、平均输出 TPS 和成本列。默认 `--cost recorded` 只显示来源明确记录的 `Recorded Cost(USD)`；`--cost estimated` 或 `--cost both` 会按 `pricing/pricing.v1.json` 或 `--pricing` 指定的 JSON profile 做只读估算，并输出 pricing coverage / confidence。内置 profile 对有明确长上下文价格的模型按单次事件完整 input side（input + cache creation + cache read）选择整请求价格档，不做超额部分的累进计价。estimated cost 不会写回 SQLite。没有 explicit timing 的事件不会参与 timing 平均值，相关字段保持空值。
 
 ## 本地 Web 面板
 
@@ -239,10 +239,10 @@ project=<project-path-label>
 | Agent | 默认路径 | 解析格式 | 说明 |
 |---|---|---|---|
 | Claude Code | `~/.config/claude/projects`, `~/.claude/projects` | JSONL | 读取带有 `message.usage` 的 assistant 消息；旧配置写 `~/.claude` 时会自动展开到 `projects`。 |
-| Codex | `~/.codex/sessions` | JSONL | 读取 token count 记录；Codex provider 归一为 `openai` 合并统计，不按 session 的 `model_provider` 拆账；默认用 `total_token_usage` 的 per-session 累计 delta 还原真实增量，`last_token_usage` 仅用于旧记录或 `ccusage_compatible` 对照；配置写 `~/.codex` 时会自动收敛到 `sessions`。 |
+| Codex | `~/.codex/sessions` | JSONL | 读取 token count 记录；Codex provider 归一为 `openai` 合并统计，不按 session 的 `model_provider` 拆账；按 JSONL 时序使用 usage 自身 model、`thread_settings_applied` 和 `turn_context`，并保存 `model_resolution`；没有前置模型证据时记录为 `unknown` fallback，按零值政策单独披露且不算真实价格覆盖；默认用 `total_token_usage` 的 per-session 累计 delta 还原真实增量，`last_token_usage` 仅用于旧记录或 `ccusage_compatible` 对照；配置写 `~/.codex` 时会自动收敛到 `sessions`。 |
 | GitHub Copilot | `~/.copilot/otel`, `~/.copilot/session-state` | JSONL | 优先读取 OTel `gen_ai.usage.*`；没有 OTel 文件时回退到每条非空 `session.shutdown.data.modelMetrics` 的 segment+model 汇总。Copilot input 会拆成 `raw_input_tokens`、非缓存 `input_tokens` 和 `cache_read_tokens`。 |
 | Gemini CLI | `~/.gemini` | JSON / JSONL | 读取 `usageMetadata`。 |
-| WorkBuddy | `~/.workbuddy/projects` | JSONL | 读取带 `providerData.usage` 与 `providerData.rawUsage` 的调用记录；按根级事件 ID 去重并拆分非缓存 input、cache read/write、output 和 reasoning 明细。`credit` 不保存、不作为 USD 成本；`auto` 在来源未给出实际模型时保持未定价，没有 pricing rule 的模型保持 missing 而不显示为 `$0`。 |
+| WorkBuddy | `~/.workbuddy/projects` | JSONL | 读取带 `providerData.usage` 与 `providerData.rawUsage` 的调用记录；按根级事件 ID 去重并拆分非缓存 input、cache read/write、output 和 reasoning 明细。`credit` 不保存、不作为 USD 成本；`auto` 是路由选择状态而非 model ID，规范化为 `unknown/policy_zero`。 |
 
 `channel` 固定表示 agent 来源，例如 `claude`、`codex`、`copilot`、`gemini`、`workbuddy`。
 

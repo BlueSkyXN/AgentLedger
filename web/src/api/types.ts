@@ -8,6 +8,15 @@ export type Filters = {
   project?: string;
 };
 
+export type PricingIssue = {
+  provider: string;
+  channel: string;
+  model: string;
+  reason: string;
+  events: number;
+  tokens: number;
+};
+
 export type PricingCoverage = {
   profile_id: string;
   currency: string;
@@ -19,14 +28,10 @@ export type PricingCoverage = {
   token_coverage_ratio?: number;
   coverage_ratio: number;
   confidence: string;
-  missing_models?: Array<{
-    provider: string;
-    channel: string;
-    model: string;
-    reason: string;
-    events: number;
-    tokens: number;
-  }>;
+  missing_models?: PricingIssue[];
+  policy_zero_events?: number;
+  policy_zero_tokens?: number;
+  policy_zero_models?: PricingIssue[];
 };
 
 export type Summary = {
@@ -111,6 +116,7 @@ export type EventItem = {
   provider: string | null;
   model_raw: string | null;
   model_normalized: string | null;
+  model_resolution: "direct_event" | "thread_settings" | "turn_context" | "unknown" | "legacy_unclassified" | null;
   timestamp: string | null;
   session_id: string | null;
   project_path: string | null;

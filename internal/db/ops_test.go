@@ -193,6 +193,119 @@ func TestUpsertEventExactCodexModelCorrections(t *testing.T) {
 	}
 }
 
+func TestUpsertEventCodexReimportUpgradesUnknownToThreadSettingsResolution(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer database.Close()
+
+	legacy := &model.UsageEvent{
+		Channel:         "codex",
+		SourceAgent:     "codex",
+		SourceProduct:   "codex-cli",
+		Provider:        "openai",
+		ModelRaw:        "unknown",
+		ModelNormalized: "unknown",
+		ModelResolution: model.ModelResolutionUnknown,
+		ModelIsFallback: true,
+		TimestampMs:     1,
+		SessionID:       "session-thread-settings-upgrade",
+		MessageID:       "message-thread-settings-upgrade",
+		SourceFile:      "/synthetic/thread-settings-upgrade.jsonl",
+		LineNumber:      9,
+		RawSHA256:       "thread-settings-upgrade-hash",
+		RawUsageJSON:    `{"type":"event_msg","payload":{"type":"token_count"}}`,
+		InputTokens:     40,
+		OutputTokens:    10,
+		TotalTokens:     50,
+		ImportedAtMs:    1,
+		UpdatedAtMs:     1,
+	}
+	setUsageEventFingerprintForTest(legacy)
+	if status, err := database.UpsertEvent(legacy); err != nil || status != "inserted" {
+		t.Fatalf("insert legacy status=%s err=%v", status, err)
+	}
+
+	corrected := *legacy
+	corrected.ModelRaw = "gpt-5.6-terra"
+	corrected.ModelNormalized = "gpt-5.6-terra"
+	corrected.ModelResolution = model.ModelResolutionThreadSettings
+	corrected.ModelIsFallback = false
+	corrected.UpdatedAtMs = 2
+	setUsageEventFingerprintForTest(&corrected)
+	if status, err := database.UpsertEvent(&corrected); err != nil || status != "updated" {
+		t.Fatalf("upgrade status=%s err=%v", status, err)
+	}
+
+	var storedModel, storedResolution string
+	var fallback int
+	var total, count int64
+	if err := database.Conn().QueryRow(`SELECT model_normalized, model_resolution, model_is_fallback, total_tokens FROM usage_events`).Scan(&storedModel, &storedResolution, &fallback, &total); err != nil {
+		t.Fatalf("select upgraded event: %v", err)
+	}
+	if err := database.Conn().QueryRow(`SELECT COUNT(*) FROM usage_events`).Scan(&count); err != nil {
+		t.Fatalf("count upgraded events: %v", err)
+	}
+	if storedModel != corrected.ModelNormalized || storedResolution != model.ModelResolutionThreadSettings || fallback != 0 || total != 50 || count != 1 {
+		t.Fatalf("unexpected upgraded row model=%q resolution=%q fallback=%d total=%d count=%d", storedModel, storedResolution, fallback, total, count)
+	}
+	if status, err := database.UpsertEvent(&corrected); err != nil || status != "skipped" {
+		t.Fatalf("idempotent reimport status=%s err=%v", status, err)
+	}
+}
+
+func TestUpsertEventReclassifiesWorkBuddyAutoAsUnknown(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer database.Close()
+
+	legacy := &model.UsageEvent{
+		EventID:         "workbuddy-auto",
+		DedupeKey:       "workbuddy-auto",
+		DedupeStrategy:  "message_id",
+		Channel:         "workbuddy",
+		SourceAgent:     "workbuddy",
+		SourceProduct:   "workbuddy",
+		Provider:        "workbuddy",
+		ModelRaw:        "auto",
+		ModelNormalized: "auto",
+		ModelResolution: model.ModelResolutionDirectEvent,
+		TimestampMs:     1,
+		InputTokens:     8,
+		OutputTokens:    2,
+		TotalTokens:     10,
+		ImportedAtMs:    1,
+		UpdatedAtMs:     1,
+	}
+	if status, err := database.UpsertEvent(legacy); err != nil || status != "inserted" {
+		t.Fatalf("insert legacy status=%s err=%v", status, err)
+	}
+
+	corrected := *legacy
+	corrected.ModelNormalized = "unknown"
+	corrected.ModelResolution = model.ModelResolutionUnknown
+	corrected.ModelIsFallback = true
+	corrected.UpdatedAtMs = 2
+	if status, err := database.UpsertEvent(&corrected); err != nil || status != "updated" {
+		t.Fatalf("correct auto status=%s err=%v", status, err)
+	}
+
+	var raw, normalized, resolution string
+	var fallback int
+	if err := database.Conn().QueryRow(`SELECT model_raw, model_normalized, model_resolution, model_is_fallback FROM usage_events WHERE event_id='workbuddy-auto'`).Scan(&raw, &normalized, &resolution, &fallback); err != nil {
+		t.Fatalf("select corrected auto: %v", err)
+	}
+	if raw != "auto" || normalized != "unknown" || resolution != model.ModelResolutionUnknown || fallback != 1 {
+		t.Fatalf("unexpected corrected auto raw=%q normalized=%q resolution=%q fallback=%d", raw, normalized, resolution, fallback)
+	}
+	if status, err := database.UpsertEvent(&corrected); err != nil || status != "skipped" {
+		t.Fatalf("idempotent auto correction status=%s err=%v", status, err)
+	}
+}
+
 func TestUpsertEventExactCodexModelCorrectionPreservesCanonicalBundles(t *testing.T) {
 	database, err := Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
 	if err != nil {
@@ -512,6 +625,68 @@ func TestUpsertEventCodexClassificationTrustOrder(t *testing.T) {
 
 			if status, err := database.UpsertEvent(&incoming); err != nil || status != "skipped" {
 				t.Fatalf("second classification import status=%s err=%v", status, err)
+			}
+		})
+	}
+}
+
+func TestUpsertEventCodexReplacesLegacyDefaultFallbackWithUnknown(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		messageID string
+	}{
+		{name: "message identity", messageID: "message-legacy-default-fallback"},
+		{name: "session token identity"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			database, err := Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
+			if err != nil {
+				t.Fatalf("open: %v", err)
+			}
+			defer database.Close()
+
+			legacy := &model.UsageEvent{
+				Channel:         "codex",
+				SourceAgent:     "codex",
+				SourceProduct:   "codex-cli",
+				Provider:        "openai",
+				ModelRaw:        "gpt-5",
+				ModelNormalized: "gpt-5",
+				ModelIsFallback: true,
+				TimestampMs:     1,
+				SessionID:       "session-legacy-default-fallback",
+				MessageID:       tc.messageID,
+				SourceFile:      "/synthetic/legacy-default-fallback.jsonl",
+				LineNumber:      10,
+				RawSHA256:       "legacy-default-fallback-hash",
+				RawUsageJSON:    `{"type":"event_msg","payload":{"type":"token_count"}}`,
+				InputTokens:     15,
+				OutputTokens:    5,
+				TotalTokens:     20,
+				ImportedAtMs:    1,
+				UpdatedAtMs:     1,
+			}
+			setUsageEventFingerprintForTest(legacy)
+			if status, err := database.UpsertEvent(legacy); err != nil || status != "inserted" {
+				t.Fatalf("insert legacy status=%s err=%v", status, err)
+			}
+
+			incoming := *legacy
+			incoming.ModelRaw = "unknown"
+			incoming.ModelNormalized = "unknown"
+			incoming.UpdatedAtMs = 2
+			setUsageEventFingerprintForTest(&incoming)
+
+			status, err := database.UpsertEvent(&incoming)
+			if err != nil || status != "updated" {
+				t.Fatalf("replace legacy fallback status=%s err=%v", status, err)
+			}
+			stored := selectOnlyUsageEventForTest(t, database)
+			if stored.ModelRaw != "unknown" || stored.ModelNormalized != "unknown" || !stored.ModelIsFallback {
+				t.Fatalf("stored fallback model=%q/%q fallback=%v", stored.ModelRaw, stored.ModelNormalized, stored.ModelIsFallback)
+			}
+			if status, err := database.UpsertEvent(&incoming); err != nil || status != "skipped" {
+				t.Fatalf("second unknown fallback import status=%s err=%v", status, err)
 			}
 		})
 	}
@@ -2160,7 +2335,7 @@ func TestFreshDBCreatesSchemaV2WithSourceColumns(t *testing.T) {
 	if !exists || version != "2" {
 		t.Fatalf("expected schema version 2, exists=%v version=%q", exists, version)
 	}
-	for _, column := range []string{"source_agent", "source_product", "observability_level", "model_is_fallback", "source_total_tokens", "raw_input_tokens", "token_accounting_method", "accounting_profile", "session_path_id", "turn_id"} {
+	for _, column := range []string{"source_agent", "source_product", "observability_level", "model_is_fallback", "model_resolution", "source_total_tokens", "raw_input_tokens", "token_accounting_method", "accounting_profile", "session_path_id", "turn_id"} {
 		if ok, err := dbColumnExists(database.Conn(), "usage_events", column); err != nil || !ok {
 			t.Fatalf("expected %s column ok=%v err=%v", column, ok, err)
 		}
@@ -2183,14 +2358,14 @@ func TestV2CompatibilityColumnsBackfillAndIdempotency(t *testing.T) {
 		t.Fatalf("expected version 2, got %s", version)
 	}
 
-	var sourceAgent, observability string
+	var sourceAgent, observability, modelResolution string
 	var sourceProduct sql.NullString
 	var modelFallback int
-	if err := database.Conn().QueryRow(`SELECT source_agent, source_product, observability_level, model_is_fallback FROM usage_events WHERE event_id='legacy-event'`).Scan(&sourceAgent, &sourceProduct, &observability, &modelFallback); err != nil {
+	if err := database.Conn().QueryRow(`SELECT source_agent, source_product, observability_level, model_is_fallback, model_resolution FROM usage_events WHERE event_id='legacy-event'`).Scan(&sourceAgent, &sourceProduct, &observability, &modelFallback, &modelResolution); err != nil {
 		t.Fatalf("select migrated event: %v", err)
 	}
-	if sourceAgent != "claude" || sourceProduct.Valid || observability != "unknown" || modelFallback != 0 {
-		t.Fatalf("unexpected backfill source_agent=%q source_product_valid=%v observability=%q fallback=%d", sourceAgent, sourceProduct.Valid, observability, modelFallback)
+	if sourceAgent != "claude" || sourceProduct.Valid || observability != "unknown" || modelFallback != 0 || modelResolution != model.ModelResolutionLegacyUnclassified {
+		t.Fatalf("unexpected backfill source_agent=%q source_product_valid=%v observability=%q fallback=%d resolution=%q", sourceAgent, sourceProduct.Valid, observability, modelFallback, modelResolution)
 	}
 
 	var groupedTotal int64

@@ -28,6 +28,7 @@ type Defaults struct {
 type Source struct {
 	Provider  string `json:"provider"`
 	Name      string `json:"name"`
+	URL       string `json:"url"`
 	CheckedAt string `json:"checked_at"`
 }
 
@@ -46,6 +47,10 @@ type Rule struct {
 	CacheWriteAssumption string    `json:"cache_write_assumption"`
 	Confidence           string    `json:"confidence"`
 	Notes                string    `json:"notes"`
+	ModelID              string    `json:"model_id"`
+	SourceURL            string    `json:"source_url"`
+	PricingNotesURL      string    `json:"pricing_notes_url"`
+	AsOf                 string    `json:"as_of"`
 }
 
 type Condition struct {

@@ -30,6 +30,10 @@ Codex 默认只扫描 `~/.codex/sessions/**/*.jsonl`，与 ccusage 的默认范�
 
 Codex 的 provider 归一为 `openai` 做合并统计，不按 session 级 `model_provider` 拆账；`model_provider` 可能反映本机路由或兼容网关，不作为事件身份或默认报表拆分维度。
 
+Codex 模型状态按同一 session/thread 的 JSONL 物理顺序更新：`thread_settings_applied.payload.thread_settings.model` 和 `turn_context.model` 都只影响其后的 usage，后出现的声明覆盖先前状态；usage 自身明确携带的 model 仅作为该事件的 `direct_event` 证据。模型证据来源写入 `model_resolution = direct_event | thread_settings | turn_context | unknown`。父任务模型不会自动继承给 fork/subagent，也不会用 usage 之后才出现的模型倒灌前序事件。
+
+Codex token event 本身没有 model、且此前也没有可用的 `thread_settings` / `turn_context` 时，模型统一记录为 `unknown`，同时设置 `model_is_fallback = true` 和 `model_resolution = unknown`。不要用具体 GPT 型号充当未知模型占位符。默认 pricing profile 对精确 `unknown` 使用本地零值政策，但不把它算作真实价格覆盖；重新导入时，同一来源行中由旧 parser 硬编码生成的 `gpt-5` fallback 会收敛为当前可证明的上下文模型或 `unknown`，但新的 fallback 不会覆盖历史 explicit model。
+
 Codex 的 `total_token_usage` 是 session 级 cumulative counter，是最权威的用量来源。两个观测事实决定了计量口径：(1) 每次真实调用后，日志通常会**冗余重发**一条内容相同的 `token_count`（累计 total 不变）；(2) `last_token_usage` 只记录最后一次 API 调用，当同一区间内发生多次调用时会**漏记**中间的量。
 
 默认 `duplicate_policy = "ledger"` 据此采用最准口径：以 `total_token_usage` 做 per-session **望远镜 delta**——累计不变时 delta 为 0、自动跳过冗余重发；累计回落（compact 压缩上下文导致 counter reset）时整段计入、不丢量；`last_token_usage` 缺失（无累计）的旧记录才回退为单条直接计入。本机 1151 个 session 实测，该口径与「逐 session 累计值金标准」一致到 99.96%。
@@ -58,9 +62,9 @@ WorkBuddy 只扫描 `~/.workbuddy/projects/**/*.jsonl`，包括主会话和 suba
 
 WorkBuddy source input 包含 cache。入库时 `raw_input_tokens` 保存 `prompt_tokens`，`input_tokens` 扣除 `prompt_tokens_details.cached_tokens` 与明确的 cache write，`cache_read_tokens` / `cache_creation_tokens` 单独保存；`completion_tokens` 作为包含 reasoning 的 output，reasoning detail 仅作分析明细。`source_total_tokens` 与 `total_tokens` 使用来源明确的 `rawUsage.total_tokens`，不从 overlapping 明细重新推导。缺少 cache-write 明细的记录标记为 partial observability。
 
-`model_raw` 保存 `providerData.model`，规范化仅使用 WorkBuddy exact aliases：`deepseek-v4-pro-202606 -> deepseek-v4-pro`、`k3 -> kimi-k3`、`kimi-k3-2 -> kimi-k3`。内置路由使用 `provider = workbuddy`，`custom-local:*` 使用 `provider = custom`；两者的 `channel`、`source_agent`、`source_product` 均为 `workbuddy`。`auto` 在来源未给出 resolved model 时保持 `auto` 并按 missing pricing 处理。
+`model_raw` 保存 `providerData.model`，规范化仅使用 WorkBuddy exact aliases：`deepseek-v4-pro-202606 -> deepseek-v4-pro`、`k3 -> kimi-k3`、`kimi-k3-2 -> kimi-k3`。内置路由使用 `provider = workbuddy`，`custom-local:*` 使用 `provider = custom`；两者的 `channel`、`source_agent`、`source_product` 均为 `workbuddy`。`auto` 是路由选择状态而不是 resolved model ID，因此保留 `model_raw = auto` 供诊断，同时写入 `model_normalized = unknown`、`model_resolution = unknown` 和 `policy_zero`。
 
-WorkBuddy 的 `rawUsage.credit` 不写入脱敏 raw usage envelope，也不映射为 `recorded_cost_usd`。estimated cost 只使用规范化模型、token 分项和 pricing profile；没有匹配 pricing rule 时保留 missing coverage，不输出估算 `$0`。保存的 raw envelope 是 allowlist 重建结果，不包含正文、工具参数、`cwd`、URL、API key 或完整 `providerData`；`project_path` 单独保存在本地事实表中，并继续服从默认 export path redaction。
+WorkBuddy 的 `rawUsage.credit` 不写入脱敏 raw usage envelope，也不映射为 `recorded_cost_usd`。estimated cost 只使用规范化模型、token 分项和 pricing profile。保存的 raw envelope 是 allowlist 重建结果，不包含正文、工具参数、`cwd`、URL、API key 或完整 `providerData`；`project_path` 单独保存在本地事实表中，并继续服从默认 export path redaction。
 
 ## Parsed fields
 

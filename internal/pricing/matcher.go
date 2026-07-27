@@ -28,8 +28,16 @@ type Match struct {
 	RuleID        string
 	Basis         string
 	Confidence    string
+	Resolution    string
 	MissingReason string
 }
+
+const (
+	ResolutionPriced             = "priced"
+	ResolutionPolicyZero         = "policy_zero"
+	ResolutionMissingModel       = "missing_model"
+	ResolutionMissingPricingRule = "missing_pricing_rule"
+)
 
 type Estimator struct {
 	profile *Profile
@@ -48,8 +56,8 @@ func (e *Estimator) Profile() *Profile {
 
 func (e *Estimator) Resolve(ev Event) Match {
 	model := strings.ToLower(strings.TrimSpace(ev.Model))
-	if model == "" || model == "unknown" {
-		return Match{Confidence: "missing", MissingReason: "missing_model"}
+	if model == "" || model == "unknown" && !strings.EqualFold(e.profile.Defaults.UnknownModelPolicy, "zero") {
+		return Match{Confidence: "missing", Resolution: ResolutionMissingModel, MissingReason: "missing_model"}
 	}
 	modelAliases := pricingModelAliases(model)
 	for i := range e.profile.Rules {
@@ -64,9 +72,19 @@ func (e *Estimator) Resolve(ev Event) Match {
 			continue
 		}
 		confidence := firstNonEmpty(rule.Confidence, e.profile.Defaults.Confidence, "estimated")
-		return Match{Rule: rule, RuleID: rule.ID, Basis: firstNonEmpty(rule.Basis, "api_equivalent"), Confidence: confidence}
+		basis := firstNonEmpty(rule.Basis, "api_equivalent")
+		resolution := ResolutionPriced
+		if basis == "unknown_model_zero_policy" {
+			resolution = ResolutionPolicyZero
+			confidence = "policy"
+		}
+		return Match{Rule: rule, RuleID: rule.ID, Basis: basis, Confidence: confidence, Resolution: resolution}
 	}
-	return Match{Confidence: "missing", MissingReason: "missing_pricing_rule"}
+	missingReason := ResolutionMissingPricingRule
+	if model == "unknown" {
+		missingReason = ResolutionMissingModel
+	}
+	return Match{Confidence: "missing", Resolution: missingReason, MissingReason: missingReason}
 }
 
 func matchesAnyPattern(patterns []string, values ...string) bool {

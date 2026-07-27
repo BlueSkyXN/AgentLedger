@@ -105,10 +105,11 @@ _foreign_keys=ON
 | `provider` | `TEXT` | nullable | 模型或日志 provider，例如 `anthropic`、`openai`、`google`。Codex 当前归一为 `openai`，不按 session `model_provider` 拆分。 |
 | `model_raw` | `TEXT` | nullable | 日志中的原始模型名。 |
 | `model_normalized` | `TEXT` | nullable | 归一化后的模型名。 |
+| `model_resolution` | `TEXT` | `NOT NULL DEFAULT 'legacy_unclassified'` | 模型证据来源：`direct_event`、`thread_settings`、`turn_context`、`unknown`；旧库未重导记录使用 `legacy_unclassified`。 |
 | `source_agent` | `TEXT` | nullable | 解析来源 agent，通常与 `channel` 一致。 |
 | `source_product` | `TEXT` | nullable | 更具体的来源形态，例如 `claude-code`、`codex-cli`、`copilot-otel`、`copilot-session-state`。 |
 | `observability_level` | `TEXT` | nullable | 来源完整度，例如 `full`、`session_summary`、`inferred`。 |
-| `model_is_fallback` | `INTEGER` | `NOT NULL DEFAULT 0` | 模型名是否来自 fallback。 |
+| `model_is_fallback` | `INTEGER` | `NOT NULL DEFAULT 0` | 模型名是否来自 fallback；Codex 无模型证据时使用 `unknown`，不伪造具体 GPT 型号。 |
 | `source_total_tokens` | `INTEGER` | nullable | 源日志中的 raw cumulative / envelope total，用于排查，不直接求和。 |
 | `raw_input_tokens` | `INTEGER` | nullable | source 原始 input token；Codex 和 Copilot 中可能包含 cached/cache read input。 |
 | `token_accounting_method` | `TEXT` | nullable | token envelope 解析方法，例如 `codex_last_token_usage`、`copilot_session_model_metrics`。 |
@@ -166,7 +167,7 @@ output_tps = output_tokens / (output_duration_ms / 1000.0)
 
 `import` 不再使用 `INSERT OR IGNORE`。重复事件会按完整度决定是否覆盖旧记录；对于 Codex，如果 parser 或 fingerprint 规则修正导致 `event_id` 改变，但 `source_file + line_number + raw_sha256` 仍指向同一原始 JSONL 行，upsert 会把当前 `event_id` 精确匹配行和同来源历史 sibling 放进同一个候选集合。存在 exact match 时，还会把 session、timestamp、line、raw hash 和 channel 都一致的脱敏行加入候选；无论 legacy/corrected sibling 全部来自默认脱敏导出，还是 legacy 脱敏行后 merge 到已有本地 canonical row，都能在真实本地来源再次 import 时收敛。
 
-收敛时，incoming candidate 和候选集合共同选择最完整的 token、timing、cost 用量 winner。删除 sibling 前，只从 token 六分项相同、并包含 winner 已有 accounting 字段相同值的单一最佳 donor 补齐 `source_total_tokens`、`raw_input_tokens`、`token_accounting_method` 和 `accounting_profile`，避免跨冲突 profile 或 method 拼出来源中不存在的 bundle。`session_path_id`、`turn_id`、`project_path` 等 source metadata 不使用 usage score 决定冲突赢家：最早历史候选提供稳定基准，其余候选只做 missing、已知纠正和路径具体度升级。provider/model classification 采用独立的可信度顺序：当前 Codex parser 明确解析出的 `openai` provider 和非 fallback model 可以修正历史值；stored `openai` 优先于 legacy provider，新的 fallback/`unknown` 不会覆盖历史 explicit model。如果 weak incoming 遇到多个互相冲突的 explicit model bundle，现有 schema 没有独立的 classification provenance 可以安全决定赢家，因此本次 upsert 返回 `skipped` 并保留全部 sibling；后续只有明确的 current model 才会执行 destructive collapse。最终记录使用可信 classification、当前 identity、本地 source 和 raw envelope，保留获胜的用量 bundle，并根据最终实际落库字段重新计算 `event_id`、`dedupe_key` 和 `dedupe_strategy`。对于能由当前 `source_file + line_number + raw_sha256 + channel` 证明来源一致的 exact Codex row，即使 fingerprint 没变化，只要 `provider`、`model_raw`、`model_normalized` 或 `model_is_fallback` 与当前解析结果不同，也会进入同一 canonical reconciliation；若唯一差异是当前 raw envelope，同样会更新而不是误报 `skipped`。没有 exact event anchor、也不匹配当前非空 `source_file` 的 changed-fingerprint 跨路径记录不会主动折叠，以避免仅凭弱 identity 误合并。因此在 `session_token` 策略下，如果保留了历史上更完整的 token 用量，最终 ID 可能不同于 incoming candidate 最初计算的 ID；重复导入同一 canonical 内容会返回 `skipped`。其他 adapter 的单行日志可能拆出多个合法事件，因此不使用这一 Codex 专用兼容身份。
+收敛时，incoming candidate 和候选集合共同选择最完整的 token、timing、cost 用量 winner。删除 sibling 前，只从 token 六分项相同、并包含 winner 已有 accounting 字段相同值的单一最佳 donor 补齐 `source_total_tokens`、`raw_input_tokens`、`token_accounting_method` 和 `accounting_profile`，避免跨冲突 profile 或 method 拼出来源中不存在的 bundle。`session_path_id`、`turn_id`、`project_path` 等 source metadata 不使用 usage score 决定冲突赢家：最早历史候选提供稳定基准，其余候选只做 missing、已知纠正和路径具体度升级。provider/model classification 采用独立的可信度顺序：当前 Codex parser 明确解析出的 `openai` provider 和非 fallback model 可以修正历史值，并同步保存 `model_resolution`；stored `openai` 和 explicit model 优先于新的 fallback/`unknown`。唯一例外是旧 parser 硬编码生成且仍带 `model_is_fallback = true` 的 `gpt-5` 占位符：当前同来源行重新解析为 `unknown` fallback 时允许替换该旧占位符。最终记录使用可信 classification、当前 identity、本地 source 和 raw envelope，并根据最终实际落库字段重新计算事件身份；重复导入同一 canonical 内容会返回 `skipped`。
 
 优先级：
 

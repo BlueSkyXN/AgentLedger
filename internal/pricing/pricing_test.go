@@ -15,6 +15,69 @@ func TestDefaultProfileLoads(t *testing.T) {
 	}
 }
 
+func TestDefaultProfileClassifiesUnknownAsPolicyZero(t *testing.T) {
+	profile, err := LoadDefaultProfile()
+	if err != nil {
+		t.Fatalf("load default profile: %v", err)
+	}
+	estimator, err := NewEstimator(profile)
+	if err != nil {
+		t.Fatalf("estimator: %v", err)
+	}
+
+	estimate, err := estimator.Estimate(Event{
+		Model:               "unknown",
+		InputTokens:         1_000_000,
+		OutputTokens:        1_000_000,
+		CacheCreationTokens: 1_000_000,
+		CacheReadTokens:     1_000_000,
+	})
+	if err != nil {
+		t.Fatalf("estimate: %v", err)
+	}
+	if estimate.Priced || estimate.RuleID != "unknown" || estimate.CostMicroUSD != 0 || estimate.Resolution != ResolutionPolicyZero || estimate.MissingReason != ResolutionMissingModel {
+		t.Fatalf("expected explicit policy-zero unknown result, got %+v", estimate)
+	}
+}
+
+func TestCoverageSeparatesPolicyZeroFromMissingPricingAndOfficialFree(t *testing.T) {
+	profile, err := LoadDefaultProfile()
+	if err != nil {
+		t.Fatalf("load default profile: %v", err)
+	}
+	estimator, err := NewEstimator(profile)
+	if err != nil {
+		t.Fatalf("estimator: %v", err)
+	}
+
+	events := []Event{
+		{Provider: "openai", Channel: "codex", Model: "unknown", TotalTokens: 10},
+		{Provider: "custom", Channel: "workbuddy", Model: "unpriced-model", TotalTokens: 20},
+		{Provider: "openai", Channel: "codex", Model: "gpt-5.3-codex-spark", TotalTokens: 30},
+	}
+	var aggregate AggregateCost
+	for _, event := range events {
+		estimate, err := estimator.Estimate(event)
+		if err != nil {
+			t.Fatalf("estimate %q: %v", event.Model, err)
+		}
+		aggregate.Add(event, estimate)
+	}
+	summary := aggregate.Summary(profile)
+	if summary == nil {
+		t.Fatal("expected coverage summary")
+	}
+	if summary.TotalEvents != 3 || summary.TotalTokens != 60 || summary.PricedEvents != 1 || summary.PricedTokens != 30 {
+		t.Fatalf("unexpected totals: %+v", summary)
+	}
+	if summary.PolicyZeroEvents != 1 || summary.PolicyZeroTokens != 10 || len(summary.PolicyZeroModels) != 1 || summary.PolicyZeroModels[0].Reason != ResolutionPolicyZero {
+		t.Fatalf("unexpected policy-zero coverage: %+v", summary)
+	}
+	if len(summary.MissingModels) != 1 || summary.MissingModels[0].Reason != ResolutionMissingPricingRule {
+		t.Fatalf("unexpected missing pricing coverage: %+v", summary)
+	}
+}
+
 func TestDefaultProfilePricesUserSuppliedModels(t *testing.T) {
 	profile, err := LoadDefaultProfile()
 	if err != nil {
@@ -89,6 +152,311 @@ func TestDefaultProfilePricesUserSuppliedModels(t *testing.T) {
 			}
 			if estimate.CostMicroUSD != tt.wantMicroUSD {
 				t.Fatalf("expected %d micro USD, got %d", tt.wantMicroUSD, estimate.CostMicroUSD)
+			}
+		})
+	}
+}
+
+func TestDefaultProfilePricesCurrentModelIDs(t *testing.T) {
+	profile, err := LoadDefaultProfile()
+	if err != nil {
+		t.Fatalf("load default profile: %v", err)
+	}
+	estimator, err := NewEstimator(profile)
+	if err != nil {
+		t.Fatalf("estimator: %v", err)
+	}
+
+	tests := []struct {
+		name         string
+		event        Event
+		wantRuleID   string
+		wantMicroUSD int64
+	}{
+		{
+			name: "gpt 5.6 sol short context",
+			event: Event{
+				Model:               "gpt-5.6-sol",
+				InputTokens:         50_000,
+				OutputTokens:        50_000,
+				CacheCreationTokens: 50_000,
+				CacheReadTokens:     50_000,
+			},
+			wantRuleID:   "gpt-5.6-sol",
+			wantMicroUSD: 2_087_500,
+		},
+		{
+			name: "gpt 5.6 terra short context",
+			event: Event{
+				Model:               "gpt-5.6-terra",
+				InputTokens:         50_000,
+				OutputTokens:        50_000,
+				CacheCreationTokens: 50_000,
+				CacheReadTokens:     50_000,
+			},
+			wantRuleID:   "gpt-5.6-terra",
+			wantMicroUSD: 1_043_750,
+		},
+		{
+			name: "gpt 5.6 luna short context",
+			event: Event{
+				Model:               "gpt-5.6-luna",
+				InputTokens:         50_000,
+				OutputTokens:        50_000,
+				CacheCreationTokens: 50_000,
+				CacheReadTokens:     50_000,
+			},
+			wantRuleID:   "gpt-5.6-luna",
+			wantMicroUSD: 417_500,
+		},
+		{
+			name: "gpt 5.6 sol long context",
+			event: Event{
+				Model:               "gpt-5.6-sol",
+				InputTokens:         100_000,
+				OutputTokens:        100_000,
+				CacheCreationTokens: 72_000,
+				CacheReadTokens:     100_000,
+			},
+			wantRuleID:   "gpt-5.6-sol-long",
+			wantMicroUSD: 6_500_000,
+		},
+		{
+			name: "gpt 5.6 terra long context",
+			event: Event{
+				Model:               "gpt-5.6-terra",
+				InputTokens:         100_000,
+				OutputTokens:        100_000,
+				CacheCreationTokens: 72_000,
+				CacheReadTokens:     100_000,
+			},
+			wantRuleID:   "gpt-5.6-terra-long",
+			wantMicroUSD: 3_250_000,
+		},
+		{
+			name: "gpt 5.6 luna long context",
+			event: Event{
+				Model:               "gpt-5.6-luna",
+				InputTokens:         100_000,
+				OutputTokens:        100_000,
+				CacheCreationTokens: 72_000,
+				CacheReadTokens:     100_000,
+			},
+			wantRuleID:   "gpt-5.6-luna-long",
+			wantMicroUSD: 1_300_000,
+		},
+		{
+			name: "gpt 5.5 long context",
+			event: Event{
+				Model:               "gpt-5.5",
+				InputTokens:         100_000,
+				OutputTokens:        100_000,
+				CacheCreationTokens: 72_000,
+				CacheReadTokens:     100_000,
+			},
+			wantRuleID:   "gpt-5.5-long",
+			wantMicroUSD: 6_320_000,
+		},
+		{
+			name: "gpt 5.4 long context",
+			event: Event{
+				Model:               "gpt-5.4",
+				InputTokens:         100_000,
+				OutputTokens:        100_000,
+				CacheCreationTokens: 72_000,
+				CacheReadTokens:     100_000,
+			},
+			wantRuleID:   "gpt-5.4-long",
+			wantMicroUSD: 3_160_000,
+		},
+		{
+			name: "glm 5.2 keeps explicit free cache write",
+			event: Event{
+				Model:               "GLM-5.2",
+				InputTokens:         100_000,
+				OutputTokens:        100_000,
+				CacheCreationTokens: 100_000,
+				CacheReadTokens:     100_000,
+			},
+			wantRuleID:   "glm-5.2",
+			wantMicroUSD: 606_000,
+		},
+		{
+			name: "kimi k3 exact model",
+			event: Event{
+				Model:               "kimi-k3",
+				InputTokens:         100_000,
+				OutputTokens:        100_000,
+				CacheCreationTokens: 100_000,
+				CacheReadTokens:     100_000,
+			},
+			wantRuleID:   "kimi-k3",
+			wantMicroUSD: 2_130_000,
+		},
+		{
+			name: "kimi k2.7 code exact alias",
+			event: Event{
+				Model:               "kimi-for-coding",
+				InputTokens:         100_000,
+				OutputTokens:        100_000,
+				CacheCreationTokens: 100_000,
+				CacheReadTokens:     100_000,
+			},
+			wantRuleID:   "kimi-k2.7-code",
+			wantMicroUSD: 609_000,
+		},
+		{
+			name: "kimi k2.7 highspeed compatibility alias",
+			event: Event{
+				Model:               "kimi-for-coding-highspee",
+				InputTokens:         100_000,
+				OutputTokens:        100_000,
+				CacheCreationTokens: 100_000,
+				CacheReadTokens:     100_000,
+			},
+			wantRuleID:   "kimi-k2.7-code-highspeed",
+			wantMicroUSD: 1_218_000,
+		},
+		{
+			name: "grok 4.5 short context",
+			event: Event{
+				Model:               "grok-4.5",
+				InputTokens:         50_000,
+				OutputTokens:        100_000,
+				CacheCreationTokens: 50_000,
+				CacheReadTokens:     50_000,
+			},
+			wantRuleID:   "grok-4.5",
+			wantMicroUSD: 815_000,
+		},
+		{
+			name: "grok 4.5 long context",
+			event: Event{
+				Model:               "grok-4.5",
+				InputTokens:         50_000,
+				OutputTokens:        100_000,
+				CacheCreationTokens: 50_000,
+				CacheReadTokens:     100_000,
+			},
+			wantRuleID:   "grok-4.5-long",
+			wantMicroUSD: 1_660_000,
+		},
+		{
+			name: "grok 4.3 short context",
+			event: Event{
+				Model:               "grok-4.3",
+				InputTokens:         50_000,
+				OutputTokens:        100_000,
+				CacheCreationTokens: 50_000,
+				CacheReadTokens:     50_000,
+			},
+			wantRuleID:   "grok-4.3",
+			wantMicroUSD: 385_000,
+		},
+		{
+			name: "grok 4.3 long context",
+			event: Event{
+				Model:               "grok-4.3",
+				InputTokens:         50_000,
+				OutputTokens:        100_000,
+				CacheCreationTokens: 50_000,
+				CacheReadTokens:     100_000,
+			},
+			wantRuleID:   "grok-4.3-long",
+			wantMicroUSD: 790_000,
+		},
+		{
+			name: "claude sonnet 5 intro pricing",
+			event: Event{
+				TimestampMs:         time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC).UnixMilli(),
+				Model:               "claude-sonnet-5",
+				InputTokens:         100_000,
+				OutputTokens:        100_000,
+				CacheCreationTokens: 100_000,
+				CacheReadTokens:     100_000,
+			},
+			wantRuleID:   "claude-sonnet-5-intro",
+			wantMicroUSD: 1_420_000,
+		},
+		{
+			name: "claude sonnet 5 standard pricing",
+			event: Event{
+				TimestampMs:         time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC).UnixMilli(),
+				Model:               "claude-sonnet-5",
+				InputTokens:         100_000,
+				OutputTokens:        100_000,
+				CacheCreationTokens: 100_000,
+				CacheReadTokens:     100_000,
+			},
+			wantRuleID:   "claude-sonnet-5-standard",
+			wantMicroUSD: 2_130_000,
+		},
+		{
+			name: "codex spark is explicitly free",
+			event: Event{
+				Model:               "gpt-5.3-codex-spark",
+				InputTokens:         1_000_000,
+				OutputTokens:        1_000_000,
+				CacheCreationTokens: 1_000_000,
+				CacheReadTokens:     1_000_000,
+			},
+			wantRuleID:   "gpt-5.3-codex-spark",
+			wantMicroUSD: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			estimate, err := estimator.Estimate(tt.event)
+			if err != nil {
+				t.Fatalf("estimate: %v", err)
+			}
+			if !estimate.Priced || estimate.RuleID != tt.wantRuleID {
+				t.Fatalf("expected priced rule %q, got %+v", tt.wantRuleID, estimate)
+			}
+			if estimate.CostMicroUSD != tt.wantMicroUSD {
+				t.Fatalf("expected %d micro USD, got %d", tt.wantMicroUSD, estimate.CostMicroUSD)
+			}
+		})
+	}
+}
+
+func TestDefaultProfileUsesExactAliasesAndContextBoundaries(t *testing.T) {
+	profile, err := LoadDefaultProfile()
+	if err != nil {
+		t.Fatalf("load default profile: %v", err)
+	}
+	estimator, err := NewEstimator(profile)
+	if err != nil {
+		t.Fatalf("estimator: %v", err)
+	}
+
+	tests := []struct {
+		name       string
+		event      Event
+		wantRuleID string
+		wantPriced bool
+	}{
+		{name: "sol canonical alias", event: Event{Model: "gpt-5.6", InputTokens: 1}, wantRuleID: "gpt-5.6-sol", wantPriced: true},
+		{name: "case and reasoning suffix", event: Event{Model: "GPT-5.6-SOL (reasoning=xhigh)", InputTokens: 1}, wantRuleID: "gpt-5.6-sol", wantPriced: true},
+		{name: "gpt threshold minus one", event: Event{Model: "gpt-5.5", InputTokens: 271_999}, wantRuleID: "gpt-5.5", wantPriced: true},
+		{name: "gpt threshold", event: Event{Model: "gpt-5.5", InputTokens: 272_000}, wantRuleID: "gpt-5.5-long", wantPriced: true},
+		{name: "gpt threshold includes cache input", event: Event{Model: "gpt-5.5", InputTokens: 271_999, CacheReadTokens: 1}, wantRuleID: "gpt-5.5-long", wantPriced: true},
+		{name: "grok threshold minus one", event: Event{Model: "grok-4.5", InputTokens: 199_999}, wantRuleID: "grok-4.5", wantPriced: true},
+		{name: "grok threshold", event: Event{Model: "grok-4.5", InputTokens: 200_000}, wantRuleID: "grok-4.5-long", wantPriced: true},
+		{name: "grok official alias", event: Event{Model: "grok-build-latest", InputTokens: 1}, wantRuleID: "grok-4.5", wantPriced: true},
+		{name: "no fuzzy gpt match", event: Event{Model: "tenant/gpt-5.6-sol", InputTokens: 1}, wantPriced: false},
+		{name: "user confirmed grok build alias", event: Event{Model: "grok-4.5-build", InputTokens: 1}, wantRuleID: "grok-4.5", wantPriced: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			estimate, err := estimator.Estimate(tt.event)
+			if err != nil {
+				t.Fatalf("estimate: %v", err)
+			}
+			if estimate.Priced != tt.wantPriced || estimate.RuleID != tt.wantRuleID {
+				t.Fatalf("expected priced=%v rule=%q, got %+v", tt.wantPriced, tt.wantRuleID, estimate)
 			}
 		})
 	}

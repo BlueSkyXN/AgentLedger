@@ -11,12 +11,15 @@ type AggregateCost struct {
 }
 
 type Coverage struct {
-	PricedEvents int64
-	TotalEvents  int64
-	PricedTokens int64
-	TotalTokens  int64
-	confidence   string
-	missing      map[string]*MissingModel
+	PricedEvents     int64
+	TotalEvents      int64
+	PricedTokens     int64
+	TotalTokens      int64
+	confidence       string
+	missing          map[string]*MissingModel
+	policyZero       map[string]*MissingModel
+	policyZeroEvents int64
+	policyZeroTokens int64
 }
 
 type CoverageSummary struct {
@@ -31,6 +34,9 @@ type CoverageSummary struct {
 	CoverageRatio      float64        `json:"coverage_ratio"`
 	Confidence         string         `json:"confidence"`
 	MissingModels      []MissingModel `json:"missing_models,omitempty"`
+	PolicyZeroEvents   int64          `json:"policy_zero_events"`
+	PolicyZeroTokens   int64          `json:"policy_zero_tokens"`
+	PolicyZeroModels   []MissingModel `json:"policy_zero_models,omitempty"`
 }
 
 type MissingModel struct {
@@ -57,6 +63,23 @@ func (c *Coverage) Add(ev Event, estimate Estimate) {
 		c.PricedEvents++
 		c.PricedTokens += tokens
 		c.confidence = combineConfidence(c.confidence, estimate.Confidence)
+		return
+	}
+	if estimate.Resolution == ResolutionPolicyZero {
+		c.confidence = combineConfidence(c.confidence, "missing")
+		c.policyZeroEvents++
+		c.policyZeroTokens += tokens
+		if c.policyZero == nil {
+			c.policyZero = make(map[string]*MissingModel)
+		}
+		key := fmt.Sprintf("%s\x00%s\x00%s", ev.Provider, ev.Channel, ev.Model)
+		item := c.policyZero[key]
+		if item == nil {
+			item = &MissingModel{Provider: ev.Provider, Channel: ev.Channel, Model: ev.Model, Reason: ResolutionPolicyZero}
+			c.policyZero[key] = item
+		}
+		item.Events++
+		item.Tokens += tokens
 		return
 	}
 	c.confidence = combineConfidence(c.confidence, "missing")
@@ -107,6 +130,16 @@ func (c Coverage) Summary(profile *Profile) *CoverageSummary {
 		}
 		return missing[i].Tokens > missing[j].Tokens
 	})
+	policyZero := make([]MissingModel, 0, len(c.policyZero))
+	for _, item := range c.policyZero {
+		policyZero = append(policyZero, *item)
+	}
+	sort.Slice(policyZero, func(i, j int) bool {
+		if policyZero[i].Tokens == policyZero[j].Tokens {
+			return policyZero[i].Model < policyZero[j].Model
+		}
+		return policyZero[i].Tokens > policyZero[j].Tokens
+	})
 	return &CoverageSummary{
 		ProfileID:          profile.ID,
 		Currency:           profile.Currency,
@@ -119,6 +152,9 @@ func (c Coverage) Summary(profile *Profile) *CoverageSummary {
 		CoverageRatio:      tokenRatio,
 		Confidence:         confidence,
 		MissingModels:      missing,
+		PolicyZeroEvents:   c.policyZeroEvents,
+		PolicyZeroTokens:   c.policyZeroTokens,
+		PolicyZeroModels:   policyZero,
 	}
 }
 

@@ -42,7 +42,13 @@
 Label, Events, Tokens, Input, Output, Cache Create, Cache Read, Reasoning, Avg Duration, Avg TTFT, Avg TPS, Recorded Cost
 ```
 
-默认 `--cost recorded` 显示 `Recorded Cost(USD)`。`--cost estimated` 显示 `Estimated Cost(USD)`、pricing coverage 和 pricing confidence；`--cost both` 同时显示 recorded 与 estimated；`--cost none` 隐藏成本列。estimated cost 使用 `pricing/pricing.v1.json` 或 `--pricing` 指定的 JSON profile，按 input/output/cache creation/cache read/reasoning token bucket 估算，不使用 `total_tokens * 单价`，也不会写回 `usage_events`。
+默认 `--cost recorded` 显示 `Recorded Cost(USD)`。`--cost estimated` 显示 `Estimated Cost(USD)`、pricing coverage 和 pricing confidence；`--cost both` 同时显示 recorded 与 estimated；`--cost none` 隐藏成本列。estimated cost 使用 `pricing/pricing.v1.json` 或 `--pricing` 指定的 JSON profile，按 input/output/cache creation/cache read token bucket 估算；默认 profile 的 reasoning policy 是 `included_in_output`，不会再对独立 `reasoning_tokens` 重复收费。估算不使用 `total_tokens * 单价`，也不会写回 `usage_events`。
+
+Pricing rule 只按配置中的 model ID exact/glob pattern、时间窗口和显式 condition 判断，不依赖 Fast/Standard service tier。匹配前会 trim、转小写，并为结尾的 `(reasoning=...)` / `(effort=...)` 生成去后缀 alias；不会自行剥离 provider/tenant 前缀。新同步的 catalog model 和 alias 使用显式 exact pattern。普通未命中 ID 保持 `missing_pricing_rule`；来源没有 model 时由 adapter 明确写入 `unknown`，内置 profile 对精确 `unknown` 使用 `policy_zero`：金额不估算、事件和 Tokens 单独披露，且不计入真实价格覆盖。已核验的显式免费模型仍属于正常 `priced`，不能与 `policy_zero` 混淆。
+
+内置 profile 对 GPT-5.4、GPT-5.5、GPT-5.6 的精确 canonical ID 在完整 input side 达到 `272000` tokens 时切换到 long-context rule；Grok 4.5、Grok 4.3 及其明确 alias 的阈值是 `200000`。完整 input side 是 `input_tokens + cache_creation_tokens + cache_read_tokens`。达到阈值后，该事件的 input、cache read、cache creation 和 output 全部按 long rule 计价，不是只对超过阈值的 token 累进加价。宽泛或未核实的 ID（例如带租户前缀的模型名）不会自动继承这些长上下文价格。
+
+`claude-sonnet-5` 不使用长上下文溢价，而是按事件日期选择价格：截至 `2026-08-31` 使用 Intro 规则，自 `2026-09-01` 起使用 Standard 规则。当前来源没有提供明确的 cache-write TTL 单价，因此 cache creation 暂按普通 Input 单价估算；Standard Cached Input 暂按 Input 的 10% 估算。这两项在 profile 中保留 `estimated` confidence 和说明，不把推测写成精确账单价格。
 
 JSON 输出使用同一语义字段：
 
@@ -64,7 +70,7 @@ JSON 输出使用同一语义字段：
     "estimated_cost_usd": 0.34,
     "estimated_cost_micro_usd": 340000,
     "pricing": {
-      "profile_id": "agentledger-pricing-2026-06-25",
+      "profile_id": "agentledger-pricing-2026-07-25",
       "currency": "USD",
       "priced_events": 10,
       "total_events": 10,
