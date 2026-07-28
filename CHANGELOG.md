@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- Read-only local HTTP API and React/Vite analytics dashboard.
+- GitHub Copilot and WorkBuddy usage adapters.
+- JSON pricing profiles and read-only estimated-cost reporting.
+- `compact-raw` maintenance command for removing historical raw usage evidence.
+- Explicit model-resolution, observability, accounting, and request-count coverage fields across CLI reports, API responses, and the Web dashboard.
+
+### Changed
+
+- Replaced the v1 multi-table ledger with the schema v2 `meta`, `import_runs`, and `usage_events` analytics model.
+- Made statistics-only persistence canonical: adapters may use source JSON transiently for parsing and fingerprinting, while new database writes keep `raw_usage_json` as `NULL`.
+- Made `status`, `report`, `serve`, and `verify` use strict read-only SQLite paths without implicit configuration or schema writes.
+- Changed Codex accounting to reconcile cumulative usage by session, preserve explicit model evidence, and classify missing model evidence as `unknown` instead of guessing a model.
+- Increased the Codex import and diagnostics JSONL scanner limit to 64 MiB for large single-line records.
+
+### Fixed
+
+- Hardened export, merge, redaction, source-identity reconciliation, and additive schema validation behavior.
+- Preserved and strictly parsed explicit request counts, including zero-token request records, without inferring unknown counts from event or session totals.
+- Removed redundant Copilot JSON decoding and a vulnerable Web router dependency.
+
+### Known limitations
+
+- There are no `cleanup`, `restore`, `pricing`, or `workspace` management commands.
+- Source-file tracking, parse-error replay, time-filtered or compressed export, currency conversion, and encrypted raw archives remain roadmap items.
+
 ## [0.1.0] - 2026-05-23
 
 ### Added

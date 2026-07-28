@@ -109,7 +109,7 @@ func scanCodexDiagnosticFile(path string, diag *CodexDiagnostics) error {
 	defer f.Close()
 
 	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 10*1024*1024), 10*1024*1024)
+	scanner.Buffer(make([]byte, codexScannerInitialBufferBytes), codexScannerMaxTokenBytes)
 	for scanner.Scan() {
 		diag.Lines++
 		line := scanner.Bytes()

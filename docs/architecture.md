@@ -132,7 +132,7 @@ output_tps = output_tokens / (output_duration_ms / 1000.0)
 | GitHub Copilot | `~/.copilot/otel`, `~/.copilot/session-state` | `.jsonl` | 优先 OTel `gen_ai.usage.*`；没有 OTel 文件时回退到每条非空 `session.shutdown.data.modelMetrics` segment+model 汇总，并把包含 cache read 的 source input 拆成 `raw_input_tokens`、非缓存 `input_tokens` 和 `cache_read_tokens`。 |
 | Gemini | `~/.gemini` | `.json`, `.jsonl` | `usageMetadata`, `promptTokenCount`, `candidatesTokenCount`, `totalTokenCount`。 |
 
-所有 JSONL adapter 使用 10 MB scanner buffer，以适配较长单行日志。
+Codex import 与 `doctor codex` 共享 64 MiB 单行 scanner 上限，以兼容包含大型上下文快照的 JSONL；其他当前 JSONL adapter 使用 10 MiB 单行上限。
 
 ## 报表
 
