@@ -576,7 +576,7 @@ func reportEstimator(path string) (*pricing.Estimator, *pricing.Profile, error) 
 
 func attachReportEstimate(row *ReportRow, estimate reportCost) {
 	row.Pricing = estimate.Summary
-	if estimate.Summary == nil || estimate.Summary.PricedEvents == 0 {
+	if estimate.Summary == nil || (estimate.Summary.PricedEvents == 0 && estimate.Summary.PolicyZeroEvents == 0) {
 		return
 	}
 	row.EstimatedCostMicroUSD = &estimate.MicroUSD
@@ -586,7 +586,7 @@ func attachReportEstimate(row *ReportRow, estimate reportCost) {
 
 func attachTimeEstimate(row *TimeBreakdownRow, estimate reportCost) {
 	row.Pricing = estimate.Summary
-	if estimate.Summary == nil || estimate.Summary.PricedEvents == 0 {
+	if estimate.Summary == nil || (estimate.Summary.PricedEvents == 0 && estimate.Summary.PolicyZeroEvents == 0) {
 		return
 	}
 	row.EstimatedCostMicroUSD = &estimate.MicroUSD

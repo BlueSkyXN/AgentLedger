@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "id": "agentledger-pricing-2026-07-25",
+  "id": "agentledger-pricing-2026-07-29",
   "currency": "USD",
   "unit": "usd_per_1m_tokens",
-  "checked_at": "2026-07-25",
+  "checked_at": "2026-07-29",
   "defaults": {
     "unknown_model_policy": "zero",
     "reasoning_policy": "included_in_output",
@@ -28,6 +28,12 @@
       "name": "Kimi model pricing",
       "url": "https://platform.kimi.ai/docs/pricing/chat",
       "checked_at": "2026-07-23"
+    },
+    {
+      "provider": "tencent",
+      "name": "OpenRouter Tencent Cloud Hy3 provider pricing",
+      "url": "https://openrouter.ai/tencent/hy3",
+      "checked_at": "2026-07-29"
     },
     {
       "provider": "xai",
@@ -603,10 +609,33 @@
       "as_of": "2026-07-22"
     },
     {
+      "id": "hy3",
+      "model_patterns": [
+        "hy3",
+        "tencent/hy3"
+      ],
+      "priority": 30,
+      "basis": "provider_list_price",
+      "rates": {
+        "input": 0.132,
+        "cached_input": 0.033,
+        "output": 0.528
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Uses the Tencent Cloud provider row on OpenRouter, not the dynamic discounted headline price.",
+      "model_id": "hy3",
+      "source_url": "https://openrouter.ai/tencent/hy3",
+      "as_of": "2026-07-29"
+    },
+    {
       "id": "kimi-k3",
       "model_patterns": [
         "kimi-k3",
-        "k3"
+        "k3",
+        "k3-256",
+        "k3-256k"
       ],
       "priority": 30,
       "basis": "official_model_list_price",
@@ -618,6 +647,7 @@
       "reasoning_policy": "included_in_output",
       "cache_write_assumption": "treat_as_input",
       "confidence": "estimated",
+      "notes": "k3, k3-256, and k3-256k are user-confirmed compatibility aliases for the same Kimi K3 list price.",
       "model_id": "kimi-k3",
       "source_url": "https://platform.kimi.ai/docs/pricing/chat-k3",
       "pricing_notes_url": "https://platform.kimi.ai/docs/guide/kimi-k3-quickstart",

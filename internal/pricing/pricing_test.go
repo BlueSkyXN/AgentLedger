@@ -282,6 +282,18 @@ func TestDefaultProfilePricesCurrentModelIDs(t *testing.T) {
 			wantMicroUSD: 606_000,
 		},
 		{
+			name: "hy3 uses tencent cloud provider price",
+			event: Event{
+				Model:               "hy3",
+				InputTokens:         100_000,
+				OutputTokens:        100_000,
+				CacheCreationTokens: 100_000,
+				CacheReadTokens:     100_000,
+			},
+			wantRuleID:   "hy3",
+			wantMicroUSD: 82_500,
+		},
+		{
 			name: "kimi k3 exact model",
 			event: Event{
 				Model:               "kimi-k3",
@@ -445,6 +457,9 @@ func TestDefaultProfileUsesExactAliasesAndContextBoundaries(t *testing.T) {
 		{name: "grok threshold minus one", event: Event{Model: "grok-4.5", InputTokens: 199_999}, wantRuleID: "grok-4.5", wantPriced: true},
 		{name: "grok threshold", event: Event{Model: "grok-4.5", InputTokens: 200_000}, wantRuleID: "grok-4.5-long", wantPriced: true},
 		{name: "grok official alias", event: Event{Model: "grok-build-latest", InputTokens: 1}, wantRuleID: "grok-4.5", wantPriced: true},
+		{name: "kimi k3 256 alias", event: Event{Model: "k3-256", InputTokens: 1}, wantRuleID: "kimi-k3", wantPriced: true},
+		{name: "kimi k3 256k alias", event: Event{Model: "k3-256k", InputTokens: 1}, wantRuleID: "kimi-k3", wantPriced: true},
+		{name: "hy3 openrouter canonical alias", event: Event{Model: "tencent/hy3", InputTokens: 1}, wantRuleID: "hy3", wantPriced: true},
 		{name: "no fuzzy gpt match", event: Event{Model: "tenant/gpt-5.6-sol", InputTokens: 1}, wantPriced: false},
 		{name: "user confirmed grok build alias", event: Event{Model: "grok-4.5-build", InputTokens: 1}, wantRuleID: "grok-4.5", wantPriced: true},
 	}
