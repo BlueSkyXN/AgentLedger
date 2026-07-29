@@ -34,6 +34,7 @@ go build -o bin/agent-ledger .
 - Codex: `~/.codex/sessions`
 - GitHub Copilot: `~/.copilot/otel`, `~/.copilot/session-state`。优先 OTel；没有 OTel 文件时读取 `session.shutdown.data.modelMetrics` 的 segment+model 汇总。
 - Gemini CLI: `~/.gemini`
+- WorkBuddy: `~/.workbuddy/projects`
 
 ## 4. Status
 
@@ -88,6 +89,8 @@ http://127.0.0.1:54217
 ```
 
 Web 面板只读，不会从浏览器触发 import、merge、vacuum 或配置修改。
+
+需要让面板脱离当前终端继续运行，或逐页核对全部只读功能时，按 [Local Preview](local-preview.md) 执行。完整预览需要本机 API 和 SQLite，不能只发布 `web/dist` 静态文件。
 
 ## 7. Export / merge
 

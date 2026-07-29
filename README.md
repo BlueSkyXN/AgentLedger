@@ -210,6 +210,14 @@ npm run build
 
 面板不会返回 `raw_usage_json`。聚合数据、session id、模型名、项目路径和数据库路径仍属于本机私有使用数据，不应作为公开截图或附件传播。
 
+完整的本地预览、后台 `screen` 会话、全页面/API 验收和停止方式见 [Local Preview](docs/local-preview.md)。最小存活检查：
+
+```bash
+curl -fsS http://127.0.0.1:54217/api/v1/health
+```
+
+面板当前包含总览、趋势、模型、渠道、会话、慢请求、导入和设置 8 个只读页面。直接托管静态前端或发布到 GitHub Pages 不能提供完整预览，因为聚合数据必须由本机只读 API 从当前 SQLite 数据库查询。
+
 ## 只读 API
 
 主要接口：
@@ -325,5 +333,7 @@ paths = ["~/.workbuddy/projects"]
 
 - [文档索引](docs/README.md)
 - [快速开始](docs/quickstart.md)
+- [本地完整预览](docs/local-preview.md)
+- [数据库重建、替换与回滚](docs/database-rebuild.md)
 - [数据模型](docs/data-model.md)
 - [CLI Reference](docs/cli-reference.md)

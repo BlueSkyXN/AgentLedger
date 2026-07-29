@@ -13,7 +13,9 @@ AgentLedger v2 是本地 usage 统计分析器，不再是多表账本 / 审计�
 7. [Configuration](configuration.md): 数据目录、配置文件和 agent path 配置。
 8. [Source Adapters](source-adapters.md): 各 agent adapter 的解析边界。
 9. [Privacy and Operations](privacy-and-operations.md): 本地数据、导出文件和面板截图的隐私边界。
-10. [Development](development.md): 本地开发、测试和贡献注意事项。
-11. [Roadmap](roadmap.md): 后续可能做的能力。
+10. [Local Preview](local-preview.md): 构建并验证本地面板、API、后台 `screen` 会话和停止方式。
+11. [Database Rebuild](database-rebuild.md): 冻结源、候选库、幂等、备份、原子替换与回滚门槛。
+12. [Development](development.md): 本地开发、测试和贡献注意事项。
+13. [Roadmap](roadmap.md): 后续可能做的能力。
 
 这些文档描述的是当前 Go CLI 已实现能力，而不是早期长期完整账本设计。当前 CLI 没有 cleanup/restore/workspace 命令；report 已支持基于 JSON pricing profile 的只读 estimated cost，但没有独立 pricing 管理命令、currency 报表转换、加密 raw archive 或完整 source file tracking。
