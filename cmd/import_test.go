@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"database/sql"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -92,8 +94,8 @@ func TestConfigureImportAdapterAppliesCodexDuplicatePolicy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if len(records) != 2 {
-		t.Fatalf("expected ccusage policy to keep both records, got %d", len(records))
+	if len(records) != 1 {
+		t.Fatalf("expected ccusage policy to suppress unchanged cumulative snapshot, got %d", len(records))
 	}
 }
 
@@ -277,6 +279,274 @@ func TestParseImportFileReturnsNonFatalAdapterWarning(t *testing.T) {
 	}
 }
 
+func TestImportCodexForkReplay(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "sessions")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir fixture: %v", err)
+	}
+	parent := filepath.Join(dir, "parent.jsonl")
+	child := filepath.Join(dir, "child.jsonl")
+	writeImportCodexFixture(t, parent, []string{
+		importCodexSessionMeta("2026-01-01T00:00:00Z", "parent", ""),
+		importCodexUsage("2026-01-01T00:00:01Z", 10, 2, 12, "gpt-5.6-sol"),
+		importCodexUsage("2026-01-01T00:00:02Z", 20, 4, 24, "gpt-5.6-sol"),
+	})
+	writeImportCodexFixture(t, child, []string{
+		importCodexSessionMeta("2026-01-01T00:00:03Z", "child", "parent"),
+		importCodexUsage("2026-01-01T00:00:03Z", 10, 2, 12, ""),
+		importCodexUsage("2026-01-01T00:00:03Z", 20, 4, 24, ""),
+		importCodexUsage("2026-01-01T00:00:05Z", 30, 6, 36, "gpt-5.6-terra"),
+	})
+
+	database, err := db.Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer database.Close()
+	adapter := adapters.NewCodexAdapter()
+	result := importAdapterFiles(database, adapter, []string{child, parent}, time.Now().Add(time.Hour))
+	if result.files != 2 || result.added != 3 || result.updated != 0 || result.skipped != 0 || len(result.warnings) != 0 {
+		t.Fatalf("unexpected first import result: %+v", result)
+	}
+
+	var events, totalTokens, unknown, rawUsage int64
+	if err := database.Conn().QueryRow(`
+		SELECT COUNT(*), COALESCE(SUM(total_tokens), 0),
+		       COALESCE(SUM(CASE WHEN model_normalized = 'unknown' THEN 1 ELSE 0 END), 0),
+		       COALESCE(SUM(CASE WHEN raw_usage_json IS NOT NULL THEN 1 ELSE 0 END), 0)
+		FROM usage_events
+	`).Scan(&events, &totalTokens, &unknown, &rawUsage); err != nil {
+		t.Fatalf("read imported replay fixture: %v", err)
+	}
+	if events != 3 || totalTokens != 36 || unknown != 0 || rawUsage != 0 {
+		t.Fatalf("unexpected imported aggregates events=%d tokens=%d unknown=%d raw=%d", events, totalTokens, unknown, rawUsage)
+	}
+
+	result = importAdapterFiles(database, adapter, []string{child, parent}, time.Now().Add(time.Hour))
+	if result.added != 0 || result.updated != 0 || result.skipped != 3 || len(result.warnings) != 0 {
+		t.Fatalf("second import must be idempotent: %+v", result)
+	}
+	diagnostics := adapter.ImportDiagnostics()
+	assertImportDiagnostic(t, diagnostics, "codex_replay_exact", 2, 24)
+	assertImportDiagnostic(t, diagnostics, "codex_replay_events", 2, 0)
+}
+
+func TestImportCodexQuarantinesOnlyUncertainChild(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "sessions")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir fixture: %v", err)
+	}
+	standalone := filepath.Join(dir, "standalone.jsonl")
+	child := filepath.Join(dir, "child.jsonl")
+	writeImportCodexFixture(t, standalone, []string{
+		importCodexSessionMeta("2026-01-01T00:00:00Z", "standalone", ""),
+		importCodexUsage("2026-01-01T00:00:01Z", 10, 1, 11, "gpt-5.6-sol"),
+	})
+	writeImportCodexFixture(t, child, []string{
+		importCodexSessionMeta("2026-01-01T00:00:02Z", "sensitive-child-id", "unavailable-parent-id"),
+		importCodexUsage("2026-01-01T00:00:03Z", 20, 2, 22, ""),
+	})
+
+	database, err := db.Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer database.Close()
+	adapter := adapters.NewCodexAdapter()
+	result := importAdapterFiles(database, adapter, []string{standalone, child}, time.Now().Add(time.Hour))
+	if result.added != 1 || len(result.warnings) != 1 {
+		t.Fatalf("uncertain child must not block standalone usage: %+v", result)
+	}
+	if strings.Contains(result.warnings[0], child) || strings.Contains(result.warnings[0], "sensitive-child-id") || strings.Contains(result.warnings[0], "unavailable-parent-id") {
+		t.Fatalf("quarantine warning leaked private identity: %s", result.warnings[0])
+	}
+	var events int
+	if err := database.Conn().QueryRow(`SELECT COUNT(*) FROM usage_events`).Scan(&events); err != nil {
+		t.Fatalf("count imported events: %v", err)
+	}
+	if events != 1 {
+		t.Fatalf("quarantined child wrote usage: events=%d", events)
+	}
+	assertImportDiagnosticCount(t, adapter.ImportDiagnostics(), "codex_replay_unresolved", 1)
+}
+
+func TestImportPreparationRunsBeforeParsingAndPostProcessing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fixture.jsonl")
+	if err := os.WriteFile(path, []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	database, err := db.Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer database.Close()
+	adapter := &preparingPostImportAdapter{}
+	result := importAdapterFiles(database, adapter, []string{path}, time.Now().Add(time.Hour))
+	if result.added != 1 || len(result.warnings) != 0 {
+		t.Fatalf("unexpected import result: %+v", result)
+	}
+	if got := strings.Join(adapter.calls, ","); got != "prepare,parse,postprocess" {
+		t.Fatalf("unexpected preparation order: %s", got)
+	}
+	if _, ok := any(adapters.NewCodexAdapter()).(adapters.RecordPostProcessor); ok {
+		t.Fatal("Codex adapter must remain streaming and not implement RecordPostProcessor")
+	}
+}
+
+func TestImportPreparationReceivesOnlyStableFiles(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fixture.jsonl")
+	if err := os.WriteFile(path, []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	missing := filepath.Join(t.TempDir(), "missing.jsonl")
+	database, err := db.Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer database.Close()
+	adapter := &preparingPostImportAdapter{}
+	result := importAdapterFiles(database, adapter, []string{missing, path}, time.Now().Add(time.Hour))
+	if result.added != 1 || len(result.warnings) != 1 {
+		t.Fatalf("unexpected import result: %+v", result)
+	}
+	if len(adapter.preparedPaths) != 1 || adapter.preparedPaths[0] != path {
+		t.Fatalf("PrepareFileSet paths=%v want only %q", adapter.preparedPaths, path)
+	}
+}
+
+func TestFormatImportDiagnosticUsesExplicitUnits(t *testing.T) {
+	tests := []struct {
+		name       string
+		diagnostic adapters.ImportDiagnostic
+		want       string
+	}{
+		{
+			name:       "file count",
+			diagnostic: adapters.ImportDiagnostic{Code: "codex_fork_files", Unit: adapters.ImportDiagnosticUnitCount, Count: 2},
+			want:       "codex_fork_files: count=2",
+		},
+		{
+			name:       "zero file count keeps unit",
+			diagnostic: adapters.ImportDiagnostic{Code: "codex_parent_missing", Unit: adapters.ImportDiagnosticUnitCount},
+			want:       "codex_parent_missing: count=0",
+		},
+		{
+			name:       "replay usage",
+			diagnostic: adapters.ImportDiagnostic{Code: "codex_replay_exact", Unit: adapters.ImportDiagnosticUnitUsage, Events: 3, Tokens: 36},
+			want:       "codex_replay_exact: events=3 tokens=36",
+		},
+		{
+			name:       "token count",
+			diagnostic: adapters.ImportDiagnostic{Code: "codex_replay_tokens", Unit: adapters.ImportDiagnosticUnitTokens, Tokens: 36},
+			want:       "codex_replay_tokens: tokens=36",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatImportDiagnostic(tt.diagnostic); got != tt.want {
+				t.Fatalf("formatImportDiagnostic()=%q want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDoctorCodexReplayDiagnosticsPrintExplicitUnits(t *testing.T) {
+	output := captureStdout(t, func() {
+		printCodexReplayDiagnostics([]adapters.ImportDiagnostic{
+			{Code: "codex_fork_files", Unit: adapters.ImportDiagnosticUnitCount, Count: 2},
+			{Code: "codex_replay_exact", Unit: adapters.ImportDiagnosticUnitUsage, Events: 3, Tokens: 36},
+		})
+	})
+	for _, want := range []string{
+		"Codex fork replay:",
+		"codex_fork_files: count=2",
+		"codex_replay_exact: events=3 tokens=36",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("doctor output missing %q:\n%s", want, output)
+		}
+	}
+	if strings.Contains(output, "codex_fork_files: events=") {
+		t.Fatalf("file count used event unit:\n%s", output)
+	}
+}
+
+func TestImportCommandCompletesWithWarningsWithoutReturningError(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENT_LEDGER_DATA_DIR", dataDir)
+	sessionDir := filepath.Join(t.TempDir(), "sessions")
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatalf("mkdir sessions: %v", err)
+	}
+	child := filepath.Join(sessionDir, "child.jsonl")
+	writeImportCodexFixture(t, child, []string{
+		importCodexSessionMeta("2026-01-01T00:00:02Z", "child", "missing-parent"),
+		importCodexUsage("2026-01-01T00:00:03Z", 20, 2, 22, "gpt-5.6-sol"),
+	})
+
+	cfg := config.Default()
+	cfg.Import.GracingMinutes = 0
+	cfg.Agents = config.AgentsConfig{
+		Codex: config.AgentConfig{
+			Enabled:         true,
+			Paths:           []string{sessionDir},
+			DuplicatePolicy: adapters.CodexDuplicatePolicyLedger,
+		},
+	}
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	if err := discardStdout(t, func() error { return importCmd.RunE(importCmd, nil) }); err != nil {
+		t.Fatalf("import command returned an error for a warning-only run: %v", err)
+	}
+	database, err := db.Open(cfg.DBPath())
+	if err != nil {
+		t.Fatalf("open import database: %v", err)
+	}
+	defer database.Close()
+	var status, errorSummary string
+	var skipped int
+	if err := database.Conn().QueryRow(`
+		SELECT status, error, events_skipped
+		FROM import_runs
+		ORDER BY started_at_ms DESC
+		LIMIT 1
+	`).Scan(&status, &errorSummary, &skipped); err != nil {
+		t.Fatalf("read import run: %v", err)
+	}
+	if status != "completed_with_warnings" || errorSummary == "" {
+		t.Fatalf("warning run status=%q error=%q", status, errorSummary)
+	}
+	if skipped != 0 {
+		t.Fatalf("source diagnostics or quarantine must not count as duplicates: skipped=%d", skipped)
+	}
+}
+
+func TestImportPreparationFailureSkipsOnlyFailingAdapter(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fixture.jsonl")
+	if err := os.WriteFile(path, []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	database, err := db.Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer database.Close()
+	failing := &preparingPostImportAdapter{prepareErr: fmt.Errorf("cannot inspect %s", path)}
+	failed := importAdapterFiles(database, failing, []string{path}, time.Now().Add(time.Hour))
+	if failed.added != 0 || len(failed.warnings) != 1 || len(failing.calls) != 1 || failing.calls[0] != "prepare" {
+		t.Fatalf("failed preparation did not fail closed: result=%+v calls=%v", failed, failing.calls)
+	}
+	if strings.Contains(failed.warnings[0], path) {
+		t.Fatalf("preparation warning leaked source path: %s", failed.warnings[0])
+	}
+	succeeded := importAdapterFiles(database, fakeImportAdapter{}, []string{path}, time.Now().Add(time.Hour))
+	if succeeded.added != 1 || len(succeeded.warnings) != 0 {
+		t.Fatalf("unrelated adapter did not continue: %+v", succeeded)
+	}
+}
+
 type fakeImportAdapter struct{}
 
 func (fakeImportAdapter) Name() string { return "fake" }
@@ -293,4 +563,111 @@ func (fakeWarningImportAdapter) Name() string { return "fake-warning" }
 
 func (fakeWarningImportAdapter) ParseFileWithWarnings(path string) ([]*fingerprint.ParsedRecord, []string, error) {
 	return []*fingerprint.ParsedRecord{{Agent: "fake-warning", TimestampMs: 1, TotalTokens: 1}}, []string{"line 1 invalid_token_totals"}, nil
+}
+
+type preparingPostImportAdapter struct {
+	calls         []string
+	preparedPaths []string
+	prepareErr    error
+}
+
+func (a *preparingPostImportAdapter) Name() string { return "preparing-post" }
+
+func (a *preparingPostImportAdapter) Discover(paths []string) ([]string, error) { return paths, nil }
+
+func (a *preparingPostImportAdapter) PrepareFileSet(paths []string) error {
+	a.calls = append(a.calls, "prepare")
+	a.preparedPaths = append([]string(nil), paths...)
+	return a.prepareErr
+}
+
+func (a *preparingPostImportAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, error) {
+	a.calls = append(a.calls, "parse")
+	return []*fingerprint.ParsedRecord{{
+		Agent:       a.Name(),
+		Model:       "unknown",
+		TimestampMs: 1,
+		DedupeID:    "prepared-record",
+		TotalTokens: 1,
+	}}, nil
+}
+
+func (a *preparingPostImportAdapter) PostProcessRecords(records []*fingerprint.ParsedRecord) []*fingerprint.ParsedRecord {
+	a.calls = append(a.calls, "postprocess")
+	return records
+}
+
+func writeImportCodexFixture(t *testing.T, path string, lines []string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatalf("write Codex fixture: %v", err)
+	}
+}
+
+func importCodexSessionMeta(timestamp, sessionID, parentID string) string {
+	if parentID == "" {
+		return fmt.Sprintf(`{"timestamp":%q,"type":"session_meta","payload":{"id":%q,"source":"cli"}}`, timestamp, sessionID)
+	}
+	return fmt.Sprintf(`{"timestamp":%q,"type":"session_meta","payload":{"id":%q,"forked_from_id":%q}}`, timestamp, sessionID, parentID)
+}
+
+func importCodexUsage(timestamp string, input, output, total int64, modelName string) string {
+	modelField := ""
+	if modelName != "" {
+		modelField = fmt.Sprintf(`,"model":%q`, modelName)
+	}
+	return fmt.Sprintf(`{"timestamp":%q,"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":%d,"output_tokens":%d,"total_tokens":%d},"total_token_usage":{"input_tokens":%d,"output_tokens":%d,"total_tokens":%d}%s}}}`, timestamp, input, output, total, input, output, total, modelField)
+}
+
+func assertImportDiagnostic(t *testing.T, diagnostics []adapters.ImportDiagnostic, code string, wantEvents, wantTokens int64) {
+	t.Helper()
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Code != code {
+			continue
+		}
+		if diagnostic.Events != wantEvents || diagnostic.Tokens != wantTokens {
+			t.Fatalf("diagnostic %s events=%d tokens=%d want events=%d tokens=%d", code, diagnostic.Events, diagnostic.Tokens, wantEvents, wantTokens)
+		}
+		return
+	}
+	t.Fatalf("missing diagnostic %s", code)
+}
+
+func assertImportDiagnosticCount(t *testing.T, diagnostics []adapters.ImportDiagnostic, code string, wantCount int64) {
+	t.Helper()
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Code != code {
+			continue
+		}
+		if diagnostic.Unit != adapters.ImportDiagnosticUnitCount || diagnostic.Count != wantCount {
+			t.Fatalf("diagnostic %s unit=%q count=%d want unit=%q count=%d", code, diagnostic.Unit, diagnostic.Count, adapters.ImportDiagnosticUnitCount, wantCount)
+		}
+		return
+	}
+	t.Fatalf("missing diagnostic %s", code)
+}
+
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("stdout pipe: %v", err)
+	}
+	previous := os.Stdout
+	os.Stdout = writer
+	fn()
+	os.Stdout = previous
+	if err := writer.Close(); err != nil {
+		_ = reader.Close()
+		t.Fatalf("close stdout writer: %v", err)
+	}
+	output, err := io.ReadAll(reader)
+	if err != nil {
+		_ = reader.Close()
+		t.Fatalf("read stdout: %v", err)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatalf("close stdout reader: %v", err)
+	}
+	return string(output)
 }

@@ -23,6 +23,7 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 
 - Hardened export, merge, redaction, source-identity reconciliation, and additive schema validation behavior.
+- Filtered Codex fork/subagent parent-prefix and rewritten-burst replay before fingerprinting, with conservative per-child quarantine, replay-local model/timing isolation (including fail-closed missing/backward replay timestamps), explicit diagnostic units, size/mtime identity-consistent `doctor codex` policy comparison, and corrected current-ccusage last-or-delta compatibility accounting.
 - Preserved and strictly parsed explicit request counts, including zero-token request records, without inferring unknown counts from event or session totals.
 - Removed redundant Copilot JSON decoding and a vulnerable Web router dependency.
 

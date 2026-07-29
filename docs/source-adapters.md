@@ -34,13 +34,21 @@ Codex 的 provider 归一为 `openai` 做合并统计，不按 session 级 `mode
 
 Codex 模型状态按同一 session/thread 的 JSONL 物理顺序更新：`thread_settings_applied.payload.thread_settings.model` 和 `turn_context.model` 都只影响其后的 usage，后出现的声明覆盖先前状态；usage 自身明确携带的 model 仅作为该事件的 `direct_event` 证据。模型证据来源写入 `model_resolution = direct_event | thread_settings | turn_context | unknown`。父任务模型不会自动继承给 fork/subagent，也不会用 usage 之后才出现的模型倒灌前序事件。
 
+导入 Codex 前，AgentLedger 会先形成 import 稳定文件集：mtime 位于 grace period 内的近期文件额外执行 100 ms size/mtime 检查，再基于同一文件集建立 fork replay plan 并保持逐文件流式解析。显式 fork 的 parent ID 优先读取 `forked_from_id`，其次读取 `source.subagent.thread_spawn.parent_thread_id`；parent 候选优先使用 active `sessions`，再使用显式配置的 `archived_sessions`。parent prefix 只取 timestamp 能证明不晚于 fork boundary 的 usage；缺失 fork timestamp，或 parent usage 缺失 timestamp 而无法证明位于 fork 前时，不会把完整 parent stream 当成 prefix。
+
+Replay comparison stream 与最终 accounting policy 独立，也不直接比较累计 `total_token_usage` snapshot。累计值推进时优先使用非零 `last_token_usage`；`last` 缺失或四个主要 token 分量全零时，使用 reset-aware cumulative delta；累计未推进时不产生 comparison event。parent 与 child 都经过同一规范化，再按 input、clamped cached input、output、reasoning、derived-or-recorded total 五字段连续匹配。冻结快照中该 `last/delta` 流与 total-snapshot A/B 的 exact 结果相同，但保留前者可以继续和 ccusage 的 matcher 主路径交叉核对。
+
+若 fork 时已证明 parent prefix 为空，第一条 child usage 直接保留，不启用 burst；非空 prefix 的首条即不匹配，或 parent/boundary 无法提供 exact prefix 时，只有 child 开头前两条“累计已推进且非零、能够进入 comparison stream”的 usage 时间差位于 `0..=1000 ms`，才把它们视为 rewritten replay burst；累计未推进的冗余重发行不单独构成 burst 证据。burst 建立后也只在每个相邻差值仍位于该区间时继续过滤。parent 已唯一解析、fork boundary 可证明、且 exact 与 opening burst 都不成立时，表示 child 从第一条开始就是自身 usage，全部保留；非 fork 文件永远不启用 burst 检测。这里有意比 ccusage 更保守：ccusage 的 burst detector 会把仅仅带有 last/total 字段的冗余重发行也作为开头证据，而 AgentLedger 在 parent 缺失时宁可 quarantine，也不据此跳过可能是真实的第一条 child usage。
+
+Replay usage 会更新 child 的 cumulative accounting baseline，但不会生成 `ParsedRecord`、fingerprint 或 SQLite event，也不计入普通的 duplicate `Events skipped`。Replay 阶段的 model declaration 与 `task_complete` timing 不进入正式 attribution state；只有 matcher 遇到第一条真实 child usage 后，replay timestamp 单调且有效，并且 declaration timestamp 能证明比最后一条 replay usage 晚超过 1000 ms 时，最后一条同 key model declaration 才会生效。任一已跳过 replay usage 的 timestamp 缺失或倒序都会使这段 attribution boundary 不可信，全部 replay-local model buffer 随即丢弃。若 matcher 证明 child 根本没有 replay，则开头缓冲的 model declaration 按原有物理顺序正常生效。无法唯一解析 parent、文件在 preparation 后发生变化，或缺少足够 replay 证据时，只隔离该 fork child 并把 import 标为 `completed_with_warnings`；全局 replay plan 构建失败时，本轮 Codex adapter fail closed，其他 adapter 继续。
+
 Codex token event 本身没有 model、且此前也没有可用的 `thread_settings` / `turn_context` 时，模型统一记录为 `unknown`，同时设置 `model_is_fallback = true` 和 `model_resolution = unknown`。不要用具体 GPT 型号充当未知模型占位符。默认 pricing profile 对精确 `unknown` 使用本地零值政策，但不把它算作真实价格覆盖；重新导入时，同一来源行中由旧 parser 硬编码生成的 `gpt-5` fallback 会收敛为当前可证明的上下文模型或 `unknown`，但新的 fallback 不会覆盖历史 explicit model。
 
 Codex 的 `total_token_usage` 是 session 级 cumulative counter，是最权威的用量来源。两个观测事实决定了计量口径：(1) 每次真实调用后，日志通常会**冗余重发**一条内容相同的 `token_count`（累计 total 不变）；(2) `last_token_usage` 只记录最后一次 API 调用，当同一区间内发生多次调用时会**漏记**中间的量。
 
 默认 `duplicate_policy = "ledger"` 据此采用最准口径：以 `total_token_usage` 做 per-session **望远镜 delta**——累计不变时 delta 为 0、自动跳过冗余重发；累计回落（compact 压缩上下文导致 counter reset）时整段计入、不丢量；`last_token_usage` 缺失（无累计）的旧记录才回退为单条直接计入。本机 1151 个 session 实测，该口径与「逐 session 累计值金标准」一致到 99.96%。
 
-作为对照，`ccusage codex` 用 `last_token_usage` 按 timestamp + model + token tuple 去重：既把冗余重发重复计入、又漏掉部分多调用，对本机数据净 **高估约 34%**；而早期纯 `last_token_usage` 快照去重口径会因漏多调用 **低估约 19%**。需要逐数字对齐 ccusage（含其高估）以便交叉核对时，可在 `[agents.codex]` 下设置 `duplicate_policy = "ccusage_compatible"` 后重建或重新导入独立数据库。delta 各字段使用 saturating subtraction，counter reset 不会产生负数。
+作为对照，`duplicate_policy = "ccusage_compatible"` 对齐当前 ccusage 在正常单 session Codex JSONL 上的单次 usage 选择：`total_token_usage` 累计推进时优先使用 `last_token_usage`，`last` 缺失时使用逐字段 saturating cumulative delta，累计未推进时忽略该行。它适合在独立数据库或重建后做数值交叉核对，但仍会继承 `last_token_usage` 对同一区间多次调用只保留最后一次的可观测性限制；默认 `ledger` 口径仍以累计 delta 为权威。该 profile 与 replay comparison 共用同一 skip plan，二者只在最终写入的 accounting token 数上可能不同。多 session 混写同一文件、缺失或零值 `total_tokens` 等非标准格式边界不承诺与 ccusage 逐 bit 相同，AgentLedger 仍优先保持 per-session baseline 和非负 token 不变量。
 
 Codex 日志里的 `input_tokens` 包含 cached input。入库时 AgentLedger 会拆成 `input_tokens = raw_input_tokens - cached_input_tokens` 和 `cache_read_tokens = cached_input_tokens`，使表内 token 分项和 Claude/ccusage 报表的非缓存输入口径一致；`raw_input_tokens` 保存源日志原始 input，`source_total_tokens` 仍保留源日志 raw cumulative total。
 
@@ -48,7 +56,7 @@ Codex 日志里的 `input_tokens` 包含 cached input。入库时 AgentLedger �
 
 Codex 的 `task_complete.duration_ms`、`task_complete.time_to_first_token_ms` 和 `turn_id` 会按同一 session 内紧邻的上一条 usage 记录落为 turn 级 timing。这个值包含 Codex turn 的端到端耗时边界，不等同于严格的单次模型 API latency。`session_path_id` 保存相对 `sessions` 的路径 ID，例如 `2026/05/27/rollout-...`，用于和 ccusage 的 session 粒度对齐。
 
-`agent-ledger doctor codex` 会扫描 configured paths，输出 raw `token_count` 覆盖、`task_complete` timing 覆盖、默认（准确）口径与 `ccusage_compatible` 口径的事件数/token 差异，以及模型分布。
+`agent-ledger doctor codex` 会扫描 configured paths，输出 raw `token_count` 覆盖、`task_complete` timing 覆盖、fork/parent/exact/rewritten/quarantine replay diagnostics、默认（准确）口径与 `ccusage_compatible` 口径的事件数/token 差异，以及模型分布。两种口径共享同一 replay plan 和文件身份 snapshot，并逐文件核对 quarantine、`file_changed` 与 exact/rewritten replay event decisions；snapshot drift 或 outcome 不一致会让 comparison 明确返回 inconclusive。Replay diagnostic 的文件/child 数使用 `count`；`tokens` 表示 ledger 口径下被 replay filter 避免写入的 token impact，不用于 policy parity，因为两个 accounting policy 可对同一 replay event 计算出不同 token 数。
 
 Codex 完整 source object 同样只在解析期间用于累计 delta、结构化字段、`raw_sha256` 和 fingerprint。`total_token_usage` / `last_token_usage` 的计算结果写入 token 分项、`source_total_tokens`、`raw_input_tokens`、`token_accounting_method` 和 `accounting_profile`，但 usage map 本身不落库；`raw_usage_json` 保持 `NULL`。`task_complete` 继续只更新独立 timing/turn 列，完整重放依赖源 JSONL。
 

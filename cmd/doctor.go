@@ -83,6 +83,8 @@ func runCodexDoctor(cfg *config.Config) error {
 	fmt.Printf("  task timing:       %d\n", diag.TaskCompleteWithTiming)
 	fmt.Printf("  task TTFT:         %d\n", diag.TaskCompleteWithTTFT)
 
+	printCodexReplayDiagnostics(diag.ReplayDiagnostics)
+
 	fmt.Println("\nParsed usage, configured policy:")
 	printCodexRecordStats("configured", configured)
 	fmt.Printf("  timing coverage: total=%.2f%% ttft=%.2f%% tps=%.2f%%\n", totalCoverage*100, ttftCoverage*100, tpsCoverage*100)
@@ -97,6 +99,13 @@ func runCodexDoctor(cfg *config.Config) error {
 		fmt.Printf("  %s: %d events\n", item.Model, item.Count)
 	}
 	return nil
+}
+
+func printCodexReplayDiagnostics(diagnostics []adapters.ImportDiagnostic) {
+	fmt.Println("\nCodex fork replay:")
+	for _, diagnostic := range diagnostics {
+		fmt.Printf("  %s\n", formatImportDiagnostic(diagnostic))
+	}
 }
 
 func printCodexRecordStats(label string, stats adapters.CodexRecordStats) {

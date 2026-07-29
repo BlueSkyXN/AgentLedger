@@ -81,7 +81,7 @@ enabled = true
 paths = ["~/custom-codex-logs"]
 ```
 
-Codex 的 `duplicate_policy` 默认为 `ledger`，会用 `total_token_usage` 的 per-session 累计 delta 还原真实增量，自动跳过累计值不变的冗余 `token_count`。需要和 `ccusage codex` 的 `last_token_usage` 对照口径对账时，可在独立数据库或重建后设置：
+Codex 的 `duplicate_policy` 默认为 `ledger`，会用 `total_token_usage` 的 per-session 累计 delta 还原真实增量，自动跳过累计值不变的冗余 `token_count`。需要和当前 `ccusage codex` 在正常单 session JSONL 上的单次 usage 口径对账时，可在独立数据库或重建后设置 `ccusage_compatible`；该口径在累计推进时优先 `last_token_usage`，缺失 `last` 时使用逐字段饱和累计差值，累计未推进时忽略该行：
 
 ```toml
 [agents.codex]
