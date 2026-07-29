@@ -210,6 +210,14 @@ npm run build
 
 面板不会返回 `raw_usage_json`。聚合数据、session id、模型名、项目路径和数据库路径仍属于本机私有使用数据，不应作为公开截图或附件传播。
 
+完整的本地预览、后台 `screen` 会话、全页面/API 验收和停止方式见 [Local Preview](docs/local-preview.md)。最小存活检查：
+
+```bash
+curl -fsS http://127.0.0.1:54217/api/v1/health
+```
+
+面板当前包含总览、趋势、模型、渠道、会话、慢请求、导入和设置 8 个只读页面。直接托管静态前端或发布到 GitHub Pages 不能提供完整预览，因为聚合数据必须由本机只读 API 从当前 SQLite 数据库查询。
+
 ## 只读 API
 
 主要接口：
@@ -244,7 +252,7 @@ project=<project-path-label>
 | Agent | 默认路径 | 解析格式 | 说明 |
 |---|---|---|---|
 | Claude Code | `~/.config/claude/projects`, `~/.claude/projects` | JSONL | 读取带有 `message.usage` 的 assistant 消息；旧配置写 `~/.claude` 时会自动展开到 `projects`。 |
-| Codex | `~/.codex/sessions` | JSONL | 读取 token count 记录；Codex provider 归一为 `openai` 合并统计，不按 session 的 `model_provider` 拆账；按 JSONL 时序使用 usage 自身 model、`thread_settings_applied` 和 `turn_context`，并保存 `model_resolution`；没有前置模型证据时记录为 `unknown` fallback，按零值政策单独披露且不算真实价格覆盖；默认用 `total_token_usage` 的 per-session 累计 delta 还原真实增量，`last_token_usage` 仅用于旧记录或 `ccusage_compatible` 对照；配置写 `~/.codex` 时会自动收敛到 `sessions`。 |
+| Codex | `~/.codex/sessions` | JSONL | 读取 token count 记录；Codex provider 归一为 `openai` 合并统计，不按 session 的 `model_provider` 拆账；导入前基于稳定文件集识别 fork parent prefix 与严格 rewritten burst，过滤 child replay 且隔离无法证明的 fork；按 JSONL 时序使用 usage 自身 model、可信的 `thread_settings_applied` 和 `turn_context`，并保存 `model_resolution`；没有前置模型证据时记录为 `unknown` fallback，按零值政策单独披露且不算真实价格覆盖；默认用 `total_token_usage` 的 per-session 累计 delta 还原真实增量，`ccusage_compatible` 则在累计推进时使用 last-or-delta 对照口径；配置写 `~/.codex` 时会自动收敛到 `sessions`。 |
 | GitHub Copilot | `~/.copilot/otel`, `~/.copilot/session-state` | JSONL | 优先读取 OTel `gen_ai.usage.*`；没有 OTel 文件时回退到每条非空 `session.shutdown.data.modelMetrics` 的 segment+model 汇总。Copilot input 会拆成 `raw_input_tokens`、非缓存 `input_tokens` 和 `cache_read_tokens`；session-state 的 experimental `modelMetrics.<model>.requests.count` 会作为该模型 API `request_count`。 |
 | Gemini CLI | `~/.gemini` | JSON / JSONL | 读取 `usageMetadata`。 |
 | WorkBuddy | `~/.workbuddy/projects` | JSONL | 读取带 `providerData.usage` 与 `providerData.rawUsage` 的调用记录；按根级事件 ID 去重并拆分非缓存 input、cache read/write、output 和 reasoning 明细。`credit` 不保存、不作为 USD 成本；`auto` 是路由选择状态而非 model ID，规范化为 `unknown/policy_zero`。 |
@@ -325,5 +333,7 @@ paths = ["~/.workbuddy/projects"]
 
 - [文档索引](docs/README.md)
 - [快速开始](docs/quickstart.md)
+- [本地完整预览](docs/local-preview.md)
+- [数据库重建、替换与回滚](docs/database-rebuild.md)
 - [数据模型](docs/data-model.md)
 - [CLI Reference](docs/cli-reference.md)

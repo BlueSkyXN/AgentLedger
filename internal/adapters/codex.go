@@ -15,8 +15,8 @@ const (
 	// CodexDuplicatePolicyLedger 是默认、最准确的口径：对累计值 total_token_usage 做
 	// per-session 望远镜 delta，跳过冗余重发（delta=0）并整段计入 counter reset。
 	CodexDuplicatePolicyLedger = "ledger"
-	// CodexDuplicatePolicyCCUsageCompatible 复刻 ccusage 口径：直接用 last_token_usage，
-	// 靠含时间戳的 fingerprint 去重，便于与 `ccusage codex` 逐数字交叉核对（会继承其高估）。
+	// CodexDuplicatePolicyCCUsageCompatible 复刻 ccusage 的单次 usage 口径：累计推进时
+	// 优先 last_token_usage，last 缺失时使用累计差值，累计未推进时忽略该行。
 	CodexDuplicatePolicyCCUsageCompatible = "ccusage_compatible"
 	codexScannerInitialBufferBytes        = 64 * 1024
 	codexScannerMaxTokenBytes             = 64 * 1024 * 1024
@@ -24,6 +24,8 @@ const (
 
 type CodexAdapter struct {
 	duplicatePolicy string
+	replayPlan      *codexReplayPlan
+	replayStats     codexReplayStats
 }
 
 type CodexOptions struct {
@@ -47,6 +49,12 @@ type codexModelState struct {
 	model      string
 	resolution string
 	line       int
+}
+
+type codexBufferedModelDeclaration struct {
+	sessionID  string
+	timestamp  int64
+	modelState codexModelState
 }
 
 func NewCodexAdapter() *CodexAdapter {
@@ -98,8 +106,17 @@ func normalizeCodexDiscoverPaths(paths []string) []string {
 }
 
 func (a *CodexAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, error) {
+	replayMatcher, err := a.replayMatcherFor(path)
+	if err != nil {
+		return nil, err
+	}
+
 	f, err := os.Open(path)
 	if err != nil {
+		if replayMatcher != nil {
+			a.replayStats.fileChanged++
+			return nil, &codexReplayQuarantineError{reason: "child file became unavailable after replay preparation"}
+		}
 		return nil, nil
 	}
 	defer f.Close()
@@ -113,6 +130,8 @@ func (a *CodexAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, erro
 	modelStates := map[string]codexModelState{}
 	previousTotals := map[string]codexUsageSnapshot{}
 	lastUsageRecords := map[string]*fingerprint.ParsedRecord{}
+	replayUsageState := codexReplayUsageState{}
+	var bufferedModels []codexBufferedModelDeclaration
 
 	for scanner.Scan() {
 		lineNum++
@@ -129,21 +148,42 @@ func (a *CodexAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, erro
 		entryType := getString(obj, "type")
 		contextSessionID := extractCodexExplicitSessionID(obj)
 		if modelName := extractCodexThreadSettingsModel(obj); modelName != "" {
-			modelStates[contextSessionID] = codexModelState{
+			state := codexModelState{
 				model:      modelName,
 				resolution: model.ModelResolutionThreadSettings,
 				line:       lineNum,
+			}
+			if replayMatcher.pending() {
+				bufferedModels = append(bufferedModels, codexBufferedModelDeclaration{
+					sessionID:  contextSessionID,
+					timestamp:  extractCodexTimestamp(obj),
+					modelState: state,
+				})
+			} else {
+				modelStates[contextSessionID] = state
 			}
 			continue
 		}
 		if entryType == "turn_context" {
 			if modelName := extractCodexTurnContextModel(obj); modelName != "" {
-				modelStates[contextSessionID] = codexModelState{
+				state := codexModelState{
 					model:      modelName,
 					resolution: model.ModelResolutionTurnContext,
 					line:       lineNum,
 				}
+				if replayMatcher.pending() {
+					bufferedModels = append(bufferedModels, codexBufferedModelDeclaration{
+						sessionID:  contextSessionID,
+						timestamp:  extractCodexTimestamp(obj),
+						modelState: state,
+					})
+				} else {
+					modelStates[contextSessionID] = state
+				}
 			}
+			continue
+		}
+		if replayMatcher.pending() && isCodexTaskComplete(obj) {
 			continue
 		}
 		if attachCodexTaskTiming(obj, defaultSessionID, lastUsageRecords) {
@@ -154,17 +194,29 @@ func (a *CodexAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, erro
 		if !ok {
 			continue
 		}
+		replayUsage, replayUsageStatus := extractCodexReplayUsage(obj, &replayUsageState)
 
 		sessionID := extractCodexSessionID(obj, defaultSessionID)
 		// codex 每次真实调用后会冗余重发一条相同的 token_count（累计 total 不变），
 		// 且 last_token_usage 仅记最后一次调用、会漏掉同一区间内的多次调用。
 		// 默认据此基于权威累计值 total_token_usage 做 per-session 望远镜 delta：
 		// 累计不变 → delta=0 自动跳过冗余；累计回落（compact 重置）→ 整段计入避免丢量。
-		// ccusage_compatible 保留 ccusage 口径：直接用 last_token_usage，靠含时间戳的
-		// fingerprint 去重（会继承 ccusage 对冗余重发的重复计算与对多次调用的漏计）。
+		// ccusage_compatible 保留 ccusage 口径：累计推进时优先 last_token_usage，
+		// last 缺失时使用逐字段饱和累计差值，累计未推进时忽略该行。
 		if sourceCumulative {
 			if a.duplicatePolicy == CodexDuplicatePolicyCCUsageCompatible {
-				method = model.AccCodexLastTokenUsage
+				previous, hasPrevious := previousTotals[sessionID]
+				advanced := !hasPrevious || !codexUsageSnapshotEqual(previous, sourceUsage)
+				switch {
+				case !advanced:
+					usage = codexUsageSnapshot{}
+					method = model.AccCodexLastTokenUsage
+				case !hasCodexLastTokenUsage(obj):
+					usage = sourceUsage.delta(previous)
+					method = model.AccCodexTotalDelta
+				default:
+					method = model.AccCodexLastTokenUsage
+				}
 				previousTotals[sessionID] = sourceUsage
 			} else {
 				usage = sourceUsage.telescopingDelta(previousTotals[sessionID])
@@ -174,6 +226,38 @@ func (a *CodexAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, erro
 		}
 		rawInputTokens := usage.inputPtr()
 		storedUsage := usage.storageUsage()
+
+		if replayMatcher.pending() {
+			// A cumulative snapshot that did not advance is not part of the
+			// policy-independent replay stream. Keep the matcher pending and do
+			// not let the compatibility accounting mode turn it into a record.
+			if replayUsageStatus == codexReplayUsageUnchanged {
+				continue
+			}
+			if replayUsageStatus != codexReplayUsageComparable {
+				if !storedUsage.isZero() {
+					a.replayStats.unresolved++
+					return nil, &codexReplayQuarantineError{reason: "non-zero usage cannot be compared with the replay stream"}
+				}
+				continue
+			}
+			decision, err := replayMatcher.observe(replayUsage)
+			if err != nil {
+				// A child is all-or-nothing: if its replay cannot be proven, do not
+				// return any records that may already have been accumulated.
+				a.replayStats.unresolved++
+				return nil, err
+			}
+			if decision.skip {
+				a.recordReplaySkip(decision.method, storedUsage.totalTokens())
+				continue
+			}
+			if decision.transitioned {
+				applyCodexBufferedModels(modelStates, bufferedModels, replayMatcher)
+				bufferedModels = nil
+			}
+		}
+
 		if storedUsage.isZero() {
 			continue
 		}
@@ -233,6 +317,41 @@ func (a *CodexAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, erro
 	}
 
 	return records, scanner.Err()
+}
+
+func applyCodexBufferedModels(modelStates map[string]codexModelState, buffered []codexBufferedModelDeclaration, replayMatcher *codexReplayMatcher) {
+	if replayMatcher.replaySkipped && !replayMatcher.replayTimestampValid {
+		return
+	}
+	latest := map[string]codexModelState{}
+	for _, declaration := range buffered {
+		if replayMatcher.replaySkipped && (declaration.timestamp <= 0 || declaration.timestamp-replayMatcher.lastReplayTimestamp <= codexReplayBurstPauseMs) {
+			continue
+		}
+		if current, ok := latest[declaration.sessionID]; !ok || declaration.modelState.line > current.line {
+			latest[declaration.sessionID] = declaration.modelState
+		}
+	}
+	for sessionID, state := range latest {
+		modelStates[sessionID] = state
+	}
+}
+
+func hasCodexLastTokenUsage(obj map[string]interface{}) bool {
+	payload := getMap(obj, "payload")
+	if payload == nil {
+		return false
+	}
+	info := getMap(payload, "info")
+	return info != nil && getMap(info, "last_token_usage") != nil
+}
+
+func codexUsageSnapshotEqual(left, right codexUsageSnapshot) bool {
+	return left.Input == right.Input &&
+		left.CachedInput == right.CachedInput &&
+		left.Output == right.Output &&
+		left.Reasoning == right.Reasoning &&
+		left.Total == right.Total
 }
 
 // extractCodexUsage 返回 (usage, method, source, ok, sourceCumulative)。
@@ -452,13 +571,10 @@ func extractCodexTimestamp(obj map[string]interface{}) int64 {
 }
 
 func attachCodexTaskTiming(obj map[string]interface{}, fallbackSessionID string, lastUsageRecords map[string]*fingerprint.ParsedRecord) bool {
-	if getString(obj, "type") != "event_msg" {
+	if !isCodexTaskComplete(obj) {
 		return false
 	}
 	payload := getMap(obj, "payload")
-	if payload == nil || getString(payload, "type") != "task_complete" {
-		return false
-	}
 	sessionID := extractCodexSessionID(obj, fallbackSessionID)
 	rec := lastUsageRecords[sessionID]
 	if rec == nil {
@@ -494,6 +610,10 @@ func attachCodexTaskTiming(obj map[string]interface{}, fallbackSessionID string,
 		rec.TurnID = getString(payload, "turn_id")
 	}
 	return true
+}
+
+func isCodexTaskComplete(obj map[string]interface{}) bool {
+	return getString(obj, "type") == "event_msg" && getNestedString(obj, "payload", "type") == "task_complete"
 }
 
 func extractCodexSession(path string) string {

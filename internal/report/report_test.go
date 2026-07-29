@@ -228,6 +228,23 @@ func TestAttachReportEstimatesPreserveExplicitZeroPrice(t *testing.T) {
 	}
 }
 
+func TestAttachReportEstimatesExposePolicyZeroAmount(t *testing.T) {
+	policyZero := &pricing.CoverageSummary{TotalEvents: 1, PolicyZeroEvents: 1, Confidence: "missing"}
+	estimate := reportCost{Summary: policyZero}
+
+	row := ReportRow{}
+	attachReportEstimate(&row, estimate)
+	if row.EstimatedCostUSD == nil || *row.EstimatedCostUSD != 0 || row.EstimatedCostMicroUSD == nil || *row.EstimatedCostMicroUSD != 0 {
+		t.Fatalf("report row should expose the explicit policy-zero amount: %+v", row)
+	}
+
+	timeRow := TimeBreakdownRow{}
+	attachTimeEstimate(&timeRow, estimate)
+	if timeRow.EstimatedCostUSD == nil || *timeRow.EstimatedCostUSD != 0 || timeRow.EstimatedCostMicroUSD == nil || *timeRow.EstimatedCostMicroUSD != 0 {
+		t.Fatalf("time row should expose the explicit policy-zero amount: %+v", timeRow)
+	}
+}
+
 func writeReportPricingProfile(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "pricing.json")

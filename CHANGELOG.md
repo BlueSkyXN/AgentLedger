@@ -11,6 +11,7 @@ All notable changes to this project will be documented in this file.
 - JSON pricing profiles and read-only estimated-cost reporting.
 - `compact-raw` maintenance command for removing historical raw usage evidence.
 - Explicit model-resolution, observability, accounting, and request-count coverage fields across CLI reports, API responses, and the Web dashboard.
+- Local preview and database-rebuild runbooks covering full page/API validation, replay warning interpretation, consistent backups, atomic replacement, and rollback gates.
 
 ### Changed
 
@@ -23,6 +24,8 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 
 - Hardened export, merge, redaction, source-identity reconciliation, and additive schema validation behavior.
+- Removed read-only API head-of-line blocking by allowing a bounded four-connection SQLite pool for concurrent panel aggregations; write paths remain single-connection.
+- Filtered Codex fork/subagent parent-prefix and rewritten-burst replay before fingerprinting, with conservative per-child quarantine, replay-local model/timing isolation (including fail-closed attribution when replay timestamps are missing or backward), explicit diagnostic units, size/mtime identity-consistent `doctor codex` policy comparison, and corrected current-ccusage last-or-delta compatibility accounting.
 - Preserved and strictly parsed explicit request counts, including zero-token request records, without inferring unknown counts from event or session totals.
 - Removed redundant Copilot JSON decoding and a vulnerable Web router dependency.
 

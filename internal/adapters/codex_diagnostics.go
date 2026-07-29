@@ -3,6 +3,8 @@ package adapters
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"sort"
 
@@ -33,6 +35,7 @@ type CodexDiagnostics struct {
 
 	LedgerStats            CodexRecordStats
 	CCUsageCompatibleStats CodexRecordStats
+	ReplayDiagnostics      []ImportDiagnostic
 }
 
 type CodexRecordStats struct {
@@ -54,6 +57,18 @@ type CodexModelCount struct {
 	Count int
 }
 
+type codexDiagnosticSnapshot map[string]codexFileIdentity
+
+type codexReplayFileOutcome struct {
+	quarantined     bool
+	quarantine      string
+	exactEvents     int64
+	exactTokens     int64
+	rewrittenEvents int64
+	rewrittenTokens int64
+	fileChanged     int64
+}
+
 func AnalyzeCodex(paths []string, duplicatePolicy string) (*CodexDiagnostics, error) {
 	normalizedPolicy := normalizeCodexDuplicatePolicy(duplicatePolicy)
 	if len(paths) == 0 {
@@ -64,9 +79,18 @@ func AnalyzeCodex(paths []string, duplicatePolicy string) (*CodexDiagnostics, er
 	if err != nil {
 		return nil, err
 	}
+	return analyzeCodexDiscoveredFiles(files, normalizeCodexDiscoverPaths(paths), normalizedPolicy, nil)
+}
+
+func analyzeCodexDiscoveredFiles(
+	files []string,
+	displayPaths []string,
+	normalizedPolicy string,
+	betweenPolicies func(string),
+) (*CodexDiagnostics, error) {
 	diag := &CodexDiagnostics{
 		DuplicatePolicy:   normalizedPolicy,
-		Paths:             normalizeCodexDiscoverPaths(paths),
+		Paths:             displayPaths,
 		Files:             len(files),
 		TypeCounts:        map[string]int{},
 		PayloadTypeCounts: map[string]int{},
@@ -78,27 +102,227 @@ func AnalyzeCodex(paths []string, duplicatePolicy string) (*CodexDiagnostics, er
 		},
 	}
 
-	ledgerAdapter := NewCodexAdapterWithOptions(CodexOptions{DuplicatePolicy: CodexDuplicatePolicyLedger})
-	ccusageAdapter := NewCodexAdapterWithOptions(CodexOptions{DuplicatePolicy: CodexDuplicatePolicyCCUsageCompatible})
+	ledgerAdapter, ccusageAdapter, snapshot, err := prepareCodexDiagnosticComparison(files)
+	if err != nil {
+		return nil, err
+	}
 	ledgerSeen := map[string]bool{}
 	ccusageSeen := map[string]bool{}
+	ledgerOutcomes := make([]codexReplayFileOutcome, 0, len(files))
+	ccusageOutcomes := make([]codexReplayFileOutcome, 0, len(files))
 	for _, file := range files {
+		if err := validateCodexDiagnosticFile(snapshot, file); err != nil {
+			return nil, err
+		}
 		if err := scanCodexDiagnosticFile(file, diag); err != nil {
 			return nil, err
 		}
-		ledgerRecords, err := ledgerAdapter.ParseFile(file)
-		if err != nil {
+		if err := validateCodexDiagnosticFile(snapshot, file); err != nil {
 			return nil, err
 		}
-		addCodexRecordStats(&diag.LedgerStats, ledgerRecords, ledgerSeen)
 
-		ccusageRecords, err := ccusageAdapter.ParseFile(file)
-		if err != nil {
+		ledgerBefore := ledgerAdapter.ImportDiagnostics()
+		ledgerRecords, err := ledgerAdapter.ParseFile(file)
+		if err != nil && !isCodexReplayQuarantineError(err) {
 			return nil, err
 		}
-		addCodexRecordStats(&diag.CCUsageCompatibleStats, ccusageRecords, ccusageSeen)
+		ledgerOutcomes = append(ledgerOutcomes, codexReplayOutcomeDelta(ledgerBefore, ledgerAdapter.ImportDiagnostics(), err))
+		if err == nil {
+			addCodexRecordStats(&diag.LedgerStats, ledgerRecords, ledgerSeen)
+		}
+
+		if betweenPolicies != nil {
+			betweenPolicies(file)
+		}
+		if err := validateCodexDiagnosticFile(snapshot, file); err != nil {
+			return nil, err
+		}
+
+		ccusageBefore := ccusageAdapter.ImportDiagnostics()
+		ccusageRecords, err := ccusageAdapter.ParseFile(file)
+		if err != nil && !isCodexReplayQuarantineError(err) {
+			return nil, err
+		}
+		ccusageOutcomes = append(ccusageOutcomes, codexReplayOutcomeDelta(ccusageBefore, ccusageAdapter.ImportDiagnostics(), err))
+		if err == nil {
+			addCodexRecordStats(&diag.CCUsageCompatibleStats, ccusageRecords, ccusageSeen)
+		}
+		if err := validateCodexDiagnosticFile(snapshot, file); err != nil {
+			return nil, err
+		}
+	}
+	if err := validateCodexDiagnosticSnapshot(snapshot); err != nil {
+		return nil, err
+	}
+	if err := validateCodexReplayPolicyOutcomes(ledgerOutcomes, ccusageOutcomes); err != nil {
+		return nil, err
+	}
+	diag.ReplayDiagnostics = ledgerAdapter.ImportDiagnostics()
+	if err := validateCodexReplayDiagnostics(diag.ReplayDiagnostics, ccusageAdapter.ImportDiagnostics()); err != nil {
+		return nil, err
 	}
 	return diag, nil
+}
+
+func prepareCodexDiagnosticComparison(files []string) (*CodexAdapter, *CodexAdapter, codexDiagnosticSnapshot, error) {
+	before, err := captureCodexDiagnosticSnapshot(files)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("prepare Codex diagnostic snapshot: %w", err)
+	}
+	plan, stats, err := buildCodexReplayPlan(files)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("prepare Codex replay diagnostics: %w", err)
+	}
+	if err := validateCodexDiagnosticSnapshot(before); err != nil {
+		return nil, nil, nil, err
+	}
+	ledger := NewCodexAdapterWithOptions(CodexOptions{DuplicatePolicy: CodexDuplicatePolicyLedger})
+	ccusage := NewCodexAdapterWithOptions(CodexOptions{DuplicatePolicy: CodexDuplicatePolicyCCUsageCompatible})
+	// The replay plan is immutable after construction. Sharing it ensures both
+	// accounting policies compare the same parent/child relationships.
+	ledger.replayPlan = plan
+	ledger.replayStats = stats
+	ccusage.replayPlan = plan
+	ccusage.replayStats = stats
+	return ledger, ccusage, before, nil
+}
+
+func captureCodexDiagnosticSnapshot(files []string) (codexDiagnosticSnapshot, error) {
+	snapshot := make(codexDiagnosticSnapshot, len(files))
+	for _, file := range files {
+		canonical, err := canonicalCodexPath(file)
+		if err != nil {
+			return nil, err
+		}
+		identity, err := codexIdentity(canonical)
+		if err != nil {
+			return nil, err
+		}
+		snapshot[canonical] = identity
+	}
+	return snapshot, nil
+}
+
+func validateCodexDiagnosticSnapshot(snapshot codexDiagnosticSnapshot) error {
+	for path, expected := range snapshot {
+		if err := validateCodexDiagnosticIdentity(path, expected); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateCodexDiagnosticFile(snapshot codexDiagnosticSnapshot, file string) error {
+	canonical, err := canonicalCodexPath(file)
+	if err != nil {
+		return fmt.Errorf("Codex policy comparison inconclusive: source snapshot changed after replay preparation")
+	}
+	expected, ok := snapshot[canonical]
+	if !ok {
+		return fmt.Errorf("Codex policy comparison inconclusive: source snapshot identity is unavailable")
+	}
+	return validateCodexDiagnosticIdentity(canonical, expected)
+}
+
+func validateCodexDiagnosticIdentity(path string, expected codexFileIdentity) error {
+	actual, err := codexIdentity(path)
+	if err != nil || actual != expected {
+		return fmt.Errorf("Codex policy comparison inconclusive: source snapshot changed after replay preparation")
+	}
+	return nil
+}
+
+func isCodexReplayQuarantineError(err error) bool {
+	var target *codexReplayQuarantineError
+	return errors.As(err, &target)
+}
+
+func codexReplayOutcomeDelta(before, after []ImportDiagnostic, parseErr error) codexReplayFileOutcome {
+	exactBefore, _ := importDiagnosticByCode(before, codexDiagnosticReplayExact)
+	exactAfter, _ := importDiagnosticByCode(after, codexDiagnosticReplayExact)
+	rewrittenBefore, _ := importDiagnosticByCode(before, codexDiagnosticReplayRewritten)
+	rewrittenAfter, _ := importDiagnosticByCode(after, codexDiagnosticReplayRewritten)
+	changedBefore, _ := importDiagnosticByCode(before, codexDiagnosticReplayFileChanged)
+	changedAfter, _ := importDiagnosticByCode(after, codexDiagnosticReplayFileChanged)
+	outcome := codexReplayFileOutcome{
+		exactEvents:     exactAfter.Events - exactBefore.Events,
+		exactTokens:     exactAfter.Tokens - exactBefore.Tokens,
+		rewrittenEvents: rewrittenAfter.Events - rewrittenBefore.Events,
+		rewrittenTokens: rewrittenAfter.Tokens - rewrittenBefore.Tokens,
+		fileChanged:     diagnosticCount(changedAfter) - diagnosticCount(changedBefore),
+	}
+	if isCodexReplayQuarantineError(parseErr) {
+		outcome.quarantined = true
+		outcome.quarantine = parseErr.Error()
+	}
+	return outcome
+}
+
+func validateCodexReplayPolicyOutcomes(left, right []codexReplayFileOutcome) error {
+	if len(left) != len(right) {
+		return fmt.Errorf("Codex policy comparison inconclusive: replay outcome cardinality differs")
+	}
+	for index := range left {
+		if left[index].fileChanged != 0 || right[index].fileChanged != 0 {
+			return fmt.Errorf("Codex policy comparison inconclusive: replay file_changed outcome detected")
+		}
+		if left[index].quarantined != right[index].quarantined || left[index].quarantine != right[index].quarantine {
+			return fmt.Errorf("Codex policy comparison inconclusive: replay quarantine outcome differs at file %d", index+1)
+		}
+		if left[index].exactEvents != right[index].exactEvents ||
+			left[index].rewrittenEvents != right[index].rewrittenEvents {
+			return fmt.Errorf("Codex policy comparison inconclusive: replay skip outcome differs at file %d", index+1)
+		}
+	}
+	return nil
+}
+
+func validateCodexReplayDiagnostics(left, right []ImportDiagnostic) error {
+	leftByCode := make(map[string]ImportDiagnostic, len(left))
+	rightByCode := make(map[string]ImportDiagnostic, len(right))
+	for _, diagnostic := range left {
+		leftByCode[diagnostic.Code] = diagnostic
+	}
+	for _, diagnostic := range right {
+		rightByCode[diagnostic.Code] = diagnostic
+	}
+	if len(leftByCode) != len(rightByCode) {
+		return fmt.Errorf("Codex policy comparison inconclusive: replay diagnostic set differs")
+	}
+	for code, leftItem := range leftByCode {
+		rightItem, ok := rightByCode[code]
+		if !ok || leftItem.Unit != rightItem.Unit || leftItem.Count != rightItem.Count || leftItem.Events != rightItem.Events {
+			return fmt.Errorf("Codex policy comparison inconclusive: replay diagnostic outcome differs")
+		}
+	}
+	for _, diagnostics := range [][]ImportDiagnostic{left, right} {
+		changed, _ := importDiagnosticByCode(diagnostics, codexDiagnosticReplayFileChanged)
+		failed, _ := importDiagnosticByCode(diagnostics, codexDiagnosticReplayPlanFailed)
+		if diagnosticCount(changed) != 0 || diagnosticCount(failed) != 0 {
+			return fmt.Errorf("Codex policy comparison inconclusive: replay snapshot drift or plan failure detected")
+		}
+	}
+	return nil
+}
+
+func codexReplaySkipDiagnosticsEqual(left, right []ImportDiagnostic) bool {
+	return validateCodexReplayDiagnostics(left, right) == nil
+}
+
+func diagnosticCount(diagnostic ImportDiagnostic) int64 {
+	if diagnostic.Count != 0 {
+		return diagnostic.Count
+	}
+	return diagnostic.Events
+}
+
+func importDiagnosticByCode(diagnostics []ImportDiagnostic, code string) (ImportDiagnostic, bool) {
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Code == code {
+			return diagnostic, true
+		}
+	}
+	return ImportDiagnostic{}, false
 }
 
 func scanCodexDiagnosticFile(path string, diag *CodexDiagnostics) error {

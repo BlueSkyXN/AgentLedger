@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "id": "agentledger-pricing-2026-07-25",
+  "id": "agentledger-pricing-2026-07-29",
   "currency": "USD",
   "unit": "usd_per_1m_tokens",
-  "checked_at": "2026-07-25",
+  "checked_at": "2026-07-29",
   "defaults": {
     "unknown_model_policy": "zero",
     "reasoning_policy": "included_in_output",
@@ -30,6 +30,12 @@
       "checked_at": "2026-07-23"
     },
     {
+      "provider": "tencent",
+      "name": "OpenRouter Tencent Cloud Hy3 provider pricing",
+      "url": "https://openrouter.ai/tencent/hy3",
+      "checked_at": "2026-07-29"
+    },
+    {
       "provider": "xai",
       "name": "xAI Grok 4.5 pricing",
       "url": "https://docs.x.ai/developers/models/grok-4.5",
@@ -38,8 +44,8 @@
     {
       "provider": "anthropic",
       "name": "Anthropic Claude pricing",
-      "url": "https://www.anthropic.com/pricing",
-      "checked_at": "2026-07-25"
+      "url": "https://claude.com/pricing#api",
+      "checked_at": "2026-07-29"
     },
     {
       "provider": "model_id",
@@ -399,6 +405,29 @@
       "model_id": "gpt-4.1"
     },
     {
+      "id": "claude-opus-5",
+      "model_patterns": [
+        "claude-opus-5",
+        "anthropic/claude-opus-5"
+      ],
+      "priority": 100,
+      "basis": "official_model_list_price",
+      "rates": {
+        "input": 5.0,
+        "cache_write_5m": 6.25,
+        "cache_read": 0.5,
+        "output": 25.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "5m_if_unknown",
+      "confidence": "estimated",
+      "notes": "Standard API pricing. Prompt cache creation uses the official 5-minute write rate because usage events do not carry cache TTL; Fast mode is intentionally excluded.",
+      "model_id": "claude-opus-5",
+      "source_url": "https://claude.com/pricing#api",
+      "pricing_notes_url": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "as_of": "2026-07-29"
+    },
+    {
       "id": "claude-sonnet-5-intro",
       "model_patterns": [
         "claude-sonnet-5"
@@ -603,10 +632,33 @@
       "as_of": "2026-07-22"
     },
     {
+      "id": "hy3",
+      "model_patterns": [
+        "hy3",
+        "tencent/hy3"
+      ],
+      "priority": 30,
+      "basis": "provider_list_price",
+      "rates": {
+        "input": 0.132,
+        "cached_input": 0.033,
+        "output": 0.528
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Uses the Tencent Cloud provider row on OpenRouter, not the dynamic discounted headline price.",
+      "model_id": "hy3",
+      "source_url": "https://openrouter.ai/tencent/hy3",
+      "as_of": "2026-07-29"
+    },
+    {
       "id": "kimi-k3",
       "model_patterns": [
         "kimi-k3",
-        "k3"
+        "k3",
+        "k3-256",
+        "k3-256k"
       ],
       "priority": 30,
       "basis": "official_model_list_price",
@@ -618,6 +670,7 @@
       "reasoning_policy": "included_in_output",
       "cache_write_assumption": "treat_as_input",
       "confidence": "estimated",
+      "notes": "k3, k3-256, and k3-256k are user-confirmed compatibility aliases for the same Kimi K3 list price.",
       "model_id": "kimi-k3",
       "source_url": "https://platform.kimi.ai/docs/pricing/chat-k3",
       "pricing_notes_url": "https://platform.kimi.ai/docs/guide/kimi-k3-quickstart",

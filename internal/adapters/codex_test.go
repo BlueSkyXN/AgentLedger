@@ -133,7 +133,7 @@ func TestCodexSkipsDuplicateLastTokenUsageSnapshots(t *testing.T) {
 	}
 }
 
-func TestCodexCCUsageCompatiblePolicyKeepsTimestampDistinctSnapshots(t *testing.T) {
+func TestCodexCCUsageCompatiblePolicySkipsUnchangedCumulativeSnapshots(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "codex.jsonl")
 	data := strings.Join([]string{
 		`{"type":"event_msg","timestamp":"2026-01-01T00:01:00Z","session_id":"A","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":80,"cached_input_tokens":10,"output_tokens":20,"reasoning_output_tokens":0,"total_tokens":100},"last_token_usage":{"input_tokens":80,"cached_input_tokens":10,"output_tokens":20,"reasoning_output_tokens":0,"total_tokens":100}}}}`,
@@ -147,13 +147,60 @@ func TestCodexCCUsageCompatiblePolicyKeepsTimestampDistinctSnapshots(t *testing.
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if len(records) != 2 {
-		t.Fatalf("expected timestamp-distinct duplicate snapshots to be kept, got %d records", len(records))
+	if len(records) != 1 {
+		t.Fatalf("expected unchanged cumulative snapshot to be skipped, got %d records", len(records))
 	}
 	for _, rec := range records {
 		if rec.AccountingProfile != CodexDuplicatePolicyCCUsageCompatible {
 			t.Fatalf("unexpected accounting profile=%s", rec.AccountingProfile)
 		}
+	}
+}
+
+func TestCodexCCUsageCompatibleFallsBackToCumulativeDelta(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "codex.jsonl")
+	data := strings.Join([]string{
+		`{"type":"event_msg","timestamp":"2026-01-01T00:01:00Z","session_id":"A","model":"gpt-5","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":80,"output_tokens":20,"total_tokens":100},"last_token_usage":{"input_tokens":80,"output_tokens":20,"total_tokens":100}}}}`,
+		`{"type":"event_msg","timestamp":"2026-01-01T00:02:00Z","session_id":"A","model":"gpt-5","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":120,"output_tokens":30,"total_tokens":150}}}}`,
+	}, "\n")
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	records, err := NewCodexAdapterWithOptions(CodexOptions{DuplicatePolicy: CodexDuplicatePolicyCCUsageCompatible}).ParseFile(path)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(records) != 2 || records[0].TotalTokens != 100 || records[1].TotalTokens != 50 {
+		t.Fatalf("compatible total-only fallback must use cumulative delta: %+v", records)
+	}
+	if records[1].TokenAccountingMethod != model.AccCodexTotalDelta {
+		t.Fatalf("fallback accounting method=%q, want %q", records[1].TokenAccountingMethod, model.AccCodexTotalDelta)
+	}
+}
+
+func TestCodexCCUsageCompatibleCumulativeDeltaSaturatesEachComponent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "codex.jsonl")
+	data := strings.Join([]string{
+		`{"type":"event_msg","timestamp":"2026-01-01T00:01:00Z","session_id":"A","model":"gpt-5","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"output_tokens":20,"total_tokens":120},"last_token_usage":{"input_tokens":100,"output_tokens":20,"total_tokens":120}}}}`,
+		`{"type":"event_msg","timestamp":"2026-01-01T00:02:00Z","session_id":"A","model":"gpt-5","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":90,"output_tokens":40,"total_tokens":130}}}}`,
+	}, "\n")
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	records, err := NewCodexAdapterWithOptions(CodexOptions{DuplicatePolicy: CodexDuplicatePolicyCCUsageCompatible}).ParseFile(path)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("expected two compatible records, got %+v", records)
+	}
+	if records[1].InputTokens != 0 || records[1].OutputTokens != 20 || records[1].TotalTokens != 10 {
+		t.Fatalf("component-wise saturated delta mismatch: %+v", records[1])
+	}
+	if records[1].TokenAccountingMethod != model.AccCodexTotalDelta {
+		t.Fatalf("fallback accounting method=%q, want %q", records[1].TokenAccountingMethod, model.AccCodexTotalDelta)
 	}
 }
 
@@ -445,11 +492,17 @@ func TestCodexAdapterUsesFullSourceOnlyForFingerprint(t *testing.T) {
 	}
 }
 
-func TestCodexParsesJSONLLineLargerThanLegacyTenMiBLimit(t *testing.T) {
+func TestCodexParsesJSONLLineNearSixtyFourMiBLimit(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "codex-large-line.jsonl")
-	padding := strings.Repeat("x", 10*1024*1024)
-	data := fmt.Sprintf(`{"type":"event_msg","padding":%q,"timestamp":"2026-01-01T00:00:00Z","session_id":"A","model":"gpt-5.6-sol","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}}}`, padding)
-	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+	const targetBytes = 63 * 1024 * 1024
+	const prefix = `{"type":"event_msg","padding":"`
+	const suffix = `","timestamp":"2026-01-01T00:00:00Z","session_id":"A","model":"gpt-5.6-sol","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}}}`
+	var fixture strings.Builder
+	fixture.Grow(targetBytes)
+	fixture.WriteString(prefix)
+	fixture.WriteString(strings.Repeat("x", targetBytes-len(prefix)-len(suffix)))
+	fixture.WriteString(suffix)
+	if err := os.WriteFile(path, []byte(fixture.String()), 0o644); err != nil {
 		t.Fatalf("write fixture: %v", err)
 	}
 

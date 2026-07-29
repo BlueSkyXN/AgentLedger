@@ -603,7 +603,7 @@ type pricingBucket struct {
 
 func attachSummaryEstimate(row *Summary, estimate costResult) {
 	row.Pricing = estimate.Summary
-	if estimate.Summary == nil || estimate.Summary.PricedEvents == 0 {
+	if estimate.Summary == nil || (estimate.Summary.PricedEvents == 0 && estimate.Summary.PolicyZeroEvents == 0) {
 		return
 	}
 	row.EstimatedCostMicroUSD = &estimate.MicroUSD
@@ -613,7 +613,7 @@ func attachSummaryEstimate(row *Summary, estimate costResult) {
 
 func attachMetricEstimate(row *MetricRow, estimate costResult) {
 	row.Pricing = estimate.Summary
-	if estimate.Summary == nil || estimate.Summary.PricedEvents == 0 {
+	if estimate.Summary == nil || (estimate.Summary.PricedEvents == 0 && estimate.Summary.PolicyZeroEvents == 0) {
 		return
 	}
 	row.EstimatedCostMicroUSD = &estimate.MicroUSD
@@ -623,7 +623,7 @@ func attachMetricEstimate(row *MetricRow, estimate costResult) {
 
 func attachTimeEstimate(row *TimeBreakdownRow, estimate costResult) {
 	row.Pricing = estimate.Summary
-	if estimate.Summary == nil || estimate.Summary.PricedEvents == 0 {
+	if estimate.Summary == nil || (estimate.Summary.PricedEvents == 0 && estimate.Summary.PolicyZeroEvents == 0) {
 		return
 	}
 	row.EstimatedCostMicroUSD = &estimate.MicroUSD

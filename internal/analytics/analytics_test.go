@@ -237,6 +237,29 @@ func TestAttachEstimatesPreserveExplicitZeroPrice(t *testing.T) {
 	}
 }
 
+func TestAttachEstimatesExposePolicyZeroAmount(t *testing.T) {
+	policyZero := &pricing.CoverageSummary{TotalEvents: 1, PolicyZeroEvents: 1, Confidence: "missing"}
+	estimate := costResult{Summary: policyZero}
+
+	summary := Summary{}
+	attachSummaryEstimate(&summary, estimate)
+	if summary.EstimatedCostUSD == nil || *summary.EstimatedCostUSD != 0 || summary.EstimatedCostMicroUSD == nil || *summary.EstimatedCostMicroUSD != 0 {
+		t.Fatalf("summary should expose the explicit policy-zero amount: %+v", summary)
+	}
+
+	metric := MetricRow{}
+	attachMetricEstimate(&metric, estimate)
+	if metric.EstimatedCostUSD == nil || *metric.EstimatedCostUSD != 0 || metric.EstimatedCostMicroUSD == nil || *metric.EstimatedCostMicroUSD != 0 {
+		t.Fatalf("metric should expose the explicit policy-zero amount: %+v", metric)
+	}
+
+	timeRow := TimeBreakdownRow{}
+	attachTimeEstimate(&timeRow, estimate)
+	if timeRow.EstimatedCostUSD == nil || *timeRow.EstimatedCostUSD != 0 || timeRow.EstimatedCostMicroUSD == nil || *timeRow.EstimatedCostMicroUSD != 0 {
+		t.Fatalf("time row should expose the explicit policy-zero amount: %+v", timeRow)
+	}
+}
+
 func TestAnalyticsSeparatesPolicyZeroMissingPricingAndOfficialFree(t *testing.T) {
 	database, err := db.Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
 	if err != nil {
@@ -272,7 +295,7 @@ func TestAnalyticsSeparatesPolicyZeroMissingPricingAndOfficialFree(t *testing.T)
 	if err != nil {
 		t.Fatalf("unknown-only summary: %v", err)
 	}
-	if unknownOnly.EstimatedCostUSD != nil || unknownOnly.Pricing == nil || unknownOnly.Pricing.PolicyZeroEvents != 1 || unknownOnly.Pricing.PricedEvents != 0 {
-		t.Fatalf("unknown-only cost should remain unavailable with policy-zero diagnostics: %+v", unknownOnly)
+	if unknownOnly.EstimatedCostUSD == nil || *unknownOnly.EstimatedCostUSD != 0 || unknownOnly.EstimatedCostMicroUSD == nil || *unknownOnly.EstimatedCostMicroUSD != 0 || unknownOnly.Pricing == nil || unknownOnly.Pricing.PolicyZeroEvents != 1 || unknownOnly.Pricing.PricedEvents != 0 {
+		t.Fatalf("unknown-only cost should expose the explicit policy-zero amount with diagnostics: %+v", unknownOnly)
 	}
 }
