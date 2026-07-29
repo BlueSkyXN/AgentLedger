@@ -378,6 +378,18 @@ func TestDefaultProfilePricesCurrentModelIDs(t *testing.T) {
 			wantMicroUSD: 790_000,
 		},
 		{
+			name: "claude opus 5 official pricing",
+			event: Event{
+				Model:               "claude-opus-5",
+				InputTokens:         100_000,
+				OutputTokens:        100_000,
+				CacheCreationTokens: 100_000,
+				CacheReadTokens:     100_000,
+			},
+			wantRuleID:   "claude-opus-5",
+			wantMicroUSD: 3_675_000,
+		},
+		{
 			name: "claude sonnet 5 intro pricing",
 			event: Event{
 				TimestampMs:         time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC).UnixMilli(),
@@ -460,6 +472,7 @@ func TestDefaultProfileUsesExactAliasesAndContextBoundaries(t *testing.T) {
 		{name: "kimi k3 256 alias", event: Event{Model: "k3-256", InputTokens: 1}, wantRuleID: "kimi-k3", wantPriced: true},
 		{name: "kimi k3 256k alias", event: Event{Model: "k3-256k", InputTokens: 1}, wantRuleID: "kimi-k3", wantPriced: true},
 		{name: "hy3 openrouter canonical alias", event: Event{Model: "tencent/hy3", InputTokens: 1}, wantRuleID: "hy3", wantPriced: true},
+		{name: "claude opus 5 openrouter canonical alias", event: Event{Model: "anthropic/claude-opus-5", InputTokens: 1}, wantRuleID: "claude-opus-5", wantPriced: true},
 		{name: "no fuzzy gpt match", event: Event{Model: "tenant/gpt-5.6-sol", InputTokens: 1}, wantPriced: false},
 		{name: "user confirmed grok build alias", event: Event{Model: "grok-4.5-build", InputTokens: 1}, wantRuleID: "grok-4.5", wantPriced: true},
 	}

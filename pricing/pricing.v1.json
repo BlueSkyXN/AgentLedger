@@ -44,8 +44,8 @@
     {
       "provider": "anthropic",
       "name": "Anthropic Claude pricing",
-      "url": "https://www.anthropic.com/pricing",
-      "checked_at": "2026-07-25"
+      "url": "https://claude.com/pricing#api",
+      "checked_at": "2026-07-29"
     },
     {
       "provider": "model_id",
@@ -403,6 +403,29 @@
       "cache_write_assumption": "treat_as_input",
       "confidence": "estimated",
       "model_id": "gpt-4.1"
+    },
+    {
+      "id": "claude-opus-5",
+      "model_patterns": [
+        "claude-opus-5",
+        "anthropic/claude-opus-5"
+      ],
+      "priority": 100,
+      "basis": "official_model_list_price",
+      "rates": {
+        "input": 5.0,
+        "cache_write_5m": 6.25,
+        "cache_read": 0.5,
+        "output": 25.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "5m_if_unknown",
+      "confidence": "estimated",
+      "notes": "Standard API pricing. Prompt cache creation uses the official 5-minute write rate because usage events do not carry cache TTL; Fast mode is intentionally excluded.",
+      "model_id": "claude-opus-5",
+      "source_url": "https://claude.com/pricing#api",
+      "pricing_notes_url": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "as_of": "2026-07-29"
     },
     {
       "id": "claude-sonnet-5-intro",
