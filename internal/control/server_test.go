@@ -2,10 +2,12 @@ package control
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -52,6 +54,88 @@ func TestAPIHealthAndSummary(t *testing.T) {
 	}
 	if payload["known_request_count"].(float64) != 3 || payload["request_count_known_events"].(float64) != 1 || payload["request_count_unknown_events"].(float64) != 0 {
 		t.Fatalf("unexpected request coverage: %v", payload)
+	}
+}
+
+func TestReadOnlyServerHandlesConcurrentAnalytics(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agent-ledger.db")
+	writer, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("open writer: %v", err)
+	}
+	base := time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC).UnixMilli()
+	_, err = writer.Conn().Exec(`INSERT INTO usage_events (
+		event_id, dedupe_key, dedupe_strategy, channel, provider, model_raw, model_normalized, model_resolution, timestamp_ms,
+		session_id, project_path, message_id, input_tokens, output_tokens, total_tokens, imported_at_ms, updated_at_ms
+	) VALUES ('fp1', 'fp1', 'message_id', 'codex', 'openai', 'gpt-5', 'gpt-5', 'direct_event', ?,
+		's1', '/Users/test/Github/project-a', 'm1', 100, 50, 150, 1, 1)`, base)
+	if err != nil {
+		_ = writer.Close()
+		t.Fatalf("insert event: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+
+	reader, err := db.OpenReadOnlyV2(path)
+	if err != nil {
+		t.Fatalf("open read-only: %v", err)
+	}
+	t.Cleanup(func() { _ = reader.Close() })
+	cfg := config.Default()
+	cfg.Database.Path = path
+	server := httptest.NewServer(NewServer(cfg, reader, Options{StaticDir: filepath.Join(t.TempDir(), "missing")}).Handler())
+	t.Cleanup(server.Close)
+
+	routes := []string{
+		"/api/v1/status",
+		"/api/v1/analytics/summary",
+		"/api/v1/analytics/timeseries?bucket=daily",
+		"/api/v1/analytics/breakdown?by=project",
+	}
+	type response struct {
+		route  string
+		status int
+		body   string
+		err    error
+	}
+	responses := make(chan response, len(routes))
+	client := &http.Client{Timeout: 5 * time.Second}
+	var group sync.WaitGroup
+	for _, route := range routes {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			result := response{route: route}
+			resp, err := client.Get(server.URL + route)
+			if err != nil {
+				result.err = err
+				responses <- result
+				return
+			}
+			defer resp.Body.Close()
+			result.status = resp.StatusCode
+			body, err := io.ReadAll(resp.Body)
+			result.body = string(body)
+			result.err = err
+			responses <- result
+		}()
+	}
+	group.Wait()
+	close(responses)
+
+	for result := range responses {
+		if result.err != nil {
+			t.Errorf("%s request: %v", result.route, result.err)
+			continue
+		}
+		if result.status != http.StatusOK {
+			t.Errorf("%s status = %d body = %s", result.route, result.status, result.body)
+			continue
+		}
+		if strings.Contains(result.body, "no such function") {
+			t.Errorf("%s missing project label function: %s", result.route, result.body)
+		}
 	}
 }
 

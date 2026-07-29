@@ -12,7 +12,10 @@ import (
 	sqlite3 "github.com/mattn/go-sqlite3"
 )
 
-const sqliteDriverName = "agentledger_sqlite3"
+const (
+	sqliteDriverName     = "agentledger_sqlite3"
+	readOnlyMaxOpenConns = 4
+)
 
 type Database struct {
 	conn *sql.DB
@@ -79,7 +82,12 @@ func OpenReadOnly(path string) (*Database, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
-	conn.SetMaxOpenConns(1)
+	// The panel issues several independent read-only aggregations in parallel.
+	// A small pool avoids head-of-line blocking while keeping local SQLite
+	// resource use bounded. DSN pragmas and ConnectHook functions apply to each
+	// connection opened by database/sql.
+	conn.SetMaxOpenConns(readOnlyMaxOpenConns)
+	conn.SetMaxIdleConns(readOnlyMaxOpenConns)
 
 	db := &Database{conn: conn, path: path}
 	if err := conn.Ping(); err != nil {

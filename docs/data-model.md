@@ -62,7 +62,7 @@ _busy_timeout=5000
 _foreign_keys=ON
 ```
 
-`db.OpenReadOnly(path)` 和 `db.OpenReadOnlyV2(path)` 不设置 journal mode 或 synchronous mode，不使用 `immutable=1`，因此在另一个 AgentLedger 进程写入 WAL 时仍能读取后续已提交数据。只读命令在配置文件不存在时使用内存中的默认配置，不会为了读取操作创建 config 或数据库目录。
+`db.OpenReadOnly(path)` 和 `db.OpenReadOnlyV2(path)` 不设置 journal mode 或 synchronous mode，不使用 `immutable=1`，因此在另一个 AgentLedger 进程写入 WAL 时仍能读取后续已提交数据。只读连接池最多打开 4 个连接，让 Web 面板的 summary、timeseries 和 breakdown 等独立聚合能够并行执行；每个连接仍由 DSN 强制 `query_only`，并注册相同的只读 SQL helper。写入和维护入口继续限制为单连接。只读命令在配置文件不存在时使用内存中的默认配置，不会为了读取操作创建 config 或数据库目录。
 
 `db.OpenReadWriteV2(path)` 只打开已经存在且完整的 v2 数据库，SQLite 使用 `mode=rw`。它不创建目录或数据库，不运行 `initSchema()`/compatibility maintenance，不改变 journal mode；仅设置 connection-local busy timeout 和 foreign keys。`compact-raw --apply` 与 `vacuum` 使用该入口。
 

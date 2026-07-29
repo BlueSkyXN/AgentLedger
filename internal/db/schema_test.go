@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -140,6 +142,66 @@ func TestOpenReadOnlySeesWALWritesAndRejectsWrites(t *testing.T) {
 	}
 	if project != "project-a" {
 		t.Fatalf("project label = %q", project)
+	}
+}
+
+func TestOpenReadOnlySupportsConcurrentQueries(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agent-ledger.db")
+	writer, err := Open(path)
+	if err != nil {
+		t.Fatalf("open writer: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+
+	reader, err := OpenReadOnly(path)
+	if err != nil {
+		t.Fatalf("open read-only: %v", err)
+	}
+	defer reader.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	connections := make([]*sql.Conn, 0, readOnlyMaxOpenConns)
+	for index := 0; index < readOnlyMaxOpenConns; index++ {
+		conn, err := reader.Conn().Conn(ctx)
+		if err != nil {
+			t.Fatalf("open concurrent connection %d: %v", index+1, err)
+		}
+		connections = append(connections, conn)
+		defer conn.Close()
+
+		var queryOnly int
+		if err := conn.QueryRowContext(ctx, `PRAGMA query_only`).Scan(&queryOnly); err != nil {
+			t.Fatalf("connection %d query_only: %v", index+1, err)
+		}
+		if queryOnly != 1 {
+			t.Fatalf("connection %d query_only = %d, want 1", index+1, queryOnly)
+		}
+
+		var label string
+		if err := conn.QueryRowContext(ctx, `SELECT agentledger_project_label(?)`, "/tmp/project").Scan(&label); err != nil {
+			t.Fatalf("connection %d project label: %v", index+1, err)
+		}
+		if label != "project" {
+			t.Fatalf("connection %d project label = %q, want project", index+1, label)
+		}
+		if _, err := conn.ExecContext(ctx, `UPDATE meta SET value='broken' WHERE key='schema_version'`); err == nil {
+			t.Fatalf("connection %d unexpectedly allowed write", index+1)
+		}
+	}
+	if got := reader.Conn().Stats().MaxOpenConnections; got != readOnlyMaxOpenConns {
+		t.Fatalf("read-only max open connections = %d, want %d", got, readOnlyMaxOpenConns)
+	}
+
+	fifthCtx, fifthCancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer fifthCancel()
+	if extra, err := reader.Conn().Conn(fifthCtx); err == nil {
+		extra.Close()
+		t.Fatal("read-only pool exceeded its connection limit")
+	} else if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("fifth connection error = %v, want deadline exceeded", err)
 	}
 }
 
