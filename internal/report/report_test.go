@@ -50,8 +50,8 @@ func TestGenerateGroupedJSONIncludesCacheTokens(t *testing.T) {
 	if row.TotalTokens != 66 || row.InputTokens != 30 || row.OutputTokens != 13 || row.CacheCreationTokens != 7 || row.CacheReadTokens != 16 {
 		t.Fatalf("unexpected token breakdown: %+v", row)
 	}
-	if row.KnownRequestCount != 2 || row.RequestCountKnownEvents != 1 || row.RequestCountUnknownEvents != 1 {
-		t.Fatalf("unexpected request coverage: %+v", row)
+	if strings.Contains(output, "known_request_count") || strings.Contains(output, "request_count_known_events") || strings.Contains(output, "request_count_unknown_events") {
+		t.Fatalf("report JSON still exposes request-count aggregates: %s", output)
 	}
 }
 
@@ -60,32 +60,13 @@ func TestGenerateGroupedTableShowsCacheColumns(t *testing.T) {
 	output := captureReportOutput(t, func() error {
 		return Generate(database.Conn(), "models", Filters{Channel: "claude"}, false)
 	})
-	for _, want := range []string{"Requests", "Req Coverage", "2+", "1/2", "Cache Create", "Cache Read", "Reasoning", "Recorded Cost(USD)", "claude-sonnet"} {
+	for _, want := range []string{"Cache Create", "Cache Read", "Reasoning", "Recorded Cost(USD)", "claude-sonnet"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("report output missing %q:\n%s", want, output)
 		}
 	}
-}
-
-func TestFormatKnownRequestCountStates(t *testing.T) {
-	for _, test := range []struct {
-		name                              string
-		known, knownEvents, unknownEvents int64
-		want                              string
-	}{
-		{name: "unknown", known: 0, knownEvents: 0, unknownEvents: 2, want: "—"},
-		{name: "explicit zero", known: 0, knownEvents: 1, unknownEvents: 0, want: "0"},
-		{name: "complete", known: 3, knownEvents: 1, unknownEvents: 0, want: "3"},
-		{name: "partial", known: 3, knownEvents: 1, unknownEvents: 1, want: "3+"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			if got := formatKnownRequestCount(test.known, test.knownEvents, test.unknownEvents); got != test.want {
-				t.Fatalf("formatKnownRequestCount=%q want=%q", got, test.want)
-			}
-		})
-	}
-	if got := formatRequestEventCoverage(1, 2); got != "1/3" {
-		t.Fatalf("formatRequestEventCoverage=%q", got)
+	if strings.Contains(output, "Requests") || strings.Contains(output, "Req Coverage") {
+		t.Fatalf("report table still exposes request-count aggregates:\n%s", output)
 	}
 }
 
@@ -139,6 +120,9 @@ func TestGenerateTimeBreakdownJSON(t *testing.T) {
 	row := rows[0]
 	if row.Bucket != "1970-01-01" || row.Label != "claude-sonnet" || row.TotalTokens != 66 || row.CacheReadTokens != 16 {
 		t.Fatalf("unexpected time breakdown: %+v", row)
+	}
+	if strings.Contains(output, "known_request_count") || strings.Contains(output, "request_count_known_events") || strings.Contains(output, "request_count_unknown_events") {
+		t.Fatalf("time breakdown JSON still exposes request-count aggregates: %s", output)
 	}
 }
 

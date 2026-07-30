@@ -123,7 +123,7 @@ _foreign_keys=ON
 | `project_path` | `TEXT` | nullable | adapter 能解析到的项目路径；报表/API 会从它派生项目标签用于按项目筛选和聚合，不代表客户端产品。 |
 | `message_id` | `TEXT` | nullable | 日志中的 message id。 |
 | `request_id` | `TEXT` | nullable | 日志中的 request id。 |
-| `request_count` | `INTEGER` | nullable; `CHECK (request_count >= 0)` | 来源明确给出的模型 API 请求次数。`NULL` 表示来源未知或当前 adapter 未提供该口径；`0` 只表示来源显式记录为零，不能把 `NULL` 当作零。 |
+| `request_count` | `INTEGER` | nullable; `CHECK (request_count >= 0)` | 来源明确给出的模型 API 请求次数。`NULL` 表示来源未知或当前 adapter 未提供该口径；`0` 只表示来源显式记录为零，不能把 `NULL` 当作零。该字段只保留来源事实，不进入全局聚合、CLI report、status/analytics 汇总或 Web 面板。 |
 | `source_file` | `TEXT` | nullable | 来源文件路径。 |
 | `line_number` | `INTEGER` | nullable | JSONL 行号。 |
 | `raw_sha256` | `TEXT` | nullable | adapter 完整源解析对象的 canonical JSON hash；源对象本身不落库。 |
@@ -166,15 +166,14 @@ output_tps = output_tokens / (output_duration_ms / 1000.0)
 - `output_tps` 要求 `output_duration_ms > 0`。
 - 缺失 timing 时对应列保持 `NULL`。
 
-### 事件、请求与 session 的计数口径
+### 事件与 session 的计数口径
 
-这三个计数不能互相替代：
+这两个计数不能互相替代：
 
 - `event_count`：符合筛选条件的 `usage_events` 行数，用于表示已导入的 usage event 数量。
-- `request_count`：`request_count` 非 `NULL` 的 event 的值之和，用于表示来源明确提供的模型 API 请求次数；它不等同于 event 行数。
 - `session_count`：符合筛选条件的非空 `session_id` 去重数，用于表示可识别 session 数量。
 
-请求计数同时披露 event coverage：`request_count_known_events` 是 `request_count IS NOT NULL` 的 event 数，`request_count_unknown_events` 是 `request_count IS NULL` 的 event 数。这样可以区分“已知请求数为零”和“来源没有提供请求数”，不会以 event 行数或 session 数补齐未知请求数。
+`request_count` 仍可作为单条事件的 nullable 来源 metadata 保存，但当前只在少数 source schema 中存在，且事件粒度和覆盖范围不具备跨 agent 可比性。因此 AgentLedger 不对它求和、不计算 known/unknown coverage，也不在 CLI report、status/analytics 汇总或 Web 面板中展示。
 
 ## Upsert 完整度规则
 

@@ -68,7 +68,7 @@ GitHub Copilot 优先读取本地 OTel JSONL telemetry：`~/.copilot/otel` 或 `
 
 没有 OTel 文件时，Copilot adapter 会读取 `~/.copilot/session-state/*/events.jsonl` 里的每条非空 `session.shutdown` 事件。该事件的 `data.modelMetrics.<model>.usage` 提供 `inputTokens`、`outputTokens`、`cacheReadTokens`、`cacheWriteTokens`、`reasoningTokens`，一条 `usage_events` 记录表示一个 shutdown/run-resume segment 下的一个 model，而不是整段 session 的最后累计值。字段口径为：`source_product = copilot-session-state`、`observability_level = session_summary`、`token_accounting_method = copilot_session_model_metrics`、`accounting_profile = input_includes_cache_read`。未 shutdown 的活跃 session 不会产生这类汇总记录。
 
-同一 `modelMetrics.<model>` 下的 `requests.count` 是该模型的 API 请求次数，写入 `usage_events.request_count`。该 Copilot CLI session-state 字段目前属于 experimental schema：缺失、非十进制整数、负数、小数、指数、字符串、布尔值或 int64 overflow 时保持 `request_count = NULL`，不从 token、event 或 session 数推断；源日志明确提供 `0` 时才写入 `0`。token 分项全为零但 `requests.count` 为合法非负整数（含显式 `0`）时，仍生成零-token event，作为 source-backed request fact，不算 synthetic usage。
+同一 `modelMetrics.<model>` 下的 `requests.count` 是该模型的 API 请求次数，写入 `usage_events.request_count`。该 Copilot CLI session-state 字段目前属于 experimental schema：缺失、非十进制整数、负数、小数、指数、字符串、布尔值或 int64 overflow 时保持 `request_count = NULL`，不从 token、event 或 session 数推断；源日志明确提供 `0` 时才写入 `0`。token 分项全为零但 `requests.count` 为合法非负整数（含显式 `0`）时，仍生成零-token event，作为 source-backed request fact，不算 synthetic usage。`request_count` 只作为单条事件的来源 metadata 持久化，不进入跨 agent 全局聚合、CLI report、status/analytics 汇总或 Web 面板。
 
 本期只为 `session.shutdown.modelMetrics.<model>.requests.count` 增加 request count。OTel 的 `request_count` 映射，以及 OTel 与 session-state 同时存在时的 request-count 协调，均不在本期范围内；现有“发现 OTel usage 文件即优先 OTel、避免 token 双计数”的来源选择规则不因此改变。
 

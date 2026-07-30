@@ -10,7 +10,7 @@ All notable changes to this project will be documented in this file.
 - GitHub Copilot and WorkBuddy usage adapters.
 - JSON pricing profiles and read-only estimated-cost reporting.
 - `compact-raw` maintenance command for removing historical raw usage evidence.
-- Explicit model-resolution, observability, accounting, and request-count coverage fields across CLI reports, API responses, and the Web dashboard.
+- Explicit model-resolution, observability, and accounting fields across CLI reports, API responses, and the Web dashboard.
 - Local preview and database-rebuild runbooks covering full page/API validation, replay warning interpretation, consistent backups, atomic replacement, and rollback gates.
 
 ### Changed
@@ -20,6 +20,7 @@ All notable changes to this project will be documented in this file.
 - Made `status`, `report`, `serve`, and `verify` use strict read-only SQLite paths without implicit configuration or schema writes.
 - Changed Codex accounting to reconcile cumulative usage by session, preserve explicit model evidence, and classify missing model evidence as `unknown` instead of guessing a model.
 - Increased the Codex import and diagnostics JSONL scanner limit to 64 MiB for large single-line records.
+- Stopped aggregating or displaying global request-count totals and coverage in CLI reports, status/analytics API responses, and the Web dashboard; the nullable per-event source field remains available without a schema migration.
 
 ### Fixed
 

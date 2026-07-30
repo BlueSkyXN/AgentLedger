@@ -52,8 +52,10 @@ func TestAPIHealthAndSummary(t *testing.T) {
 	if payload["total_events"].(float64) != 1 {
 		t.Fatalf("unexpected payload: %v", payload)
 	}
-	if payload["known_request_count"].(float64) != 3 || payload["request_count_known_events"].(float64) != 1 || payload["request_count_unknown_events"].(float64) != 0 {
-		t.Fatalf("unexpected request coverage: %v", payload)
+	for _, field := range []string{"known_request_count", "request_count_known_events", "request_count_unknown_events"} {
+		if _, ok := payload[field]; ok {
+			t.Fatalf("summary still exposes %s: %v", field, payload)
+		}
 	}
 }
 
@@ -136,6 +138,11 @@ func TestReadOnlyServerHandlesConcurrentAnalytics(t *testing.T) {
 		if strings.Contains(result.body, "no such function") {
 			t.Errorf("%s missing project label function: %s", result.route, result.body)
 		}
+		for _, field := range []string{"known_request_count", "request_count_known_events", "request_count_unknown_events"} {
+			if strings.Contains(result.body, field) {
+				t.Errorf("%s still exposes request-count aggregate %s: %s", result.route, field, result.body)
+			}
+		}
 	}
 }
 
@@ -197,8 +204,13 @@ func TestEventsConfigAndFilters(t *testing.T) {
 	recorder = httptest.NewRecorder()
 	request = httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)
 	server.Handler().ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"known_request_count":3`) || !strings.Contains(recorder.Body.String(), `"request_count_known_events":1`) {
-		t.Fatalf("status missing request coverage: status=%d body=%s", recorder.Code, recorder.Body.String())
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status failed: status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	for _, field := range []string{"known_request_count", "request_count_known_events", "request_count_unknown_events"} {
+		if strings.Contains(recorder.Body.String(), field) {
+			t.Fatalf("status still exposes %s: %s", field, recorder.Body.String())
+		}
 	}
 
 	recorder = httptest.NewRecorder()
