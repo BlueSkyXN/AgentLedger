@@ -82,7 +82,7 @@ lsof -nP -iTCP:54217 -sTCP:LISTEN
 |---|---|---|
 | 总览 | `/` | KPI、价格覆盖、趋势摘要和主要排行。 |
 | 趋势 | `/trends` | daily / weekly / monthly 时间序列和维度拆分。 |
-| 模型 | `/models` | 模型 token、成本、request coverage 和 timing。 |
+| 模型 | `/models` | 模型 token、成本、价格覆盖和 timing。 |
 | 渠道 | `/agents` | channel / provider 分布。 |
 | 会话 | `/sessions` | project / session 聚合。 |
 | 慢请求 | `/slow` | output TPS、TTFT 和总耗时排序。 |

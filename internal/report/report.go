@@ -29,24 +29,21 @@ type Filters struct {
 }
 
 type ReportRow struct {
-	Label                     string                   `json:"label"`
-	Events                    int64                    `json:"events"`
-	KnownRequestCount         int64                    `json:"known_request_count"`
-	RequestCountKnownEvents   int64                    `json:"request_count_known_events"`
-	RequestCountUnknownEvents int64                    `json:"request_count_unknown_events"`
-	TotalTokens               int64                    `json:"total_tokens"`
-	InputTokens               int64                    `json:"input_tokens"`
-	OutputTokens              int64                    `json:"output_tokens"`
-	CacheCreationTokens       int64                    `json:"cache_creation_tokens"`
-	CacheReadTokens           int64                    `json:"cache_read_tokens"`
-	ReasoningTokens           int64                    `json:"reasoning_tokens"`
-	AvgTotalDurationMs        *float64                 `json:"avg_total_duration_ms"`
-	AvgTTFTMs                 *float64                 `json:"avg_ttft_ms"`
-	AvgOutputTPS              *float64                 `json:"avg_output_tps"`
-	RecordedCostUSD           float64                  `json:"recorded_cost_usd"`
-	EstimatedCostUSD          *float64                 `json:"estimated_cost_usd,omitempty"`
-	EstimatedCostMicroUSD     *int64                   `json:"estimated_cost_micro_usd,omitempty"`
-	Pricing                   *pricing.CoverageSummary `json:"pricing,omitempty"`
+	Label                 string                   `json:"label"`
+	Events                int64                    `json:"events"`
+	TotalTokens           int64                    `json:"total_tokens"`
+	InputTokens           int64                    `json:"input_tokens"`
+	OutputTokens          int64                    `json:"output_tokens"`
+	CacheCreationTokens   int64                    `json:"cache_creation_tokens"`
+	CacheReadTokens       int64                    `json:"cache_read_tokens"`
+	ReasoningTokens       int64                    `json:"reasoning_tokens"`
+	AvgTotalDurationMs    *float64                 `json:"avg_total_duration_ms"`
+	AvgTTFTMs             *float64                 `json:"avg_ttft_ms"`
+	AvgOutputTPS          *float64                 `json:"avg_output_tps"`
+	RecordedCostUSD       float64                  `json:"recorded_cost_usd"`
+	EstimatedCostUSD      *float64                 `json:"estimated_cost_usd,omitempty"`
+	EstimatedCostMicroUSD *int64                   `json:"estimated_cost_micro_usd,omitempty"`
+	Pricing               *pricing.CoverageSummary `json:"pricing,omitempty"`
 }
 
 type SlowRow struct {
@@ -64,25 +61,22 @@ type SlowRow struct {
 }
 
 type TimeBreakdownRow struct {
-	Bucket                    string                   `json:"bucket"`
-	Label                     string                   `json:"label"`
-	Events                    int64                    `json:"events"`
-	KnownRequestCount         int64                    `json:"known_request_count"`
-	RequestCountKnownEvents   int64                    `json:"request_count_known_events"`
-	RequestCountUnknownEvents int64                    `json:"request_count_unknown_events"`
-	TotalTokens               int64                    `json:"total_tokens"`
-	InputTokens               int64                    `json:"input_tokens"`
-	OutputTokens              int64                    `json:"output_tokens"`
-	CacheCreationTokens       int64                    `json:"cache_creation_tokens"`
-	CacheReadTokens           int64                    `json:"cache_read_tokens"`
-	ReasoningTokens           int64                    `json:"reasoning_tokens"`
-	AvgTotalDurationMs        *float64                 `json:"avg_total_duration_ms"`
-	AvgTTFTMs                 *float64                 `json:"avg_ttft_ms"`
-	AvgOutputTPS              *float64                 `json:"avg_output_tps"`
-	RecordedCostUSD           float64                  `json:"recorded_cost_usd"`
-	EstimatedCostUSD          *float64                 `json:"estimated_cost_usd,omitempty"`
-	EstimatedCostMicroUSD     *int64                   `json:"estimated_cost_micro_usd,omitempty"`
-	Pricing                   *pricing.CoverageSummary `json:"pricing,omitempty"`
+	Bucket                string                   `json:"bucket"`
+	Label                 string                   `json:"label"`
+	Events                int64                    `json:"events"`
+	TotalTokens           int64                    `json:"total_tokens"`
+	InputTokens           int64                    `json:"input_tokens"`
+	OutputTokens          int64                    `json:"output_tokens"`
+	CacheCreationTokens   int64                    `json:"cache_creation_tokens"`
+	CacheReadTokens       int64                    `json:"cache_read_tokens"`
+	ReasoningTokens       int64                    `json:"reasoning_tokens"`
+	AvgTotalDurationMs    *float64                 `json:"avg_total_duration_ms"`
+	AvgTTFTMs             *float64                 `json:"avg_ttft_ms"`
+	AvgOutputTPS          *float64                 `json:"avg_output_tps"`
+	RecordedCostUSD       float64                  `json:"recorded_cost_usd"`
+	EstimatedCostUSD      *float64                 `json:"estimated_cost_usd,omitempty"`
+	EstimatedCostMicroUSD *int64                   `json:"estimated_cost_micro_usd,omitempty"`
+	Pricing               *pricing.CoverageSummary `json:"pricing,omitempty"`
 }
 
 func Generate(conn *sql.DB, reportType string, filters Filters, asJSON bool) error {
@@ -168,11 +162,8 @@ func generateTimeBreakdown(conn *sql.DB, bucketExpr string, filters Filters, asJ
 	query := fmt.Sprintf(`SELECT
         %s AS bucket,
         %s AS label,
-	        COUNT(*) AS events,
-	        COALESCE(SUM(request_count), 0) AS known_request_count,
-	        COUNT(request_count) AS request_count_known_events,
-	        COUNT(*) - COUNT(request_count) AS request_count_unknown_events,
-	        COALESCE(SUM(total_tokens), 0) AS total_tokens,
+        COUNT(*) AS events,
+        COALESCE(SUM(total_tokens), 0) AS total_tokens,
         COALESCE(SUM(`+effectiveInputTokensExpr()+`), 0) AS input_tokens,
         COALESCE(SUM(output_tokens), 0) AS output_tokens,
         COALESCE(SUM(cache_creation_tokens), 0) AS cache_creation_tokens,
@@ -198,7 +189,7 @@ func generateTimeBreakdown(conn *sql.DB, bucketExpr string, filters Filters, asJ
 		var r TimeBreakdownRow
 		var totalTokens, inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens, reasoningTokens sql.NullInt64
 		var avgDuration, avgTTFT, avgTPS, recordedCost sql.NullFloat64
-		if err := rows.Scan(&r.Bucket, &r.Label, &r.Events, &r.KnownRequestCount, &r.RequestCountKnownEvents, &r.RequestCountUnknownEvents, &totalTokens, &inputTokens, &outputTokens, &cacheCreationTokens, &cacheReadTokens, &reasoningTokens, &avgDuration, &avgTTFT, &avgTPS, &recordedCost); err != nil {
+		if err := rows.Scan(&r.Bucket, &r.Label, &r.Events, &totalTokens, &inputTokens, &outputTokens, &cacheCreationTokens, &cacheReadTokens, &reasoningTokens, &avgDuration, &avgTTFT, &avgTPS, &recordedCost); err != nil {
 			return err
 		}
 		r.TotalTokens = nullInt64Value(totalTokens)
@@ -232,12 +223,12 @@ func generateTimeBreakdown(conn *sql.DB, bucketExpr string, filters Filters, asJ
 		return nil
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	headers := append([]string{"Bucket", labelHeader, "Events", "Requests", "Req Coverage", "Tokens", "Input", "Output", "Cache Create", "Cache Read", "Reasoning", "Avg TPS", "Avg TTFT(ms)"}, costHeaders(filters.CostMode)...)
+	headers := append([]string{"Bucket", labelHeader, "Events", "Tokens", "Input", "Output", "Cache Create", "Cache Read", "Reasoning", "Avg TPS", "Avg TTFT(ms)"}, costHeaders(filters.CostMode)...)
 	fmt.Fprintln(w, strings.Join(headers, "\t"))
 	fmt.Fprintln(w, strings.Join(repeatStrings("---", len(headers)), "\t"))
 	for _, r := range results {
 		fields := []string{
-			r.Bucket, truncate(r.Label, 40), fmt.Sprintf("%d", r.Events), formatKnownRequestCount(r.KnownRequestCount, r.RequestCountKnownEvents, r.RequestCountUnknownEvents), formatRequestEventCoverage(r.RequestCountKnownEvents, r.RequestCountUnknownEvents), fmt.Sprintf("%d", r.TotalTokens), fmt.Sprintf("%d", r.InputTokens), fmt.Sprintf("%d", r.OutputTokens),
+			r.Bucket, truncate(r.Label, 40), fmt.Sprintf("%d", r.Events), fmt.Sprintf("%d", r.TotalTokens), fmt.Sprintf("%d", r.InputTokens), fmt.Sprintf("%d", r.OutputTokens),
 			fmt.Sprintf("%d", r.CacheCreationTokens), fmt.Sprintf("%d", r.CacheReadTokens), fmt.Sprintf("%d", r.ReasoningTokens),
 			formatFloatPtr(r.AvgOutputTPS), formatFloatPtr(r.AvgTTFTMs),
 		}
@@ -270,11 +261,8 @@ func generateGrouped(conn *sql.DB, labelExpr string, filters Filters, asJSON boo
 	}
 	query := fmt.Sprintf(`SELECT
         %s AS label,
-	        COUNT(*) AS events,
-	        COALESCE(SUM(request_count), 0) AS known_request_count,
-	        COUNT(request_count) AS request_count_known_events,
-	        COUNT(*) - COUNT(request_count) AS request_count_unknown_events,
-	        COALESCE(SUM(total_tokens), 0) AS total_tokens,
+        COUNT(*) AS events,
+        COALESCE(SUM(total_tokens), 0) AS total_tokens,
         COALESCE(SUM(`+effectiveInputTokensExpr()+`), 0) AS input_tokens,
         COALESCE(SUM(output_tokens), 0) AS output_tokens,
         COALESCE(SUM(cache_creation_tokens), 0) AS cache_creation_tokens,
@@ -682,7 +670,7 @@ func executeReport(conn *sql.DB, query string, args []any, asJSON bool, labelHea
 		var r ReportRow
 		var totalTokens, inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens, reasoningTokens sql.NullInt64
 		var avgDuration, avgTTFT, avgTPS, recordedCost sql.NullFloat64
-		if err := rows.Scan(&r.Label, &r.Events, &r.KnownRequestCount, &r.RequestCountKnownEvents, &r.RequestCountUnknownEvents, &totalTokens, &inputTokens, &outputTokens, &cacheCreationTokens, &cacheReadTokens, &reasoningTokens, &avgDuration, &avgTTFT, &avgTPS, &recordedCost); err != nil {
+		if err := rows.Scan(&r.Label, &r.Events, &totalTokens, &inputTokens, &outputTokens, &cacheCreationTokens, &cacheReadTokens, &reasoningTokens, &avgDuration, &avgTTFT, &avgTPS, &recordedCost); err != nil {
 			return err
 		}
 		r.TotalTokens = nullInt64Value(totalTokens)
@@ -717,12 +705,12 @@ func executeReport(conn *sql.DB, query string, args []any, asJSON bool, labelHea
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	headers := append([]string{labelHeader, "Events", "Requests", "Req Coverage", "Tokens", "Input", "Output", "Cache Create", "Cache Read", "Reasoning", "Avg TPS", "Avg TTFT(ms)"}, costHeaders(filters.CostMode)...)
+	headers := append([]string{labelHeader, "Events", "Tokens", "Input", "Output", "Cache Create", "Cache Read", "Reasoning", "Avg TPS", "Avg TTFT(ms)"}, costHeaders(filters.CostMode)...)
 	fmt.Fprintln(w, strings.Join(headers, "\t"))
 	fmt.Fprintln(w, strings.Join(repeatStrings("---", len(headers)), "\t"))
 	for _, r := range results {
 		fields := []string{
-			truncate(r.Label, 40), fmt.Sprintf("%d", r.Events), formatKnownRequestCount(r.KnownRequestCount, r.RequestCountKnownEvents, r.RequestCountUnknownEvents), formatRequestEventCoverage(r.RequestCountKnownEvents, r.RequestCountUnknownEvents), fmt.Sprintf("%d", r.TotalTokens), fmt.Sprintf("%d", r.InputTokens), fmt.Sprintf("%d", r.OutputTokens),
+			truncate(r.Label, 40), fmt.Sprintf("%d", r.Events), fmt.Sprintf("%d", r.TotalTokens), fmt.Sprintf("%d", r.InputTokens), fmt.Sprintf("%d", r.OutputTokens),
 			fmt.Sprintf("%d", r.CacheCreationTokens), fmt.Sprintf("%d", r.CacheReadTokens), fmt.Sprintf("%d", r.ReasoningTokens),
 			formatFloatPtr(r.AvgOutputTPS), formatFloatPtr(r.AvgTTFTMs),
 		}
@@ -731,34 +719,13 @@ func executeReport(conn *sql.DB, query string, args []any, asJSON bool, labelHea
 	_ = w.Flush()
 
 	var totalEvents int64
-	var knownRequestCount int64
-	var requestCountKnownEvents int64
-	var requestCountUnknownEvents int64
 	var totalTokens int64
 	for _, r := range results {
 		totalEvents += r.Events
-		knownRequestCount += r.KnownRequestCount
-		requestCountKnownEvents += r.RequestCountKnownEvents
-		requestCountUnknownEvents += r.RequestCountUnknownEvents
 		totalTokens += r.TotalTokens
 	}
-	fmt.Printf("\nTotal: %d events, %s requests (%s event coverage), %d tokens\n", totalEvents, formatKnownRequestCount(knownRequestCount, requestCountKnownEvents, requestCountUnknownEvents), formatRequestEventCoverage(requestCountKnownEvents, requestCountUnknownEvents), totalTokens)
+	fmt.Printf("\nTotal: %d events, %d tokens\n", totalEvents, totalTokens)
 	return nil
-}
-
-func formatKnownRequestCount(knownRequests, knownEvents, unknownEvents int64) string {
-	if knownEvents == 0 {
-		return "—"
-	}
-	value := fmt.Sprintf("%d", knownRequests)
-	if unknownEvents > 0 {
-		value += "+"
-	}
-	return value
-}
-
-func formatRequestEventCoverage(knownEvents, unknownEvents int64) string {
-	return fmt.Sprintf("%d/%d", knownEvents, knownEvents+unknownEvents)
 }
 
 func addFilters(query string, args *[]any, filters Filters) string {

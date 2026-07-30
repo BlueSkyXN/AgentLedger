@@ -1209,18 +1209,6 @@ func (d *Database) GetStats() (map[string]interface{}, error) {
 	}
 	stats["total_events"] = count
 
-	var knownRequestCount sql.NullInt64
-	var requestCountKnownEvents int64
-	if err := d.conn.QueryRow(`SELECT SUM(request_count), COUNT(request_count) FROM usage_events`).Scan(&knownRequestCount, &requestCountKnownEvents); err != nil {
-		return nil, err
-	}
-	stats["known_request_count"] = int64(0)
-	if knownRequestCount.Valid {
-		stats["known_request_count"] = knownRequestCount.Int64
-	}
-	stats["request_count_known_events"] = requestCountKnownEvents
-	stats["request_count_unknown_events"] = count - requestCountKnownEvents
-
 	if err := d.conn.QueryRow("SELECT COUNT(*) FROM import_runs").Scan(&count); err != nil {
 		return nil, err
 	}

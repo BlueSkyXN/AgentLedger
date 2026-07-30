@@ -2,28 +2,6 @@ export function formatInt(value: number | null | undefined): string {
   return value == null ? "-" : new Intl.NumberFormat("zh-CN").format(value);
 }
 
-export function formatRequestCount(value: number | null | undefined): string {
-  return value == null ? "—" : formatInt(value);
-}
-
-export function formatKnownRequestCount(
-  knownRequestCount: number | null | undefined,
-  knownEvents: number | null | undefined,
-  unknownEvents: number | null | undefined,
-): string {
-  if (knownRequestCount == null || knownEvents == null || unknownEvents == null || knownEvents === 0) return "—";
-  return unknownEvents === 0 ? formatInt(knownRequestCount) : `${formatInt(knownRequestCount)}+`;
-}
-
-export function formatRequestCoverage(
-  knownEvents: number | null | undefined,
-  unknownEvents: number | null | undefined,
-): string {
-  if (knownEvents == null || unknownEvents == null) return "—";
-  const total = knownEvents + unknownEvents;
-  return total === 0 ? "—" : `${formatInt(knownEvents)}/${formatInt(total)}`;
-}
-
 export function formatCost(value: number | null | undefined): string {
   return value == null ? "-" : `$${value.toFixed(4)}`;
 }

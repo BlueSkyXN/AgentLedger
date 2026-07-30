@@ -77,6 +77,40 @@ func TestOpenReadOnlyConfiguredDatabaseUsesExistingState(t *testing.T) {
 	}
 }
 
+func TestStatusOmitsRequestCountMetrics(t *testing.T) {
+	cfg := prepareReadOnlyCommandConfig(t)
+	database, err := db.Open(cfg.DBPath())
+	if err != nil {
+		t.Fatalf("open writer: %v", err)
+	}
+	_, err = database.Conn().Exec(`INSERT INTO usage_events (
+		event_id, dedupe_key, dedupe_strategy, channel, timestamp_ms, request_count, imported_at_ms, updated_at_ms
+	) VALUES ('request-count-source', 'request-count-source', 'message_id', 'copilot', 1, 3, 1, 1)`)
+	if err != nil {
+		_ = database.Close()
+		t.Fatalf("insert event: %v", err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+
+	var runErr error
+	output := captureStdout(t, func() {
+		runErr = statusCmd.RunE(statusCmd, nil)
+	})
+	if runErr != nil {
+		t.Fatalf("status: %v", runErr)
+	}
+	if !strings.Contains(output, "Total events:      1") {
+		t.Fatalf("status missing event total: %s", output)
+	}
+	for _, text := range []string{"Known requests", "Request coverage", "known_request_count", "request_count_known_events", "request_count_unknown_events"} {
+		if strings.Contains(output, text) {
+			t.Fatalf("status still exposes request-count metric %q: %s", text, output)
+		}
+	}
+}
+
 func TestDoctorDoesNotCreateMissingState(t *testing.T) {
 	for _, tc := range []struct {
 		name string

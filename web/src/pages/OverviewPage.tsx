@@ -4,7 +4,7 @@ import type { MetricRow } from "@/api/types";
 import { Chart } from "@/components/Chart";
 import { KpiCard } from "@/components/KpiCard";
 import { useBreakdown, useSummary, useTimeseries } from "@/hooks/queries";
-import { formatCost, formatDate, formatInt, formatKnownRequestCount, formatMs, formatPercent, formatRequestCoverage, formatTPS } from "@/utils/format";
+import { formatCost, formatDate, formatInt, formatMs, formatPercent, formatTPS } from "@/utils/format";
 
 const piePalette = ["#2563eb", "#0f9f6e", "#f59e0b", "#e11d48", "#7c3aed", "#94a3b8"];
 
@@ -19,15 +19,6 @@ function topFivePieData(rows: MetricRow[], valueOf: (row: MetricRow) => number |
     top.push({ name: "Others", value: others });
   }
   return top;
-}
-
-function requestCountHint(summary: { total_events: number; request_count_known_events: number; request_count_unknown_events: number } | undefined) {
-  if (summary == null) return "加载中";
-  const coverage = formatRequestCoverage(summary.request_count_known_events, summary.request_count_unknown_events);
-  if (summary.total_events === 0) return "当前范围没有事件";
-  if (summary.request_count_known_events === 0) return `请求次数均未知（${coverage} 个事件已知）`;
-  if (summary.request_count_unknown_events === 0) return `全部事件已知（${coverage}）`;
-  return `部分已知（${coverage} 个事件已知）`;
 }
 
 export function OverviewPage() {
@@ -130,11 +121,6 @@ export function OverviewPage() {
     <div className="page-stack">
       <section className="kpi-grid">
         <KpiCard label="事件数" value={formatInt(summary?.total_events)} hint={`${formatInt(summary?.import_runs)} 次导入`} />
-        <KpiCard
-          label="已知请求数"
-          value={formatKnownRequestCount(summary?.known_request_count, summary?.request_count_known_events, summary?.request_count_unknown_events)}
-          hint={requestCountHint(summary)}
-        />
         <KpiCard label="总 Tokens" value={formatInt(summary?.total_tokens)} />
         <KpiCard label="输入 Tokens" value={formatInt(summary?.input_tokens)} />
         <KpiCard label="输出 Tokens" value={formatInt(summary?.output_tokens)} />

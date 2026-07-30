@@ -47,9 +47,6 @@ func TestBuildSummary(t *testing.T) {
 	if summary.TotalEvents != 2 || summary.TotalTokens != 465 || summary.ImportRuns != 1 {
 		t.Fatalf("unexpected summary: %+v", summary)
 	}
-	if summary.KnownRequestCount != 3 || summary.RequestCountKnownEvents != 1 || summary.RequestCountUnknownEvents != 1 {
-		t.Fatalf("unexpected request coverage: %+v", summary)
-	}
 	if summary.InputTokens != 300 {
 		t.Fatalf("expected stored input tokens to be used without report-time cache subtraction, got %d", summary.InputTokens)
 	}
