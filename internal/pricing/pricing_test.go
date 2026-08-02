@@ -195,7 +195,7 @@ func TestDefaultProfilePricesCurrentModelIDs(t *testing.T) {
 				CacheReadTokens:     50_000,
 			},
 			wantRuleID:   "gpt-5.6-terra",
-			wantMicroUSD: 1_043_750,
+			wantMicroUSD: 835_000,
 		},
 		{
 			name: "gpt 5.6 luna short context",
@@ -207,7 +207,7 @@ func TestDefaultProfilePricesCurrentModelIDs(t *testing.T) {
 				CacheReadTokens:     50_000,
 			},
 			wantRuleID:   "gpt-5.6-luna",
-			wantMicroUSD: 417_500,
+			wantMicroUSD: 83_500,
 		},
 		{
 			name: "gpt 5.6 sol long context",
@@ -231,7 +231,7 @@ func TestDefaultProfilePricesCurrentModelIDs(t *testing.T) {
 				CacheReadTokens:     100_000,
 			},
 			wantRuleID:   "gpt-5.6-terra-long",
-			wantMicroUSD: 3_250_000,
+			wantMicroUSD: 2_600_000,
 		},
 		{
 			name: "gpt 5.6 luna long context",
@@ -243,7 +243,7 @@ func TestDefaultProfilePricesCurrentModelIDs(t *testing.T) {
 				CacheReadTokens:     100_000,
 			},
 			wantRuleID:   "gpt-5.6-luna-long",
-			wantMicroUSD: 1_300_000,
+			wantMicroUSD: 260_000,
 		},
 		{
 			name: "gpt 5.5 long context",
