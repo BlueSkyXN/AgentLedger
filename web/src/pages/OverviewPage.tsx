@@ -4,9 +4,15 @@ import type { MetricRow } from "@/api/types";
 import { Chart } from "@/components/Chart";
 import { KpiCard } from "@/components/KpiCard";
 import { useBreakdown, useSummary, useTimeseries } from "@/hooks/queries";
-import { formatDate, formatInt, formatPercent } from "@/utils/format";
+import { formatCost, formatDate, formatInt, formatPercent } from "@/utils/format";
 
 const piePalette = ["#2563eb", "#0f9f6e", "#f59e0b", "#e11d48", "#7c3aed", "#94a3b8"];
+
+function estimatedCostLabel(summary: { estimated_cost_usd: number | null; pricing?: { status: string } } | undefined): string {
+  const status = summary?.pricing?.status?.toLowerCase();
+  if (summary?.estimated_cost_usd == null || status !== "available") return "不可用";
+  return formatCost(summary.estimated_cost_usd);
+}
 
 function topFivePieData(rows: MetricRow[]) {
   const sorted = rows
@@ -56,12 +62,14 @@ export function OverviewPage() {
     <div className="page-stack">
       <section className="kpi-grid">
         <KpiCard label="事件数" value={formatInt(summary?.total_events)} hint={`${formatInt(summary?.import_runs)} 次导入`} />
+        <KpiCard label="会话数" value={formatInt(summary?.total_sessions)} />
         <KpiCard label="总 Tokens" value={formatInt(summary?.total_tokens)} />
         <KpiCard label="输入 Tokens" value={formatInt(summary?.input_tokens)} />
         <KpiCard label="输出 Tokens" value={formatInt(summary?.output_tokens)} />
         <KpiCard label="推理 Tokens" value={formatInt(summary?.reasoning_tokens)} />
         <KpiCard label="缓存写入" value={formatInt(summary?.cache_creation_tokens)} />
         <KpiCard label="缓存读取" value={formatInt(summary?.cache_read_tokens)} />
+        <KpiCard label="估算成本" value={estimatedCostLabel(summary)} hint={summary?.pricing?.status === "available" ? "当前 profile" : summary?.pricing?.error_code ?? "pricing unavailable"} />
         <KpiCard label="缓存率" value={formatPercent(cacheRate)} hint={`${formatInt(summary?.cache_read_tokens)} / ${formatInt(inputSideTokens)} 输入侧 tokens`} />
       </section>
       <section className="panel chart-grid">
@@ -90,6 +98,7 @@ export function OverviewPage() {
       <section className="panel meta-row">
         <span>第一条事件：{formatDate(summary?.first_date)}</span>
         <span>最后事件：{formatDate(summary?.last_date)}</span>
+        <span>Pricing：{summary?.pricing?.status === "available" ? `${formatInt(summary.pricing.priced_events)} 已计价` : summary?.pricing?.error_code ?? "不可用"}</span>
       </section>
     </div>
   );

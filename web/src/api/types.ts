@@ -11,6 +11,7 @@ export type Filters = {
 
 export type Summary = {
   total_events: number;
+  total_sessions: number;
   import_runs: number;
   total_tokens: number;
   input_tokens: number;
@@ -20,6 +21,16 @@ export type Summary = {
   reasoning_tokens: number;
   first_date: string | null;
   last_date: string | null;
+  estimated_cost_usd: number | null;
+  pricing: PricingSummary;
+};
+
+export type PricingSummary = {
+  status: string;
+  error_code: string | null;
+  priced_events: number;
+  unpriced_events: number;
+  policy_zero_events: number;
 };
 
 export type MetricRow = {
@@ -66,12 +77,13 @@ export type ImportRun = {
   events_added: number;
   events_updated: number;
   events_skipped: number;
+  events_rejected: number;
   error: string | null;
 };
 
 export type EventItem = {
   event_id: string;
-  dedupe_strategy: string;
+  identity_strategy: string;
   channel: string;
   source_product: string | null;
   provider: string | null;
@@ -79,6 +91,7 @@ export type EventItem = {
   model_normalized: string | null;
   model_resolution: "direct_event" | "thread_settings" | "turn_context" | "unknown" | "legacy_unclassified" | null;
   timestamp: string | null;
+  session_key: string | null;
   session_id: string | null;
   project_path: string | null;
   message_id: string | null;
@@ -92,7 +105,8 @@ export type EventItem = {
 };
 
 export type SessionItem = {
-  session_id: string;
+  session_key: string;
+  session_id: string | null;
   first_date: string | null;
   last_date: string | null;
   channel: string;

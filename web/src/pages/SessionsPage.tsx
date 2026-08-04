@@ -8,8 +8,14 @@ import { formatCost, formatDate, formatInt, shortHash } from "@/utils/format";
 
 const PAGE_LIMITS = [25, 50, 100, 200];
 
+function estimatedCostLabel(row: SessionItem): string {
+  const hasCoverage = row.priced_events > 0 || row.unpriced_events > 0 || row.policy_zero_events > 0;
+  if (row.estimated_cost_usd == null || (row.event_count > 0 && !hasCoverage) || (row.priced_events === 0 && row.unpriced_events > 0)) return "不可用";
+  return formatCost(row.estimated_cost_usd);
+}
+
 const sessionColumns: Array<DataTableColumn<SessionItem>> = [
-  { key: "session_id", label: "会话", render: (row) => <span className="mono">{shortHash(row.session_id)}</span>, value: (row) => row.session_id },
+  { key: "session_key", label: "会话", render: (row) => <span className="mono">{shortHash(row.session_id ?? row.session_key)}</span>, value: (row) => row.session_key },
   { key: "first_date", label: "开始", render: (row) => formatDate(row.first_date), value: (row) => row.first_date ?? "" },
   { key: "last_date", label: "结束", render: (row) => formatDate(row.last_date), value: (row) => row.last_date ?? "" },
   { key: "channel", label: "Channel", render: (row) => row.channel || "-", value: (row) => row.channel },
@@ -23,7 +29,7 @@ const sessionColumns: Array<DataTableColumn<SessionItem>> = [
   { key: "cache_creation_tokens", label: "缓存写入", render: (row) => formatInt(row.cache_creation_tokens), value: (row) => row.cache_creation_tokens, numeric: true },
   { key: "cache_read_tokens", label: "缓存读取", render: (row) => formatInt(row.cache_read_tokens), value: (row) => row.cache_read_tokens, numeric: true },
   { key: "reasoning_tokens", label: "推理", render: (row) => formatInt(row.reasoning_tokens), value: (row) => row.reasoning_tokens, numeric: true },
-  { key: "estimated_cost_usd", label: "估算成本", render: (row) => formatCost(row.estimated_cost_usd), value: (row) => row.estimated_cost_usd, numeric: true },
+  { key: "estimated_cost_usd", label: "估算成本", render: estimatedCostLabel, value: (row) => row.estimated_cost_usd, numeric: true },
   { key: "priced_events", label: "已计价", render: (row) => formatInt(row.priced_events), value: (row) => row.priced_events, numeric: true },
   { key: "unpriced_events", label: "缺价", render: (row) => formatInt(row.unpriced_events), value: (row) => row.unpriced_events, numeric: true },
   { key: "policy_zero_events", label: "零值政策", render: (row) => formatInt(row.policy_zero_events), value: (row) => row.policy_zero_events, numeric: true },
@@ -34,14 +40,14 @@ const eventColumns: Array<DataTableColumn<EventItem>> = [
   { key: "channel", label: "Channel", render: (row) => row.channel, value: (row) => row.channel },
   { key: "source_product", label: "来源", render: (row) => row.source_product || "-", value: (row) => row.source_product ?? "" },
   { key: "model", label: "模型", render: (row) => row.model_normalized ?? row.model_raw ?? "-", value: (row) => row.model_normalized ?? row.model_raw ?? "" },
-  { key: "session", label: "会话", render: (row) => <span className="mono">{shortHash(row.session_id)}</span>, value: (row) => row.session_id ?? "" },
+  { key: "session", label: "会话", render: (row) => <span className="mono">{shortHash(row.session_id ?? row.session_key)}</span>, value: (row) => row.session_key ?? "" },
   { key: "total_tokens", label: "Tokens", render: (row) => formatInt(row.total_tokens), value: (row) => row.total_tokens, numeric: true },
   { key: "input_tokens", label: "输入", render: (row) => formatInt(row.input_tokens), value: (row) => row.input_tokens, numeric: true },
   { key: "output_tokens", label: "输出", render: (row) => formatInt(row.output_tokens), value: (row) => row.output_tokens, numeric: true },
   { key: "cache_creation_tokens", label: "缓存写入", render: (row) => formatInt(row.cache_creation_tokens), value: (row) => row.cache_creation_tokens, numeric: true },
   { key: "cache_read_tokens", label: "缓存读取", render: (row) => formatInt(row.cache_read_tokens), value: (row) => row.cache_read_tokens, numeric: true },
   { key: "reasoning_tokens", label: "推理", render: (row) => formatInt(row.reasoning_tokens), value: (row) => row.reasoning_tokens, numeric: true },
-  { key: "dedupe_strategy", label: "去重策略", render: (row) => row.dedupe_strategy, value: (row) => row.dedupe_strategy },
+  { key: "identity_strategy", label: "身份策略", render: (row) => row.identity_strategy, value: (row) => row.identity_strategy },
 ];
 
 function PageNavigation({ page, onPageChange }: { page: Paginated<unknown>; onPageChange: (offset: number) => void }) {
@@ -82,7 +88,7 @@ export function SessionsPage() {
           </div>
           <label className="select-label">每页<select value={sessionLimit} onChange={(event) => { setSessionLimit(Number(event.target.value)); setSessionOffset(0); }}>{PAGE_LIMITS.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
         </header>
-        <DataTable rows={sessions?.items ?? []} columns={sessionColumns} rowKey={(row) => row.session_id} emptyText="暂无会话数据" defaultSortKey="total_tokens" initialLimit={0} />
+        <DataTable rows={sessions?.items ?? []} columns={sessionColumns} rowKey={(row) => row.session_key} emptyText="暂无会话数据" defaultSortKey="total_tokens" initialLimit={0} />
         {sessions ? <PageNavigation page={sessions} onPageChange={setSessionOffset} /> : null}
       </section>
       <section className="panel">
