@@ -7,7 +7,7 @@
 - `root.go` must register every public command exactly once.
 - Commands should return errors from `RunE` instead of calling `os.Exit`, except the root `Execute()` boundary.
 - `import` must always attempt to finish its `import_runs` row, including warning summaries.
-- `report` flags and API filters should stay aligned: `since`, `until`, `channel`, `provider`, `model`, `session`.
+- `report` flags and API filters should stay aligned: `since`, `until`, `channel`, `source`, `provider`, `model`, `session`, and `project`; CLI reports additionally expose `cost` and `pricing`.
 - `serve` must validate loopback addresses before opening the database or binding a listener.
 
 ## Local rules

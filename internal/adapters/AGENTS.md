@@ -1,13 +1,14 @@
 # internal/adapters navigation card
 
-`internal/adapters/` discovers and parses local agent logs into normalized `fingerprint.ParsedRecord` values. Read this card before modifying Claude, Codex, Copilot, Gemini parsing, model normalization, timing extraction, or token accounting. Key files: `adapter.go`, `<agent>.go`, `<agent>_test.go`, `codex_diagnostics.go`.
+`internal/adapters/` discovers and parses local agent logs into normalized `fingerprint.ParsedRecord` values. Read this card before modifying Claude, Codex, Copilot, Gemini, WorkBuddy parsing, model normalization, Session/event identity, or token accounting. Key files: `adapter.go`, `<agent>.go`, `<agent>_test.go`, `codex_diagnostics.go`.
 
 ## Local invariants
 
 - Do not guess undocumented log formats. Add synthetic fixtures or redacted samples that prove the parser behavior.
 - Token counts come from explicit usage fields or documented adapter fallback only.
-- Timing fields are set only when source logs provide explicit timing boundaries.
+- Do not emit request timing, TTFT, TPS, request count, recorded cost, or raw usage persistence fields in v3 records.
 - Codex default accounting uses `total_token_usage` as a per-session cumulative counter and records deltas; `last_token_usage` is fallback or compatibility behavior.
+- Codex source total remains authoritative. When component counters cannot fully explain it, keep bounded component lower bounds, mark observability `partial`, and emit the aggregate `codex_accounting_partial` diagnostic instead of inventing a bucket.
 - Cached input must be split into canonical `input_tokens` and `cache_read_tokens` when the source reports raw input including cache reads.
 - `source_file`, `line_number`, raw hash, source product, observability level, and accounting method are diagnostics; preserve them when available.
 

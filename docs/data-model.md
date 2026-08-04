@@ -1,225 +1,147 @@
-# Data Model
+# Data Model — schema v3
 
-AgentLedger v2 使用 SQLite 保存事件级 usage 数据。当前 schema 在 `internal/db/schema.go`；写入命令通过 `db.Open()` 初始化或补齐 schema，物理只读检查通过 `db.OpenReadOnly()` 打开现有 SQLite，需要当前完整 v2 的查询通过 `db.OpenReadOnlyV2()` 验证并读取数据库。
+AgentLedger v3 只保留 `meta`、`import_runs`、`usage_events` 三张表。`db.OpenReadOnly()` 只验证普通 SQLite 可读；`db.OpenReadOnlyV3()` 和 `db.OpenReadWriteV3()` 还要求 schema v3、identity v2 与完整必需列。
 
-v2 的设计目标是简单的本地统计分析，而不是多表账本或审计系统。数据库只保留三张表：
+v3 不迁移 v2 行，不接受 v2 `.aldb` merge。已有数据通过原始日志 clean rebuild。
 
-| Table | 用途 |
+## `meta`
+
+| key | value |
 |---|---|
-| `meta` | 保存 schema version 和创建时间。 |
-| `import_runs` | 记录每次导入运行的文件数、insert/update/skip 结果和状态。 |
-| `usage_events` | 扁平事实表，保存 token、timing、channel、provider、model、session 和来源定位信息。 |
+| `schema_version` | `3` |
+| `identity_version` | `2` |
+| `created_at` | 数据库创建时间 |
 
-v1 的 `devices`、`sources`、`source_files`、`raw_records`、`merge_runs`、`event_observations`、`event_conflicts` 已从 schema 中删除。
-
-## 兼容边界
-
-当前 schema version 是 `2`。
-
-`db.Open()` 会读取现有数据库的 `meta.schema_version`：
-
-- 空库或新库：初始化为 v2。
-- v2 库：正常打开。
-- 非 v2 库：返回 incompatible schema 错误，并提示运行 `agent-ledger init --reset`。
-
-`db.OpenReadOnly()` 不创建目录、数据库、表、列或索引，也不执行 compatibility UPDATE；它只要求数据库文件存在并能由 SQLite 只读打开，不要求 AgentLedger schema。`db.OpenReadOnlyV2()` 在此基础上要求 schema version、三张核心表及其当前全部必需列完整。缺失 additive v2 compatibility columns 时可运行 `agent-ledger init` 或 `agent-ledger import` 补齐；核心列损坏或缺失时应恢复有效 v2 备份，或在备份后运行 `agent-ledger init --reset` 重建。
-
-v2 不迁移旧本地数据。需要保留旧 `.db` / `.aldb` 时，请先手动备份，再 reset。
-
-## 数据库位置
-
-默认数据库路径由配置文件中的 `[database].path` 决定。配置文件和默认数据库所在的数据目录选择顺序：
-
-1. 如果设置了 `AGENT_LEDGER_DATA_DIR`，使用该目录。
-2. 如果当前工作目录或可执行文件所在目录的上级能找到 `go.mod`，使用 `<repo-root>/local/data`。
-3. 否则使用 `~/.local/share/agent-ledger`。
-
-源码仓库内运行时，默认数据库通常是：
+## `import_runs`
 
 ```text
-<repo-root>/local/data/agent-ledger.db
+id
+started_at_ms
+finished_at_ms
+status
+files_scanned
+events_added
+events_updated
+events_skipped
+events_rejected
+error
 ```
 
-## 连接行为
+`status` 为 `running`、`completed` 或 `completed_with_warnings`。`error` 保存脱敏 warning 摘要，不保存真实日志内容、Session ID、token 值或 source path。
 
-SQLite DSN 当前包含：
+## `usage_events`
+
+### Identity
 
 ```text
-_journal_mode=WAL
-_synchronous=NORMAL
-_busy_timeout=5000
-_foreign_keys=ON
+event_id
+identity_version
+identity_strategy
+identity_scope
+content_sha256
+parser_version
+event_granularity
 ```
 
-`db.Open(path)` 会创建数据库目录，打开连接，设置 `SetMaxOpenConns(1)`，然后执行 schema 初始化。
+`identity_strategy` 仅使用 `native_event`、`native_message`、`native_request`、`session_turn`、`session_record`、`content_fallback`。
 
-只读连接使用：
+### 来源与模型
 
 ```text
-mode=ro
-_query_only=ON
-_busy_timeout=5000
-_foreign_keys=ON
+channel
+source_product
+provider
+model_raw
+model_normalized
+model_resolution
+model_is_fallback
 ```
 
-`db.OpenReadOnly(path)` 和 `db.OpenReadOnlyV2(path)` 不设置 journal mode 或 synchronous mode，不使用 `immutable=1`，因此在另一个 AgentLedger 进程写入 WAL 时仍能读取后续已提交数据。只读连接池最多打开 4 个连接，让 Web 面板的 summary、timeseries 和 breakdown 等独立聚合能够并行执行；每个连接仍由 DSN 强制 `query_only`，并注册相同的只读 SQL helper。写入和维护入口继续限制为单连接。只读命令在配置文件不存在时使用内存中的默认配置，不会为了读取操作创建 config 或数据库目录。
+`model_normalized` 缺失时保存 `unknown`。channel、source product 和 provider 是独立维度。
 
-`db.OpenReadWriteV2(path)` 只打开已经存在且完整的 v2 数据库，SQLite 使用 `mode=rw`。它不创建目录或数据库，不运行 `initSchema()`/compatibility maintenance，不改变 journal mode；仅设置 connection-local busy timeout 和 foreign keys。`compact-raw --apply` 与 `vacuum` 使用该入口。
+### 时间、Session 与 locator
 
-## Table: `meta`
+```text
+timestamp_ms
+session_key
+session_id
+session_path_id
+turn_id
+project_path
+message_id
+request_id
+source_file
+line_number
+raw_sha256
+```
 
-| Column | Type | Constraint |
-|---|---|---|
-| `key` | `TEXT` | `PRIMARY KEY` |
-| `value` | `TEXT` | `NOT NULL` |
+`timestamp_ms > 0`，`session_key` 必填。`project_path`、`source_file` 是本机私有 locator，默认 export 清空；它们不参与 event/session/content identity。
 
-初始化时会写入：
+### Token 与 accounting
 
-| Key | Value |
+```text
+input_tokens
+output_tokens
+reasoning_tokens
+cache_creation_tokens
+cache_read_tokens
+total_tokens
+source_total_tokens
+raw_input_tokens
+token_accounting_method
+accounting_profile
+observability_level
+```
+
+所有 token 字段非负。reasoning、cache、total 的包含关系由 adapter/accounting profile 验证，不使用一个跨产品通用求和公式；报表只汇总 canonical `total_tokens`，不汇总 `source_total_tokens`。
+
+### 导入时间
+
+```text
+imported_at_ms
+updated_at_ms
+```
+
+exact duplicate 不更新这两个字段。
+
+## 不存在的 v2 字段
+
+```text
+dedupe_key
+source_agent
+request_count
+request_started_at_ms
+first_token_at_ms
+completed_at_ms
+total_duration_ms
+ttft_ms
+output_duration_ms
+output_tps
+recorded_cost_usd
+raw_usage_json
+```
+
+## 约束与索引
+
+- `event_id`、`content_sha256`、`channel`、`source_product`、`session_key` 非空。
+- identity version 固定为 2。
+- timestamp 必须大于 0，token 必须非负。
+- 索引：`timestamp_ms`、`session_key`、`channel + timestamp_ms`、`source_product + timestamp_ms`、`model_normalized + timestamp_ms`。
+
+## Reconcile 决策
+
+| 条件 | 结果 |
 |---|---|
-| `schema_version` | `2` |
-| `created_at` | `datetime('now')` |
+| event ID 不存在 | insert |
+| content hash 相同 | skip，零写入 |
+| 同 timestamp/session/token，仅补 missing 元数据 | update |
+| fallback/unknown 模型升级为直接证据，token 相同 | update |
+| 两条直接模型证据冲突 | reject |
+| timestamp、session、token bucket/total 冲突 | reject |
+| 已知 accounting method/profile 冲突 | reject |
 
-## Table: `import_runs`
+拒绝不新增行、不覆盖原行。merge 的任一拒绝会回滚整次 merge。
 
-| Column | Type | Constraint / Default | 语义 |
-|---|---|---|---|
-| `id` | `TEXT` | `PRIMARY KEY` | import run id。 |
-| `started_at_ms` | `INTEGER` | `NOT NULL` | 开始时间。 |
-| `finished_at_ms` | `INTEGER` | nullable | 结束时间。 |
-| `status` | `TEXT` | `NOT NULL DEFAULT 'running'` | `running` / `completed`。 |
-| `files_scanned` | `INTEGER` | `DEFAULT 0` | 实际处理的源文件数量。 |
-| `events_added` | `INTEGER` | `DEFAULT 0` | 新插入事件数。 |
-| `events_updated` | `INTEGER` | `DEFAULT 0` | 因更完整而更新的重复事件数。 |
-| `events_skipped` | `INTEGER` | `DEFAULT 0` | 重复且不更完整的跳过事件数。 |
-| `error` | `TEXT` | nullable | 失败原因，当前主成功路径为空。 |
+## Session summary
 
-## Table: `usage_events`
-
-`usage_events` 是 v2 唯一事实表。
-
-| Column | Type | Constraint / Default | 语义 |
-|---|---|---|---|
-| `event_id` | `TEXT` | `PRIMARY KEY` | 稳定事件 ID，由 fingerprint 计算。 |
-| `dedupe_key` | `TEXT` | `NOT NULL` | 去重 key。 |
-| `dedupe_strategy` | `TEXT` | `NOT NULL` | `message_id`、`session_token`、`raw_hash` 或 `fallback`。 |
-| `channel` | `TEXT` | `NOT NULL` | Agent 来源，例如 `claude`、`codex`、`copilot`、`gemini`。 |
-| `provider` | `TEXT` | nullable | 模型或日志 provider，例如 `anthropic`、`openai`、`google`。Codex 当前归一为 `openai`，不按 session `model_provider` 拆分。 |
-| `model_raw` | `TEXT` | nullable | 日志中的原始模型名。 |
-| `model_normalized` | `TEXT` | nullable | 归一化后的模型名。 |
-| `model_resolution` | `TEXT` | `NOT NULL DEFAULT 'legacy_unclassified'` | 模型证据来源：`direct_event`、`thread_settings`、`turn_context`、`unknown`；旧库未重导记录使用 `legacy_unclassified`。 |
-| `source_agent` | `TEXT` | nullable | 解析来源 agent，通常与 `channel` 一致。 |
-| `source_product` | `TEXT` | nullable | 更具体的来源形态，例如 `claude-code`、`codex-cli`、`copilot-otel`、`copilot-session-state`。 |
-| `observability_level` | `TEXT` | nullable | 来源完整度，例如 `full`、`session_summary`、`inferred`。 |
-| `model_is_fallback` | `INTEGER` | `NOT NULL DEFAULT 0` | 模型名是否来自 fallback；Codex 无模型证据时使用 `unknown`，不伪造具体 GPT 型号。 |
-| `source_total_tokens` | `INTEGER` | nullable | 源日志中的 raw cumulative / envelope total，用于排查，不直接求和。 |
-| `raw_input_tokens` | `INTEGER` | nullable | source 原始 input token；Codex 和 Copilot 中可能包含 cached/cache read input。 |
-| `token_accounting_method` | `TEXT` | nullable | token envelope 解析方法，例如 `codex_last_token_usage`、`copilot_session_model_metrics`。 |
-| `accounting_profile` | `TEXT` | nullable | 统计口径，例如 Codex 的 `ledger` / `ccusage_compatible`，或 Copilot 的 `input_includes_cache_read`。 |
-| `timestamp_ms` | `INTEGER` | `NOT NULL` | 事件时间戳，毫秒。 |
-| `session_id` | `TEXT` | nullable | 会话 ID。 |
-| `session_path_id` | `TEXT` | nullable | 相对源路径的 session ID；Codex 用于对齐 ccusage 的 session 粒度，Copilot session-state 使用目录 ID。 |
-| `turn_id` | `TEXT` | nullable | 明确存在时的 turn ID；Codex 目前主要来自 `task_complete`。 |
-| `project_path` | `TEXT` | nullable | adapter 能解析到的项目路径；报表/API 会从它派生项目标签用于按项目筛选和聚合，不代表客户端产品。 |
-| `message_id` | `TEXT` | nullable | 日志中的 message id。 |
-| `request_id` | `TEXT` | nullable | 日志中的 request id。 |
-| `request_count` | `INTEGER` | nullable; `CHECK (request_count >= 0)` | 来源明确给出的模型 API 请求次数。`NULL` 表示来源未知或当前 adapter 未提供该口径；`0` 只表示来源显式记录为零，不能把 `NULL` 当作零。该字段只保留来源事实，不进入全局聚合、CLI report、status/analytics 汇总或 Web 面板。 |
-| `source_file` | `TEXT` | nullable | 来源文件路径。 |
-| `line_number` | `INTEGER` | nullable | JSONL 行号。 |
-| `raw_sha256` | `TEXT` | nullable | adapter 完整源解析对象的 canonical JSON hash；源对象本身不落库。 |
-| `input_tokens` | `INTEGER` | `NOT NULL DEFAULT 0` | 非缓存输入 token；source 把 cached input 包含在 input 内时，adapter 入库前会拆分。 |
-| `output_tokens` | `INTEGER` | `NOT NULL DEFAULT 0` | 输出 token。 |
-| `reasoning_tokens` | `INTEGER` | `NOT NULL DEFAULT 0` | reasoning token。 |
-| `cache_creation_tokens` | `INTEGER` | `NOT NULL DEFAULT 0` | cache creation token。 |
-| `cache_read_tokens` | `INTEGER` | `NOT NULL DEFAULT 0` | cache read token。 |
-| `total_tokens` | `INTEGER` | `NOT NULL DEFAULT 0` | 总 token。source 未提供时由分项计算。 |
-| `request_started_at_ms` | `INTEGER` | nullable | 请求开始时间。 |
-| `first_token_at_ms` | `INTEGER` | nullable | 首 token 时间。 |
-| `completed_at_ms` | `INTEGER` | nullable | 完成时间。 |
-| `total_duration_ms` | `INTEGER` | nullable | 总耗时。 |
-| `ttft_ms` | `INTEGER` | nullable | time to first token。 |
-| `output_duration_ms` | `INTEGER` | nullable | 从首 token 到完成的输出耗时。 |
-| `output_tps` | `REAL` | nullable | 输出 TPS。 |
-| `recorded_cost_usd` | `REAL` | nullable | 来源明确给出的 USD cost；v2 不计算价格，Copilot `requests.cost` 不写入此列。 |
-| `raw_usage_json` | `TEXT` | nullable | 历史兼容列。statistics-only 写入契约要求所有新 import/merge 保持 `NULL`；维护命令可清除旧库遗留 raw。 |
-| `imported_at_ms` | `INTEGER` | `NOT NULL` | 首次导入时间。 |
-| `updated_at_ms` | `INTEGER` | `NOT NULL` | 最近更新时间。 |
-
-## 派生规则
-
-v2 不从文本长度、相邻 timestamp 或文件顺序推断 token / 耗时。只有日志明确提供相关字段时才写入 timing。
-
-固定派生规则：
-
-```text
-total_tokens = adapter-specific fallback from explicit token parts
-ttft_ms = first_token_at_ms - request_started_at_ms
-output_duration_ms = completed_at_ms - first_token_at_ms
-total_duration_ms = completed_at_ms - request_started_at_ms
-output_tps = output_tokens / (output_duration_ms / 1000.0)
-```
-
-边界：
-
-- `total_tokens` 仅当 source 没给 `total_tokens` 时由分项计算；Codex 的 reasoning token 是 output token 的子项，fallback 不会把 reasoning 再额外加一次。
-- timing 计算要求参与字段存在。
-- `output_tps` 要求 `output_duration_ms > 0`。
-- 缺失 timing 时对应列保持 `NULL`。
-
-### 事件与 session 的计数口径
-
-这两个计数不能互相替代：
-
-- `event_count`：符合筛选条件的 `usage_events` 行数，用于表示已导入的 usage event 数量。
-- `session_count`：符合筛选条件的非空 `session_id` 去重数，用于表示可识别 session 数量。
-
-`request_count` 仍可作为单条事件的 nullable 来源 metadata 保存，但当前只在少数 source schema 中存在，且事件粒度和覆盖范围不具备跨 agent 可比性。因此 AgentLedger 不对它求和、不计算 known/unknown coverage，也不在 CLI report、status/analytics 汇总或 Web 面板中展示。
-
-## Upsert 完整度规则
-
-`import` 不再使用 `INSERT OR IGNORE`。重复事件会按完整度决定是否覆盖旧记录；对于 Codex，如果 parser 或 fingerprint 规则修正导致 `event_id` 改变，但 `source_file + line_number + raw_sha256` 仍指向同一原始 JSONL 行，upsert 会把当前 `event_id` 精确匹配行和同来源历史 sibling 放进同一个候选集合。存在 exact match 时，还会把 session、timestamp、line、raw hash 和 channel 都一致的脱敏行加入候选；无论 legacy/corrected sibling 全部来自默认脱敏导出，还是 legacy 脱敏行后 merge 到已有本地 canonical row，都能在真实本地来源再次 import 时收敛。
-
-收敛时，incoming candidate 和候选集合共同选择最完整的 token、timing、cost 用量 winner。删除 sibling 前，只从 token 六分项相同、并包含 winner 已有 accounting 字段相同值的单一最佳 donor 补齐 `source_total_tokens`、`raw_input_tokens`、`token_accounting_method` 和 `accounting_profile`，避免跨冲突 profile 或 method 拼出来源中不存在的 bundle。`session_path_id`、`turn_id`、`project_path` 等 source metadata 不使用 usage score 决定冲突赢家：最早历史候选提供稳定基准，其余候选只做 missing、已知纠正和路径具体度升级。provider/model classification 采用独立的可信度顺序：当前 Codex parser 明确解析出的 `openai` provider 和非 fallback model 可以修正历史值，并同步保存 `model_resolution`；stored `openai` 和 explicit model 优先于新的 fallback/`unknown`。唯一例外是旧 parser 硬编码生成且仍带 `model_is_fallback = true` 的 `gpt-5` 占位符：当前同来源行重新解析为 `unknown` fallback 时允许替换该旧占位符。最终记录使用可信 classification、当前 identity、本地 source 和结构化统计事实，`raw_usage_json` 始终为 `NULL`。已有或 incoming `raw_hash` / `fallback` 事件保留其已计算 ID 与 dedupe strategy，不依赖持久化 raw 重算 identity。
-
-优先级：
-
-1. 有 timing。
-2. 有 `recorded_cost_usd`。
-3. 有 model。
-4. `total_tokens` 更高。
-
-结果会记录为 inserted、updated 或 skipped。
-
-## 索引
-
-固定索引：
-
-| Index | Columns |
-|---|---|
-| `idx_usage_events_timestamp` | `timestamp_ms` |
-| `idx_usage_events_channel` | `channel` |
-| `idx_usage_events_provider` | `provider` |
-| `idx_usage_events_model` | `model_normalized` |
-| `idx_usage_events_session` | `session_id` |
-| `idx_usage_session_path` | `session_path_id` |
-| `idx_usage_events_output_tps` | `output_tps` |
-| `idx_usage_events_total_duration` | `total_duration_ms` |
-| `idx_usage_events_channel_time` | `channel, timestamp_ms` |
-| `idx_usage_events_model_time` | `model_normalized, timestamp_ms` |
-| `idx_usage_source_identity` | `source_file, line_number, raw_sha256, channel, imported_at_ms, event_id` |
-
-## 命令读写矩阵
-
-| Command | 写入表 | 读取表 | 说明 |
-|---|---|---|---|
-| `init` | `meta` | config | 初始化 v2 schema；`--reset` 删除本地 DB/WAL/SHM 后重建。 |
-| `import` | `import_runs`、`usage_events` | configured source paths | 遍历启用 adapter，解析 usage record，按 fingerprint upsert；Codex 同一来源行可用于兼容更新旧 fingerprint。 |
-| `export` | 无 | 当前 SQLite 数据库文件 | 直接复制数据库文件。 |
-| `merge` | `usage_events` | incoming `.aldb` 的 `usage_events` | 只接受 schema v2，插入未见事件。 |
-| `status` | 无 | `meta`、`usage_events`、`import_runs` | 通过只读连接输出 v2 统计，不初始化或升级数据库。 |
-| `report *` | 无 | `usage_events` | 通过只读连接执行 SQLite 聚合，输出 text 或 JSON。 |
-| `serve` | 无 | `meta`、`import_runs`、`usage_events` | 通过只读连接提供 API 和 Web 面板。 |
-| `doctor` | 无 | config 与 source paths | 使用内存默认值或现有配置扫描 source paths；配置缺失时不创建本地状态。 |
-| `verify` | 无 | 现有 SQLite 数据库 | 通过基础只读连接执行 `PRAGMA integrity_check`，不要求当前 AgentLedger v2 schema。 |
-| `compact-raw` | `usage_events.raw_usage_json`（仅 `--apply`） | `usage_events` | dry-run 零写入；apply 分批把所有历史非 `NULL` raw 清除，不区分 channel、格式或 identity strategy。 |
-| `vacuum` | SQLite 内部重写 | 当前 SQLite 数据库 | 执行 `VACUUM`。 |
+数据库没有 `sessions` 表。Session summary 从当前筛选窗口内的事件实时聚合：日期范围、event count、主模型、模型数、token buckets 和即时 estimated cost。

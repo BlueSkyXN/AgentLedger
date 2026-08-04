@@ -1,339 +1,164 @@
 # AgentLedger
 
-**面向 AI Coding Agent 的本地 usage 统计分析器。**
+AgentLedger v3 是本地优先的 AI Coding Agent Session usage 统计器。它从 Claude Code、Codex、GitHub Copilot、Gemini CLI 和 WorkBuddy 的本机日志中提取日期、Session、通道、来源形态、provider、模型、project 与 token 分项，写入 SQLite，并通过 CLI、只读 HTTP API 和 React 面板查询。
 
-AgentLedger 把 Claude Code、Codex、GitHub Copilot、Gemini CLI、WorkBuddy 等本机日志解析为统一 usage event，写入本地 SQLite，并提供按渠道、模型、provider、时间、session 和 project 的筛选、聚合与慢请求分析。
+## 产品边界
 
-## 当前定位
-
-v2 已从“多表账本 / 审计系统”收敛为“本地 usage analytics”。核心目标是简单、可解释、可查询：
-
-- 导入本机 agent 日志到 SQLite。
-- 用稳定 fingerprint 做确定性去重。
-- 重复事件使用 upsert，保留更完整记录。
-- 围绕 `channel`、`provider`、`model`、`time`、`session`、`project` 做筛选和统计。
-- 区分 event 与 session 的计数；来源明确提供的 `request_count` 只作为 nullable per-event metadata 保存，不作为跨 agent KPI。
-- 统计 token、耗时、TTFT、输出 TPS。
-- timing 只在日志明确提供时记录，缺失保持 `NULL`。
-- `recorded_cost_usd` 只表示来源日志明确给出的 USD 成本；CLI report 可选用标准 JSON pricing profile 做只读 estimated cost。
-
-v2 不迁移旧 v1 本地数据库。打开旧 schema 会报错，并提示运行：
-
-```bash
-agent-ledger init --reset
-```
-
-`--reset` 会删除当前配置指向的本地数据库及 WAL/SHM 文件，然后初始化空的 v2 数据库。需要保留旧数据时，请先手动备份 `.db` / `.aldb`。
-
-## 功能特性
-
-- **多 agent 导入**：Claude Code、Codex、GitHub Copilot、Gemini CLI、WorkBuddy。
-- **三表 SQLite schema**：只保留 `meta`、`import_runs`、`usage_events`。
-- **扁平事实表**：`usage_events` 直接保存 channel、provider、model、time、session、project、token、可选 `request_count`、timing、source line 和 source hash。
-- **纯统计持久化**：所有 adapter 只持久化结构化统计事实，完整源对象和 usage 子树仅在解析期间存在，`raw_usage_json` 保持 `NULL`。
-- **确定性去重 + 完整度 upsert**：重复事件优先保留有 timing、有 recorded cost、有 model、token 总量更高的记录。
-- **常用报表**：`daily`、`weekly`、`monthly`、`models`、`channels`、`projects`、`sessions`、`slow`。
-- **只读 Web 面板**：Overview、趋势、渠道 / provider、模型、project / session、慢请求、导入 / 设置。
-- **本地优先**：除非你明确复制、导出或截图，数据只保留在本机。
-
-## 安装
-
-### 从源码构建
-
-前置条件：
-
-- 本机 Go 版本需要与 `go.mod` 兼容。
-- 本项目使用 `github.com/mattn/go-sqlite3`，本地构建通常需要 `CGO_ENABLED=1` 和可用的 C toolchain，例如 macOS Xcode Command Line Tools 或 Linux `gcc`。
-
-```bash
-git clone https://github.com/BlueSkyXN/AgentLedger.git
-cd AgentLedger
-mkdir -p bin
-go build -o bin/agent-ledger .
-./bin/agent-ledger --help
-```
-
-下文命令默认使用 `agent-ledger` 表示已经把二进制放入 `PATH`。源码开发时也可以直接运行：
-
-```bash
-go run . --help
-go test ./...
-go build ./...
-```
-
-前端面板要求 Node.js `^20.19.0` 或 `>=22.12.0`。使用仓库 lockfile 构建：
-
-```bash
-cd web
-npm ci
-npm run build
-```
+- 保留 `Adapter → UsageEvent → SQLite → CLI/API/Web` 主链。
+- 只保存结构化 usage facts；不保存对话正文、完整源对象、设备信息或金额。
+- 只统计事件日期以及日/周/月分桶；不提供 request duration、TTFT、TPS、Slow 或 request-count KPI。
+- 多设备通过 schema v3 `.aldb` 合并；不保存或展示设备维度。
+- import 可以重复扫描日志，事件级 identity 保证重复导入不增加总量；本版不做文件 offset/checkpoint。
+- estimated cost 始终按当前 pricing profile 即时计算，数据库不保存金额。
 
 ## 快速开始
 
-```bash
-# 初始化配置和 v2 数据库
-agent-ledger init
-
-# 如果已有旧 v1 数据库，直接重建本地 v2 空库
-agent-ledger init --reset
-
-# 从已启用的本机 agent 导入用量数据
-agent-ledger import
-
-# 查看数据库统计信息
-agent-ledger status
-
-# 常用报表
-agent-ledger report daily
-agent-ledger report weekly --channel claude
-agent-ledger report monthly --model claude-sonnet-4
-agent-ledger report models --json
-agent-ledger report channels --since 2026-05-01
-agent-ledger report projects --channel claude
-agent-ledger report sessions --provider anthropic
-agent-ledger report slow --sort output_tps --limit 50
-
-# 导出 / 合并 v2 SQLite 数据库
-agent-ledger export --output usage.aldb
-agent-ledger merge usage.aldb
-
-# 维护命令
-agent-ledger verify
-agent-ledger compact-raw --dry-run
-agent-ledger compact-raw --apply
-agent-ledger vacuum
-agent-ledger doctor
-agent-ledger doctor codex
-
-# 本地只读 Web 面板
-agent-ledger serve
-```
-
-## 命令
-
-| 命令 | 说明 |
-|---|---|
-| `init` | 创建配置和 v2 数据库；`--reset` 可重建本地空库。 |
-| `import` | 从已配置的本机 agent 日志路径导入 usage events。 |
-| `export` | 将当前 SQLite 数据库复制为可移植的 `.aldb` 文件。 |
-| `merge [file.aldb]` | 合并另一个 schema v2 AgentLedger SQLite 导出文件。 |
-| `report daily` | 按日聚合用量。 |
-| `report weekly` | 按周聚合用量。 |
-| `report monthly` | 按月聚合用量。 |
-| `report models` | 按模型拆分 token / timing。 |
-| `report channels` | 按 agent 来源渠道拆分用量。 |
-| `report projects` | 按项目标签拆分用量。 |
-| `report sessions` | 按 session 拆分用量。 |
-| `report slow` | 慢请求列表，支持按低输出 TPS、高 TTFT 或高总耗时排序。 |
-| `status` | 显示数据库统计信息。 |
-| `doctor` | 显示配置、数据库路径和 agent 日志发现诊断；`doctor codex` 输出 Codex token/timing/口径覆盖诊断。 |
-| `verify` | 运行 SQLite `PRAGMA integrity_check`。 |
-| `compact-raw --dry-run\|--apply` | 检查或批量清除历史 `raw_usage_json`；不会自动运行 `VACUUM`。 |
-| `vacuum` | 运行 SQLite `VACUUM`。 |
-| `serve` | 启动本机只读 Web 面板和 `/api/v1/*` JSON API。 |
-| `completion` | 通过 Cobra 生成 shell completion 脚本。 |
-
-## 报表
-
-所有 report 子命令统一支持：
+要求 Go 版本满足 `go.mod`，并具备 CGO 与 C toolchain。Web 需要 Node.js `^20.19.0` 或 `>=22.12.0`。
 
 ```bash
---since YYYY-MM-DD
---until YYYY-MM-DD
---channel string
---provider string
---model string
---session string
---project string
---cost recorded|estimated|both|none
---pricing path/to/pricing.json
---json
+go build -o bin/agent-ledger .
+
+# 新建 v3 配置和数据库
+./bin/agent-ledger init
+
+# 检查数据源并导入
+./bin/agent-ledger doctor
+./bin/agent-ledger import
+./bin/agent-ledger verify
+./bin/agent-ledger status
+
+# 核心报表
+./bin/agent-ledger report daily
+./bin/agent-ledger report sessions
+./bin/agent-ledger report sources
+./bin/agent-ledger report models --since 2026-08-01 --cost estimated
+
+# 本机只读面板/API
+./bin/agent-ledger serve
 ```
 
-`report daily`、`report weekly`、`report monthly` 额外支持：
+v3 不打开、迁移或 merge v2 数据库。已有 v2 数据必须先做 exact backup，再在独立 data dir 中从原始 Session 日志重建 v3 candidate。不要在未验收 candidate 前对正式库运行 `init --reset`。
 
-```bash
---by channel|model|provider|session|project
-```
+## CLI
 
-`report slow` 额外支持：
-
-```bash
---sort output_tps|ttft_ms|total_duration_ms
---limit 50
-```
-
-示例：
-
-```bash
-agent-ledger report daily --since 2026-05-01
-agent-ledger report daily --by model --channel codex
-agent-ledger report weekly --channel codex
-agent-ledger report monthly --provider anthropic
-agent-ledger report models --model gpt-5.5 --json
-agent-ledger report models --cost estimated
-agent-ledger report channels --cost both --pricing ./pricing/custom.json
-agent-ledger report channels
-agent-ledger report projects --channel claude
-agent-ledger report sessions --until 2026-05-31
-agent-ledger report slow --sort ttft_ms --limit 20
-```
-
-报表会输出 `event_count`、token 分项、平均总耗时、平均 TTFT、平均输出 TPS 和成本列。`event_count` 是 usage event 行数，`session_count` 是非空 `session_id` 的去重数，二者都不是模型 API 请求数。默认 `--cost recorded` 只显示来源明确记录的 `Recorded Cost(USD)`；`--cost estimated` 或 `--cost both` 会按 `pricing/pricing.v1.json` 或 `--pricing` 指定的 JSON profile 做只读估算，并输出 pricing coverage / confidence。内置 profile 对有明确长上下文价格的模型按单次事件完整 input side（input + cache creation + cache read）选择整请求价格档，不做超额部分的累进计价。estimated cost 不会写回 SQLite。没有 explicit timing 的事件不会参与 timing 平均值，相关字段保持空值。
-
-## 本地 Web 面板
-
-`serve` 会启动一个只读本地面板，实时从当前 SQLite 数据库查询聚合结果。不提供浏览器触发 `import`、`merge`、`vacuum` 或修改配置的能力。
-
-`serve`、`status`、`verify` 和 `report *` 使用 SQLite `mode=ro` + `query_only` 打开现有数据库，不会隐式创建或升级 schema。`status`、`report *` 和 `serve` 要求当前完整 v2；首次使用或升级后需要补齐 additive v2 compatibility 字段时，先运行 `agent-ledger init` 或正常执行一次 `import`。`verify` 只检查 SQLite 物理完整性，因此也可在迁移前检查旧版或待升级数据库。`doctor` 在配置不存在时使用内存默认值，不创建配置或数据库目录。
-
-```bash
-agent-ledger serve
-# 默认监听地址：127.0.0.1:54217
-```
-
-默认只允许 loopback 地址。可用参数：
-
-```bash
-# agent-ledger serve (默认监听 127.0.0.1:54217)
-agent-ledger serve --addr 127.0.0.1:54217 --static-dir web/dist
-```
-
-面板 API 挂在 `/api/v1/*`，前端不直接读取 SQLite。`web/dist` 存在时会托管 React 面板；如果尚未构建，会显示内置 placeholder，并提示运行：
-
-```bash
-cd web
-npm ci
-npm run build
-```
-
-面板不会返回 `raw_usage_json`。聚合数据、session id、模型名、项目路径和数据库路径仍属于本机私有使用数据，不应作为公开截图或附件传播。
-
-完整的本地预览、后台 `screen` 会话、全页面/API 验收和停止方式见 [Local Preview](docs/local-preview.md)。最小存活检查：
-
-```bash
-curl -fsS http://127.0.0.1:54217/api/v1/health
-```
-
-面板当前包含总览、趋势、模型、渠道、会话、慢请求、导入和设置 8 个只读页面。直接托管静态前端或发布到 GitHub Pages 不能提供完整预览，因为聚合数据必须由本机只读 API 从当前 SQLite 数据库查询。
-
-## 只读 API
-
-主要接口：
-
-| Method | Path | 说明 |
-|---|---|---|
-| `GET` | `/api/v1/health` | 版本、数据库路径、数据库大小、面板资源模式。 |
-| `GET` | `/api/v1/status` | schema version、事件数、导入次数、token 和 recorded cost 汇总。 |
-| `GET` | `/api/v1/config` | 脱敏配置快照。 |
-| `GET` | `/api/v1/analytics/summary` | 总览 KPI，支持统一 filters。 |
-| `GET` | `/api/v1/analytics/timeseries?bucket=daily\|weekly\|monthly` | 时间趋势；可加 `by=channel\|model\|provider\|session\|project` 返回时间 + 维度拆分。 |
-| `GET` | `/api/v1/analytics/breakdown?by=channel\|model\|provider\|session\|project` | 维度排行。 |
-| `GET` | `/api/v1/analytics/slow?sort=output_tps\|ttft_ms\|total_duration_ms&limit=50` | 慢请求列表。 |
-| `GET` | `/api/v1/filter-options` | 当前库中存在的 channel、provider、model、session、project 选项。 |
-| `GET` | `/api/v1/events` | 最近 usage events，不返回 raw JSON。 |
-| `GET` | `/api/v1/import-runs` | 最近 import runs。 |
-
-统一 filters：
+保留的命令：
 
 ```text
-since=YYYY-MM-DD
-until=YYYY-MM-DD
-channel=claude
-provider=anthropic
-model=claude-sonnet-4
-session=<session-id>
-project=<project-path-label>
+init
+import
+status
+doctor
+verify
+export
+merge
+vacuum
+serve
+report daily|weekly|monthly|models|channels|sources|providers|projects|sessions
 ```
 
-## 支持的 Agent
+所有 report 支持：
 
-| Agent | 默认路径 | 解析格式 | 说明 |
-|---|---|---|---|
-| Claude Code | `~/.config/claude/projects`, `~/.claude/projects` | JSONL | 读取带有 `message.usage` 的 assistant 消息；旧配置写 `~/.claude` 时会自动展开到 `projects`。 |
-| Codex | `~/.codex/sessions` | JSONL | 读取 token count 记录；Codex provider 归一为 `openai` 合并统计，不按 session 的 `model_provider` 拆账；导入前基于稳定文件集识别 fork parent prefix 与严格 rewritten burst，过滤 child replay 且隔离无法证明的 fork；按 JSONL 时序使用 usage 自身 model、可信的 `thread_settings_applied` 和 `turn_context`，并保存 `model_resolution`；没有前置模型证据时记录为 `unknown` fallback，按零值政策单独披露且不算真实价格覆盖；默认用 `total_token_usage` 的 per-session 累计 delta 还原真实增量，`ccusage_compatible` 则在累计推进时使用 last-or-delta 对照口径；配置写 `~/.codex` 时会自动收敛到 `sessions`。 |
-| GitHub Copilot | `~/.copilot/otel`, `~/.copilot/session-state` | JSONL | 优先读取 OTel `gen_ai.usage.*`；没有 OTel 文件时回退到每条非空 `session.shutdown.data.modelMetrics` 的 segment+model 汇总。Copilot input 会拆成 `raw_input_tokens`、非缓存 `input_tokens` 和 `cache_read_tokens`；session-state 的 experimental `modelMetrics.<model>.requests.count` 会作为该模型 API `request_count`。 |
-| Gemini CLI | `~/.gemini` | JSON / JSONL | 读取 `usageMetadata`。 |
-| WorkBuddy | `~/.workbuddy/projects` | JSONL | 读取带 `providerData.usage` 与 `providerData.rawUsage` 的调用记录；按根级事件 ID 去重并拆分非缓存 input、cache read/write、output 和 reasoning 明细。`credit` 不保存、不作为 USD 成本；`auto` 是路由选择状态而非 model ID，规范化为 `unknown/policy_zero`。 |
-
-`channel` 固定表示 agent 来源，例如 `claude`、`codex`、`copilot`、`gemini`、`workbuddy`。
-
-Copilot 的历史 request count 补齐不需要也没有 `import --agents` 参数：确认 `[agents.copilot]` 的 `enabled = true` 后，直接运行普通导入即可：
-
-```bash
-agent-ledger import
+```text
+--since --until --channel --source --provider --model
+--session --project --cost estimated|none --pricing --json
 ```
 
-该补齐仅使用 `session.shutdown.modelMetrics.<model>.requests.count`。OTel request count 的映射，以及 OTel 与 session-state 同时存在时的 request-count 协调不在本期；当前 OTel 优先的 token 导入规则保持不变。
+`--cost` 默认 `estimated`。显式 `--pricing` 文件无效时命令失败；配置中的默认 pricing 文件无效时，用量查询仍成功，但 cost 为 `null`，并返回 `pricing.status=unavailable`。
+
+## Schema v3 与去重
+
+数据库只包含：
+
+- `meta`：`schema_version=3`、`identity_version=2`、`created_at`。
+- `import_runs`：本次 import 的 inserted/updated/skipped/rejected 和脱敏 warning。
+- `usage_events`：事件 identity、Session、来源、模型、时间、token/accounting 与本机 source locator。
+
+稳定 Session key 不包含 absolute path 或设备：
+
+```text
+hash("session:v1", source_product, native_session_id 或 source-root-relative session_path_id)
+```
+
+稳定 event ID 不包含 model、token、timestamp、provider、设备或 import time：
+
+```text
+hash("event:v2", source_product, identity_scope,
+     session_key(仅 session scope), identity_kind,
+     native_event_id, identity_subkey)
+```
+
+同 event ID 的处理固定为：
+
+| 情况 | 结果 |
+|---|---|
+| event ID 不存在 | `inserted` |
+| content hash 相同 | `skipped`，零写入 |
+| token/session/time 相同，仅补空字段或 `unknown/fallback → direct` 模型证据 | `updated` |
+| token、Session、timestamp、直接模型或已知 accounting 冲突 | `rejected`，不覆盖原行 |
+
+普通 import 与 `.aldb` merge 共用同一 reconcile 规则。merge 会先全量 preflight；任一冲突会使整次 merge 零写入。
 
 ## 配置
 
-当配置文件不存在时，`agent-ledger init` 和 `config.Load()` 会创建它。下面是默认配置的语义示例；实际生成的 `[database].path` 会基于运行时数据目录解析：
-
 ```toml
 [database]
-path = "local/data/agent-ledger.db"
+path = "/path/to/agent-ledger.db"
 
 [privacy]
-mode = "statistics"
 redact_paths_on_export = true
 
 [import]
 gracing_minutes = 15
-single_thread = false
-
-[cleanup]
-default_mode = "quarantine"
-older_than_days = 30
-purge_after_days = 90
 
 [reports]
-timezone = "Local"
-currency = "USD"
-
-[agents.claude]
-enabled = true
-paths = ["~/.config/claude/projects", "~/.claude/projects"]
+timezone = "Asia/Shanghai"
+pricing_path = ""
 
 [agents.codex]
 enabled = true
 paths = ["~/.codex/sessions"]
 duplicate_policy = "ledger"
-
-[agents.gemini]
-enabled = true
-paths = ["~/.gemini"]
-
-[agents.copilot]
-enabled = true
-paths = ["~/.copilot/otel", "~/.copilot/session-state"]
-
-[agents.workbuddy]
-enabled = true
-paths = ["~/.workbuddy/projects"]
 ```
 
-数据目录选择顺序：
+`reports.timezone` 使用 IANA timezone 对每条历史事件分桶，DST 日期不会按“当前 offset”回算。
 
-1. 如果设置了 `AGENT_LEDGER_DATA_DIR`，使用该目录。
-2. 如果当前工作目录或可执行文件所在目录的上级能找到 `go.mod`，使用 `<repo-root>/local/data`。
-3. 否则使用 `~/.local/share/agent-ledger`。
+## API v2
 
-重要路径：
+`serve` 只允许 loopback，API 只读：
 
-- Config: `<data-dir>/config.toml`
-- Database: 默认 `<data-dir>/agent-ledger.db`，也可通过 `[database].path` 修改
+```text
+GET /api/v2/health
+GET /api/v2/status
+GET /api/v2/config
+GET /api/v2/analytics/summary
+GET /api/v2/analytics/timeseries?bucket=daily|weekly|monthly
+GET /api/v2/analytics/breakdown?by=channel|source_product|provider|model|project|session
+GET /api/v2/filter-options
+GET /api/v2/sessions?limit=50&offset=0
+GET /api/v2/events?limit=200&offset=0
+GET /api/v2/import-runs
+```
 
-当前 `[reports].timezone` 已用于 daily / weekly / monthly 报表分桶和 `--since` / `--until` 日期过滤；支持 `Local`、`UTC`、固定偏移如 `+08:00`，以及 Go 可加载的 IANA 时区如 `Asia/Shanghai`。`[privacy].mode = "statistics"` 是 canonical 写入策略：所有 adapter 只持久化结构化统计事实，`raw_usage_json` 保持 `NULL`；旧配置中的 `envelope` 作为 deprecated compatibility alias 接受，但行为同样是 statistics-only。`import`、`merge` 和 `compact-raw` 会在打开写连接前拒绝 `full`、`none`、空值和其它未知值。`[privacy].redact_paths_on_export = true` 时，`export` 仍会移除导出副本里的 `project_path`、`source_file` 和历史 `raw_usage_json`。`[cleanup]` 和 `[reports].currency` 仍是配置占位；现有命令尚未实现 cleanup 或 currency 转换。report 的 estimated cost 由 `pricing/pricing.v1.json` 或 `--pricing` 指定文件驱动，不使用 `[reports].currency` 做换算。
+`/api/v1/*` 不提供兼容层并返回 404。`/sessions` 和 `/events` 返回 `{items, limit, offset, total}`。
 
-`request_count` 是保留在 `usage_events` 中的 nullable 来源字段：`NULL` 表示来源未知，`0` 只表示来源显式记录为零。它继续由 adapter 写入，并可在 `/api/v1/events` 的单条事件中读取，但不参与全局聚合、CLI report、status/analytics 汇总或 Web 面板展示。不同来源的事件粒度和覆盖范围不足以把它作为跨 agent KPI。
+## Web
 
-## 文档
+```bash
+cd web
+npm ci
+npm run lint
+npm run build
+cd ..
+./bin/agent-ledger serve
+```
 
-- [文档索引](docs/README.md)
-- [快速开始](docs/quickstart.md)
-- [本地完整预览](docs/local-preview.md)
-- [数据库重建、替换与回滚](docs/database-rebuild.md)
-- [数据模型](docs/data-model.md)
-- [CLI Reference](docs/cli-reference.md)
+面板保留 Overview、Trends、Models、Channels、Sources、Projects、Sessions、Imports、Settings。Sessions 是主要分析页；estimated cost 明确标注为按当前 profile 即时估算。
+
+## 隐私与导出
+
+- 默认 redacted export 清空 `project_path`、`source_file` 和 import warning。
+- `event_id`、`session_key`、`content_sha256` 与 token totals 在 redacted roundtrip 中保持不变。
+- `.db`、`.aldb`、Session ID、模型、项目、路径和汇总结果仍属于本机私有数据。
+- AgentLedger 不联网、不做 telemetry、不修改源 Session 日志。
+
+详细说明见 [docs/README.md](docs/README.md)。

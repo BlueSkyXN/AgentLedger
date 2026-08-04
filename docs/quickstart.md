@@ -1,102 +1,73 @@
 # Quickstart
 
-## 1. Build
+## 1. 构建
 
 ```bash
-mkdir -p bin
+go test ./...
 go build -o bin/agent-ledger .
-./bin/agent-ledger --help
 ```
 
-## 2. Init
+## 2. 初始化新 v3 数据目录
 
 ```bash
+export AGENT_LEDGER_DATA_DIR="$PWD/local/experiments/usage-v3"
 ./bin/agent-ledger init
 ```
 
-如果当前数据目录里已有旧 v1 数据库，v2 会拒绝打开并提示 reset：
+如果指定目录里已有 schema v2 数据库，v3 会拒绝打开。不要直接 reset 正式库；先做 exact backup，再换独立 data dir clean rebuild。
+
+## 3. 配置与导入
+
+编辑 `$AGENT_LEDGER_DATA_DIR/config.toml` 中的 `agents.*.paths`、Codex `duplicate_policy` 与 `reports.timezone`，然后：
 
 ```bash
-./bin/agent-ledger init --reset
-```
-
-`--reset` 会删除当前配置指向的本地数据库及 WAL/SHM 文件，然后创建空的 schema v2 数据库。需要保留旧数据时先手动备份。
-
-## 3. Import
-
-```bash
+./bin/agent-ledger doctor
 ./bin/agent-ledger import
-```
-
-默认读取配置中启用的 agent 路径：
-
-- Claude Code: `~/.config/claude/projects`, `~/.claude/projects`
-- Codex: `~/.codex/sessions`
-- GitHub Copilot: `~/.copilot/otel`, `~/.copilot/session-state`。优先 OTel；没有 OTel 文件时读取 `session.shutdown.data.modelMetrics` 的 segment+model 汇总。
-- Gemini CLI: `~/.gemini`
-- WorkBuddy: `~/.workbuddy/projects`
-
-## 4. Status
-
-```bash
+./bin/agent-ledger verify
 ./bin/agent-ledger status
 ```
 
-输出 schema version、事件数、导入次数、token 汇总和 recorded cost 汇总。
+第二次无源变化导入应满足：
 
-## 5. Reports
+```text
+Events added:    0
+Events updated:  0
+Events rejected: 0
+Events skipped:  第一次有效事件数
+```
+
+## 4. 报表
 
 ```bash
 ./bin/agent-ledger report daily
-./bin/agent-ledger report weekly --channel claude
-./bin/agent-ledger report monthly --provider anthropic
-./bin/agent-ledger report models --json
-./bin/agent-ledger report channels --since 2026-05-01
-./bin/agent-ledger report projects --channel claude
-./bin/agent-ledger report sessions --model gpt-5.5
-./bin/agent-ledger report slow --sort output_tps --limit 50
+./bin/agent-ledger report weekly --since 2026-07-01
+./bin/agent-ledger report models --provider openai
+./bin/agent-ledger report sources
+./bin/agent-ledger report sessions --cost estimated --json
 ```
 
-所有 report 子命令支持：
+## 5. 导出与合并
 
 ```bash
---since YYYY-MM-DD
---until YYYY-MM-DD
---channel string
---provider string
---model string
---session string
---project string
---json
+./bin/agent-ledger export -o device-a.aldb
+./bin/agent-ledger merge device-a.aldb
 ```
 
-## 6. Web panel
+merge 只接受 schema v3 / identity v2，先做全量 preflight。冲突时整次 merge 零写入。
 
-需要 Node.js `^20.19.0` 或 `>=22.12.0`。
+## 6. Web/API
 
 ```bash
 cd web
 npm ci
+npm run lint
 npm run build
 cd ..
 ./bin/agent-ledger serve
 ```
 
-打开：
-
-```text
-http://127.0.0.1:54217
-```
-
-Web 面板只读，不会从浏览器触发 import、merge、vacuum 或配置修改。
-
-需要让面板脱离当前终端继续运行，或逐页核对全部只读功能时，按 [Local Preview](local-preview.md) 执行。完整预览需要本机 API 和 SQLite，不能只发布 `web/dist` 静态文件。
-
-## 7. Export / merge
+浏览器打开 `http://127.0.0.1:54217/`，健康检查：
 
 ```bash
-./bin/agent-ledger export --output usage.aldb
-./bin/agent-ledger merge usage.aldb
+curl -fsS http://127.0.0.1:54217/api/v2/health
 ```
-
-`merge` 只接受 schema v2 AgentLedger SQLite 数据库，并只合并本地未见过的 `usage_events`。
