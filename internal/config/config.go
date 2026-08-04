@@ -13,7 +13,6 @@ type Config struct {
 	Database DatabaseConfig `toml:"database"`
 	Privacy  PrivacyConfig  `toml:"privacy"`
 	Import   ImportConfig   `toml:"import"`
-	Cleanup  CleanupConfig  `toml:"cleanup"`
 	Reports  ReportsConfig  `toml:"reports"`
 	Agents   AgentsConfig   `toml:"agents"`
 }
@@ -23,31 +22,16 @@ type DatabaseConfig struct {
 }
 
 type PrivacyConfig struct {
-	Mode                string `toml:"mode"`
-	RedactPathsOnExport bool   `toml:"redact_paths_on_export"`
+	RedactPathsOnExport bool `toml:"redact_paths_on_export"`
 }
-
-const (
-	PrivacyModeStatistics = "statistics"
-	// PrivacyModeEnvelope is accepted as a compatibility alias for existing
-	// configs. Both modes persist statistics only and never raw usage evidence.
-	PrivacyModeEnvelope = "envelope"
-)
 
 type ImportConfig struct {
-	GracingMinutes int  `toml:"gracing_minutes"`
-	SingleThread   bool `toml:"single_thread"`
-}
-
-type CleanupConfig struct {
-	DefaultMode    string `toml:"default_mode"`
-	OlderThanDays  int    `toml:"older_than_days"`
-	PurgeAfterDays int    `toml:"purge_after_days"`
+	GracingMinutes int `toml:"gracing_minutes"`
 }
 
 type ReportsConfig struct {
-	Timezone string `toml:"timezone"`
-	Currency string `toml:"currency"`
+	Timezone    string `toml:"timezone"`
+	PricingPath string `toml:"pricing_path"`
 }
 
 type AgentsConfig struct {
@@ -71,21 +55,13 @@ func Default() *Config {
 			Path: filepath.Join(DataDir(), "agent-ledger.db"),
 		},
 		Privacy: PrivacyConfig{
-			Mode:                PrivacyModeStatistics,
 			RedactPathsOnExport: true,
 		},
 		Import: ImportConfig{
 			GracingMinutes: 15,
-			SingleThread:   false,
-		},
-		Cleanup: CleanupConfig{
-			DefaultMode:    "quarantine",
-			OlderThanDays:  30,
-			PurgeAfterDays: 90,
 		},
 		Reports: ReportsConfig{
 			Timezone: "Local",
-			Currency: "USD",
 		},
 		Agents: AgentsConfig{
 			Claude:    AgentConfig{Enabled: true, Paths: []string{"~/.config/claude/projects", "~/.claude/projects"}},
@@ -203,19 +179,6 @@ func (c *Config) Save() error {
 
 func (c *Config) DBPath() string {
 	return ExpandHome(c.Database.Path)
-}
-
-// ValidateUsageEvidenceWritePolicy rejects unsupported modes before commands
-// persist or remove raw usage evidence.
-func (c *Config) ValidateUsageEvidenceWritePolicy() error {
-	mode := strings.TrimSpace(c.Privacy.Mode)
-	if mode == PrivacyModeStatistics || mode == PrivacyModeEnvelope {
-		return nil
-	}
-	if mode == "" {
-		mode = "<empty>"
-	}
-	return fmt.Errorf("unsupported privacy.mode %q: this version only supports %q (%q is a deprecated compatibility alias)", mode, PrivacyModeStatistics, PrivacyModeEnvelope)
 }
 
 func ExpandHome(path string) string {

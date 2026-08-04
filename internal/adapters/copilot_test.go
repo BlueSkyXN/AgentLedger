@@ -2,10 +2,12 @@ package adapters
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/BlueSkyXN/AgentLedger/internal/fingerprint"
 	"github.com/BlueSkyXN/AgentLedger/internal/model"
 )
 
@@ -44,6 +46,34 @@ func TestCopilotCacheReadSubtractsInput(t *testing.T) {
 	}
 }
 
+func TestCopilotTraceSpanIdentityIgnoresSupplementalResponseID(t *testing.T) {
+	dir := t.TempDir()
+	base := `{"name":"chat span","traceId":"trace","spanId":"span","timestamp":"2026-01-01T00:00:00Z","attributes":{"gen_ai.usage.input_tokens":10,"gen_ai.usage.output_tokens":2,"gen_ai.usage.total_tokens":12,"gen_ai.response.model":"gpt-4.1","gen_ai.conversation.id":"session"%s}}`
+	paths := []string{filepath.Join(dir, "without-response.jsonl"), filepath.Join(dir, "with-response.jsonl")}
+	lines := []string{fmt.Sprintf(base, ""), fmt.Sprintf(base, `,"gen_ai.response.id":"resp"`)}
+	var eventIDs []string
+	for index, path := range paths {
+		if err := os.WriteFile(path, []byte(lines[index]), 0o644); err != nil {
+			t.Fatalf("write fixture: %v", err)
+		}
+		records, err := NewCopilotAdapter().ParseFile(path)
+		if err != nil || len(records) != 1 {
+			t.Fatalf("parse fixture %d: records=%d err=%v", index, len(records), err)
+		}
+		if records[0].NativeEventID != "trace:span" || records[0].IdentitySubkey != "" {
+			t.Fatalf("trace/span must be the complete identity: native=%q subkey=%q", records[0].NativeEventID, records[0].IdentitySubkey)
+		}
+		_, eventID, _, _, err := fingerprint.ComputeIdentity(records[0])
+		if err != nil {
+			t.Fatalf("compute identity: %v", err)
+		}
+		eventIDs = append(eventIDs, eventID)
+	}
+	if eventIDs[0] != eventIDs[1] {
+		t.Fatalf("supplemental response id changed trace/span identity: %q != %q", eventIDs[0], eventIDs[1])
+	}
+}
+
 func TestCopilotTotalOnlyFallback(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "copilot.jsonl")
 	line := `{"name":"inference log","traceId":"trace","spanId":"span","timestamp":"2026-01-01T00:00:00Z","attributes":{"gen_ai.usage.total_tokens":123,"gen_ai.response.model":"gpt-4.1","gen_ai.conversation.id":"session"}}`
@@ -64,6 +94,27 @@ func TestCopilotTotalOnlyFallback(t *testing.T) {
 	}
 	if rec.TokenAccountingMethod != model.AccCopilotOtelTotalFallback || rec.ObservabilityLevel != "inferred" {
 		t.Fatalf("unexpected method=%s observability=%s", rec.TokenAccountingMethod, rec.ObservabilityLevel)
+	}
+}
+
+func TestCopilotOtelWithoutNativeIDUsesSessionRecord(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "otel", "usage.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	line := `{"name":"chat span","timestamp":"2026-01-01T00:00:00Z","attributes":{"gen_ai.usage.input_tokens":10,"gen_ai.usage.output_tokens":2,"gen_ai.usage.total_tokens":12,"gen_ai.response.model":"gpt-4.1","gen_ai.conversation.id":"session"}}`
+	if err := os.WriteFile(path, []byte(line), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	records, err := NewCopilotAdapter().ParseFile(path)
+	if err != nil || len(records) != 1 {
+		t.Fatalf("parse: records=%d err=%v", len(records), err)
+	}
+	if records[0].IdentityKind != "record" || records[0].IdentitySubkey != "line:1|root" {
+		t.Fatalf("unexpected record fallback: kind=%q subkey=%q", records[0].IdentityKind, records[0].IdentitySubkey)
+	}
+	if _, _, strategy, _, err := fingerprint.ComputeIdentity(records[0]); err != nil || strategy != fingerprint.StrategySessionRecord {
+		t.Fatalf("strategy=%s err=%v", strategy, err)
 	}
 }
 
@@ -118,17 +169,17 @@ func TestCopilotSessionShutdownModelMetrics(t *testing.T) {
 		if rec.AccountingProfile != "input_includes_cache_read" || rec.SessionPathID != "session-123" {
 			t.Fatalf("unexpected accounting_profile=%s session_path_id=%s", rec.AccountingProfile, rec.SessionPathID)
 		}
-		if rec.DedupeID == "" || rec.MessageID == "" || rec.RequestID == "" {
-			t.Fatalf("expected stable identity for model=%s", rec.Model)
+		if rec.NativeEventID != "" || rec.IdentityKind != "record" || rec.IdentitySubkey == "" {
+			t.Fatalf("expected session-record fallback identity for model=%s: native=%q kind=%q subkey=%q", rec.Model, rec.NativeEventID, rec.IdentityKind, rec.IdentitySubkey)
+		}
+		if rec.MessageID != "" || rec.RequestID != "" {
+			t.Fatalf("internal dedupe labels must not become message/request ids for model=%s", rec.Model)
 		}
 		if rec.SourceTotalTokens != nil {
 			t.Fatalf("session metric has no source total; got %v", rec.SourceTotalTokens)
 		}
 		if rec.FingerprintJSON == "" {
 			t.Fatalf("expected fingerprint envelope for model=%s", rec.Model)
-		}
-		if rec.CostUSD != nil {
-			t.Fatalf("requests.cost is not USD and should not be recorded as CostUSD: %v", rec.CostUSD)
 		}
 		var raw map[string]interface{}
 		if err := json.Unmarshal([]byte(rec.FingerprintJSON), &raw); err != nil {
@@ -143,9 +194,6 @@ func TestCopilotSessionShutdownModelMetrics(t *testing.T) {
 			t.Fatalf("requests.cost should remain available in fingerprint envelope: %v", raw)
 		}
 		if rec.Model == "gpt-5.4" {
-			if rec.RequestCount == nil || *rec.RequestCount != 3 {
-				t.Fatalf("expected gpt request count 3, got %v", rec.RequestCount)
-			}
 			if rec.InputTokens != 700 || rec.OutputTokens != 200 || rec.CacheReadTokens != 300 || rec.CacheCreationTokens != 40 || rec.ReasoningTokens != 50 || rec.TotalTokens != 1290 {
 				t.Fatalf("unexpected gpt tokens input=%d output=%d cacheRead=%d cacheWrite=%d reasoning=%d total=%d", rec.InputTokens, rec.OutputTokens, rec.CacheReadTokens, rec.CacheCreationTokens, rec.ReasoningTokens, rec.TotalTokens)
 			}
@@ -154,9 +202,6 @@ func TestCopilotSessionShutdownModelMetrics(t *testing.T) {
 			}
 		}
 		if rec.Model == "claude-opus-4.6" {
-			if rec.RequestCount == nil || *rec.RequestCount != 1 {
-				t.Fatalf("expected claude request count 1, got %v", rec.RequestCount)
-			}
 			if rec.InputTokens != 7 || rec.OutputTokens != 2 || rec.CacheReadTokens != 3 || rec.CacheCreationTokens != 4 || rec.ReasoningTokens != 0 || rec.TotalTokens != 16 {
 				t.Fatalf("unexpected claude tokens input=%d output=%d cacheRead=%d cacheWrite=%d reasoning=%d total=%d", rec.InputTokens, rec.OutputTokens, rec.CacheReadTokens, rec.CacheCreationTokens, rec.ReasoningTokens, rec.TotalTokens)
 			}
@@ -167,17 +212,16 @@ func TestCopilotSessionShutdownModelMetrics(t *testing.T) {
 	}
 }
 
-func TestCopilotSessionRequestCountValidation(t *testing.T) {
+func TestCopilotSessionRequestMetadataDoesNotAffectUsage(t *testing.T) {
 	tests := []struct {
 		name       string
 		countJSON  string
-		wantCount  *int64
 		wantEvents int
 	}{
-		{name: "positive integer", countJSON: "53", wantCount: int64Ptr(53), wantEvents: 1},
-		{name: "explicit zero", countJSON: "0", wantCount: int64Ptr(0), wantEvents: 1},
-		{name: "max int64", countJSON: "9223372036854775807", wantCount: int64Ptr(9223372036854775807), wantEvents: 1},
-		{name: "above float53", countJSON: "9007199254740993", wantCount: int64Ptr(9007199254740993), wantEvents: 1},
+		{name: "positive integer", countJSON: "53", wantEvents: 1},
+		{name: "explicit zero", countJSON: "0", wantEvents: 1},
+		{name: "max int64", countJSON: "9223372036854775807", wantEvents: 1},
+		{name: "above float53", countJSON: "9007199254740993", wantEvents: 1},
 		{name: "missing count", countJSON: "", wantEvents: 1},
 		{name: "negative", countJSON: "-1", wantEvents: 1},
 		{name: "fractional", countJSON: "1.5", wantEvents: 1},
@@ -208,16 +252,6 @@ func TestCopilotSessionRequestCountValidation(t *testing.T) {
 			if test.wantEvents == 0 {
 				return
 			}
-			got := records[0].RequestCount
-			if test.wantCount == nil {
-				if got != nil {
-					t.Fatalf("expected unknown count, got %d", *got)
-				}
-				return
-			}
-			if got == nil || *got != *test.wantCount {
-				t.Fatalf("request count=%v want=%d", got, *test.wantCount)
-			}
 			if records[0].InputTokens != 10 || records[0].OutputTokens != 2 || records[0].TotalTokens != 12 {
 				t.Fatalf("strict count parsing changed tokens: input=%d output=%d total=%d", records[0].InputTokens, records[0].OutputTokens, records[0].TotalTokens)
 			}
@@ -225,17 +259,15 @@ func TestCopilotSessionRequestCountValidation(t *testing.T) {
 	}
 }
 
-func TestCopilotZeroTokenMetricsStillEmitWithRequestCount(t *testing.T) {
+func TestCopilotZeroTokenMetricsAreNotUsageEvents(t *testing.T) {
 	tests := []struct {
 		name      string
 		countJSON string
-		wantCount *int64
-		wantEvent bool
 	}{
-		{name: "positive count", countJSON: "4", wantCount: int64Ptr(4), wantEvent: true},
-		{name: "explicit zero count", countJSON: "0", wantCount: int64Ptr(0), wantEvent: true},
-		{name: "missing count", countJSON: "", wantEvent: false},
-		{name: "invalid count", countJSON: "1.25", wantEvent: false},
+		{name: "positive count", countJSON: "4"},
+		{name: "explicit zero count", countJSON: "0"},
+		{name: "missing count", countJSON: ""},
+		{name: "invalid count", countJSON: "1.25"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -252,59 +284,8 @@ func TestCopilotZeroTokenMetricsStillEmitWithRequestCount(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parse: %v", err)
 			}
-			if !test.wantEvent {
-				if len(records) != 0 {
-					t.Fatalf("expected zero-token metric without valid count to be skipped, got %d", len(records))
-				}
-				return
-			}
-			if len(records) != 1 {
-				t.Fatalf("expected 1 zero-token request event, got %d", len(records))
-			}
-			rec := records[0]
-			if rec.TotalTokens != 0 || rec.InputTokens != 0 || rec.OutputTokens != 0 {
-				t.Fatalf("expected zero tokens, got input=%d output=%d total=%d", rec.InputTokens, rec.OutputTokens, rec.TotalTokens)
-			}
-			if rec.RequestCount == nil || *rec.RequestCount != *test.wantCount {
-				t.Fatalf("request count=%v want=%d", rec.RequestCount, *test.wantCount)
-			}
-			if rec.FingerprintJSON == "" || rec.DedupeID == "" || rec.RawSHA256 == "" {
-				t.Fatalf("zero-token request event lost identity fields: %+v", rec)
-			}
-		})
-	}
-}
-
-func TestParseStrictNonNegativeInt64JSON(t *testing.T) {
-	tests := []struct {
-		name string
-		raw  string
-		want *int64
-	}{
-		{name: "zero", raw: "0", want: int64Ptr(0)},
-		{name: "positive", raw: "42", want: int64Ptr(42)},
-		{name: "max", raw: "9223372036854775807", want: int64Ptr(9223372036854775807)},
-		{name: "above float53", raw: "9007199254740993", want: int64Ptr(9007199254740993)},
-		{name: "negative", raw: "-1"},
-		{name: "fraction", raw: "1.0"},
-		{name: "exponent", raw: "1e2"},
-		{name: "string", raw: `"7"`},
-		{name: "bool", raw: "false"},
-		{name: "null", raw: "null"},
-		{name: "overflow", raw: "9223372036854775808"},
-		{name: "empty", raw: ""},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			got := parseStrictNonNegativeInt64JSON(json.RawMessage(test.raw))
-			if test.want == nil {
-				if got != nil {
-					t.Fatalf("expected nil, got %d", *got)
-				}
-				return
-			}
-			if got == nil || *got != *test.want {
-				t.Fatalf("got %v want %d", got, *test.want)
+			if len(records) != 0 {
+				t.Fatalf("zero-token request-count-only metric must be skipped, got %d", len(records))
 			}
 		})
 	}
@@ -354,8 +335,8 @@ func TestCopilotSessionShutdownKeepsMultipleShutdownSegments(t *testing.T) {
 	if len(records) != 2 {
 		t.Fatalf("expected 2 shutdown segment records, got %d", len(records))
 	}
-	if records[0].DedupeID == records[1].DedupeID {
-		t.Fatalf("multiple shutdown segments for the same model must not collapse: %s", records[0].DedupeID)
+	if records[0].NativeEventID == records[1].NativeEventID {
+		t.Fatalf("multiple shutdown segments for the same model must not collapse: %s", records[0].NativeEventID)
 	}
 	var total int64
 	for _, rec := range records {
@@ -363,6 +344,45 @@ func TestCopilotSessionShutdownKeepsMultipleShutdownSegments(t *testing.T) {
 	}
 	if total != 55 {
 		t.Fatalf("unexpected segment total sum: %d", total)
+	}
+}
+
+func TestCopilotSessionShutdownKeepsMultipleIdlessSegments(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "session-state", "session-123")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir fixture: %v", err)
+	}
+	path := filepath.Join(dir, "events.jsonl")
+	data := "" +
+		`{"type":"session.shutdown","timestamp":"2026-01-01T00:00:00Z","data":{"sessionId":"session-123","modelMetrics":{"gpt-5.4":{"usage":{"inputTokens":10,"outputTokens":2,"cacheReadTokens":3,"cacheWriteTokens":4,"reasoningTokens":5}}}}}` + "\n" +
+		`{"type":"session.shutdown","timestamp":"2026-01-01T00:02:00Z","data":{"sessionId":"session-123","modelMetrics":{"gpt-5.4":{"usage":{"inputTokens":20,"outputTokens":3,"cacheReadTokens":4,"cacheWriteTokens":5,"reasoningTokens":6}}}}}` + "\n"
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	records, err := NewCopilotAdapter().ParseFile(path)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("expected 2 idless shutdown segment records, got %d", len(records))
+	}
+	seen := map[string]bool{}
+	for _, rec := range records {
+		if rec.NativeEventID != "" || rec.IdentityKind != "record" {
+			t.Fatalf("expected record fallback, native=%q kind=%q", rec.NativeEventID, rec.IdentityKind)
+		}
+		_, eventID, strategy, _, err := fingerprint.ComputeIdentity(rec)
+		if err != nil {
+			t.Fatalf("compute identity: %v", err)
+		}
+		if strategy != fingerprint.StrategySessionRecord {
+			t.Fatalf("strategy=%s want=%s", strategy, fingerprint.StrategySessionRecord)
+		}
+		if seen[eventID] {
+			t.Fatalf("idless shutdown segments collapsed to %s", eventID)
+		}
+		seen[eventID] = true
 	}
 }
 

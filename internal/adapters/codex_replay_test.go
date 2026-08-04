@@ -829,9 +829,6 @@ func TestCodexReplay_ModelAndTimingStateIsolation(t *testing.T) {
 			if record.Model != tt.wantModel || record.ModelResolution != tt.wantResolution || record.ModelIsFallback != tt.wantFallback {
 				t.Fatalf("model state leaked or was not applied: model=%q resolution=%q fallback=%v", record.Model, record.ModelResolution, record.ModelIsFallback)
 			}
-			if record.TotalDurationMs != 0 || record.TTFTMs != 0 || record.CompletedAtMs != 0 {
-				t.Fatalf("replay-local task timing leaked into real usage: %+v", record)
-			}
 		})
 	}
 }

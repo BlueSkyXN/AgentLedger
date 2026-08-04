@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -48,6 +49,42 @@ func expandHome(path string) string {
 		}
 	}
 	return path
+}
+
+// stableSessionPathID derives a source-relative session locator for identity
+// fallback. It intentionally keeps only the path below a well-known source
+// directory (for example sessions, projects, otel or session-state), so an
+// absolute home directory or project path never enters a persisted identity.
+func stableSessionPathID(sourcePath string, markers ...string) string {
+	cleaned := filepath.ToSlash(filepath.Clean(sourcePath))
+	parts := strings.Split(cleaned, "/")
+	markerSet := make(map[string]struct{}, len(markers))
+	for _, marker := range markers {
+		markerSet[strings.Trim(strings.TrimSpace(marker), "/")] = struct{}{}
+	}
+	for i, part := range parts {
+		if _, ok := markerSet[part]; !ok || i+1 >= len(parts) {
+			continue
+		}
+		relative := strings.Join(parts[i:], "/")
+		if relative != "" && relative != "." {
+			return relative
+		}
+	}
+	// A basename alone is not relative to a known source root and can collide
+	// across unrelated sessions. Callers without a native session id must reject
+	// the record instead of grouping it under an unstable fallback.
+	return ""
+}
+
+func stableRecordIdentitySubkey(lineNumber int, subkeys ...string) string {
+	parts := []string{fmt.Sprintf("line:%d", lineNumber)}
+	for _, subkey := range subkeys {
+		if value := strings.TrimSpace(subkey); value != "" {
+			parts = append(parts, value)
+		}
+	}
+	return strings.Join(parts, "|")
 }
 
 func sha256Hex(data []byte) string {

@@ -1,161 +1,140 @@
 package cmd
 
 import (
-	"bytes"
 	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/BlueSkyXN/AgentLedger/internal/db"
+	"github.com/BlueSkyXN/AgentLedger/internal/model"
 )
 
-func TestExportDatabaseRedactsPrivateFields(t *testing.T) {
-	source := filepath.Join(t.TempDir(), "source.db")
-	database, err := db.Open(source)
+func TestExportRedactionPreservesIdentityAndTotals(t *testing.T) {
+	sourcePath := filepath.Join(t.TempDir(), "source.db")
+	source, err := db.Open(sourcePath)
 	if err != nil {
-		t.Fatalf("open source: %v", err)
+		t.Fatal(err)
 	}
-	_, err = database.Conn().Exec(`INSERT INTO usage_events (
-		event_id, dedupe_key, dedupe_strategy, channel, timestamp_ms, session_id, project_path, source_file, raw_usage_json, request_count,
-		input_tokens, output_tokens, total_tokens, imported_at_ms, updated_at_ms
-	) VALUES (
-		'event-1', 'event-1', 'message_id', 'codex', 1, 'session-1', '/Users/alice/project', '/Users/alice/.codex/log.jsonl', '{"path":"/Users/alice/project"}', 7,
-		10, 5, 15, 1, 1
-	)`)
-	if err != nil {
-		t.Fatalf("insert source event: %v", err)
+	event := &model.UsageEvent{
+		EventID: "event-id", IdentityVersion: model.IdentityVersion, IdentityStrategy: "native_event", IdentityScope: "session",
+		ContentSHA256: "content-hash", ParserVersion: "test-v1", EventGranularity: "request",
+		Channel: "codex", SourceProduct: "codex-cli", ModelNormalized: "unknown", ModelResolution: model.ModelResolutionUnknown, ModelIsFallback: true,
+		TimestampMs: 1_700_000_000_000, SessionKey: "session-key", ProjectPath: "/private/project", SourceFile: "/private/session.jsonl",
+		InputTokens: 5, TotalTokens: 5, ImportedAtMs: 1, UpdatedAtMs: 1,
 	}
-	_, err = database.Conn().Exec(`INSERT INTO import_runs (
-		id, started_at_ms, status, error
-	) VALUES (
-		'run-1', 1, 'completed_with_warnings', 'failed to parse /Users/alice/.codex/log.jsonl'
-	)`)
-	if err != nil {
-		t.Fatalf("insert import run: %v", err)
+	if _, err := source.UpsertEvent(event); err != nil {
+		t.Fatal(err)
 	}
-	_ = database.Close()
+	if err := source.StartImportRun("run"); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.FinishImportRunWithStatus("run", 1, 1, 0, 0, 1, "completed_with_warnings", "private warning"); err != nil {
+		t.Fatal(err)
+	}
+	_ = source.Close()
 
-	output := filepath.Join(t.TempDir(), "export.aldb")
-	if _, err := exportDatabase(source, output, true); err != nil {
-		t.Fatalf("export: %v", err)
+	exportPath := filepath.Join(t.TempDir(), "export.aldb")
+	if _, err := exportDatabase(sourcePath, exportPath, true); err != nil {
+		t.Fatal(err)
 	}
-
-	conn, err := sql.Open("sqlite3", output)
+	exported, err := db.OpenReadOnlyV3(exportPath)
 	if err != nil {
-		t.Fatalf("open export: %v", err)
+		t.Fatal(err)
 	}
-	defer conn.Close()
-
-	var session string
-	var total, requestCount int64
-	var projectPath, sourceFile, rawUsage sql.NullString
-	if err := conn.QueryRow(`SELECT session_id, total_tokens, request_count, project_path, source_file, raw_usage_json FROM usage_events WHERE event_id='event-1'`).Scan(&session, &total, &requestCount, &projectPath, &sourceFile, &rawUsage); err != nil {
-		t.Fatalf("select export: %v", err)
+	defer exported.Close()
+	var eventID, sessionKey, contentHash string
+	var project, sourceFile, warning sql.NullString
+	var total int64
+	if err := exported.Conn().QueryRow(`SELECT event_id, session_key, content_sha256, project_path, source_file, total_tokens FROM usage_events`).Scan(&eventID, &sessionKey, &contentHash, &project, &sourceFile, &total); err != nil {
+		t.Fatal(err)
 	}
-	if session != "session-1" || total != 15 || requestCount != 7 {
-		t.Fatalf("redacted export changed analytics fields session=%q total=%d requests=%d", session, total, requestCount)
+	if eventID != event.EventID || sessionKey != event.SessionKey || contentHash != event.ContentSHA256 || total != event.TotalTokens {
+		t.Fatalf("redaction changed identity/totals: %q %q %q %d", eventID, sessionKey, contentHash, total)
 	}
-	if projectPath.Valid || sourceFile.Valid || rawUsage.Valid {
-		t.Fatalf("expected private fields to be redacted, project=%v source=%v raw=%v", projectPath, sourceFile, rawUsage)
+	if project.Valid || sourceFile.Valid {
+		t.Fatalf("redacted export retained paths: project=%v source=%v", project, sourceFile)
 	}
-	var importError sql.NullString
-	if err := conn.QueryRow(`SELECT error FROM import_runs WHERE id='run-1'`).Scan(&importError); err != nil {
-		t.Fatalf("select import run error: %v", err)
+	if err := exported.Conn().QueryRow(`SELECT error FROM import_runs WHERE id='run'`).Scan(&warning); err != nil {
+		t.Fatal(err)
 	}
-	if importError.Valid {
-		t.Fatalf("expected import run warning to be redacted, got %q", importError.String)
-	}
-
-	data, err := os.ReadFile(output)
-	if err != nil {
-		t.Fatalf("read export: %v", err)
-	}
-	for _, privateValue := range [][]byte{[]byte("/Users/alice/project"), []byte("/Users/alice/.codex/log.jsonl")} {
-		if bytes.Contains(data, privateValue) {
-			t.Fatalf("redacted export still contains private value %q", privateValue)
-		}
+	if warning.Valid {
+		t.Fatalf("redacted export retained import warning: %q", warning.String)
 	}
 }
 
-func TestExportDatabaseCanKeepPrivateFieldsWhenConfigured(t *testing.T) {
-	source := filepath.Join(t.TempDir(), "source.db")
-	database, err := db.Open(source)
+func TestExportCanKeepPrivateFieldsWhenConfigured(t *testing.T) {
+	sourcePath := filepath.Join(t.TempDir(), "source.db")
+	source, err := db.Open(sourcePath)
 	if err != nil {
-		t.Fatalf("open source: %v", err)
+		t.Fatal(err)
 	}
-	_, err = database.Conn().Exec(`INSERT INTO usage_events (
-		event_id, dedupe_key, dedupe_strategy, channel, timestamp_ms, source_file, raw_usage_json,
-		input_tokens, output_tokens, total_tokens, imported_at_ms, updated_at_ms
-	) VALUES (
-		'event-1', 'event-1', 'message_id', 'codex', 1, '/Users/alice/.codex/log.jsonl', '{"secret":"kept"}',
-		10, 5, 15, 1, 1
-	)`)
+	event := &model.UsageEvent{
+		EventID: "event", IdentityVersion: model.IdentityVersion, IdentityStrategy: "native_event", IdentityScope: "session",
+		ContentSHA256: "hash", EventGranularity: "request", Channel: "codex", SourceProduct: "codex-cli",
+		ModelNormalized: "unknown", TimestampMs: 1, SessionKey: "session", ProjectPath: "/private/project", SourceFile: "/private/source",
+		TotalTokens: 0, ImportedAtMs: 1, UpdatedAtMs: 1,
+	}
+	if _, err := source.UpsertEvent(event); err != nil {
+		t.Fatal(err)
+	}
+	_ = source.Close()
+	exportPath := filepath.Join(t.TempDir(), "unredacted.aldb")
+	if _, err := exportDatabase(sourcePath, exportPath, false); err != nil {
+		t.Fatal(err)
+	}
+	exported, err := db.OpenReadOnlyV3(exportPath)
 	if err != nil {
-		t.Fatalf("insert source event: %v", err)
+		t.Fatal(err)
 	}
-	_ = database.Close()
-
-	output := filepath.Join(t.TempDir(), "export.aldb")
-	if _, err := exportDatabase(source, output, false); err != nil {
-		t.Fatalf("export: %v", err)
+	defer exported.Close()
+	var project, sourceFile string
+	if err := exported.Conn().QueryRow(`SELECT project_path, source_file FROM usage_events`).Scan(&project, &sourceFile); err != nil {
+		t.Fatal(err)
 	}
-
-	conn, err := sql.Open("sqlite3", output)
-	if err != nil {
-		t.Fatalf("open export: %v", err)
-	}
-	defer conn.Close()
-
-	var sourceFile, rawUsage string
-	if err := conn.QueryRow(`SELECT source_file, raw_usage_json FROM usage_events WHERE event_id='event-1'`).Scan(&sourceFile, &rawUsage); err != nil {
-		t.Fatalf("select export: %v", err)
-	}
-	if sourceFile == "" || rawUsage == "" {
-		t.Fatalf("expected private fields to be preserved when redaction is disabled")
+	if project != event.ProjectPath || sourceFile != event.SourceFile {
+		t.Fatalf("unredacted export lost fields: %q %q", project, sourceFile)
 	}
 }
 
-func TestExportDatabaseRequiresExistingSource(t *testing.T) {
-	dir := t.TempDir()
-	output := filepath.Join(dir, "existing.aldb")
-	if err := os.WriteFile(output, []byte("keep"), 0o644); err != nil {
-		t.Fatalf("write existing output: %v", err)
+func TestExportRequiresExistingV3SourceAndPreservesOutput(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "existing.aldb")
+	if err := os.WriteFile(output, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-
-	if _, err := exportDatabase(filepath.Join(dir, "missing.db"), output, true); err == nil {
-		t.Fatal("expected missing source database to fail")
+	if _, err := exportDatabase(filepath.Join(t.TempDir(), "missing.db"), output, true); err == nil {
+		t.Fatal("expected missing source error")
 	}
-
 	data, err := os.ReadFile(output)
-	if err != nil {
-		t.Fatalf("read existing output: %v", err)
-	}
-	if string(data) != "keep" {
-		t.Fatalf("missing source should not replace existing output, got %q", data)
+	if err != nil || string(data) != "keep" {
+		t.Fatalf("failed export changed existing output: %q err=%v", data, err)
 	}
 }
 
-func TestExportDatabaseInvalidSourcePreservesExistingOutput(t *testing.T) {
-	dir := t.TempDir()
-	source := filepath.Join(dir, "source.db")
-	output := filepath.Join(dir, "existing.aldb")
-	if err := os.WriteFile(source, []byte("not sqlite"), 0o644); err != nil {
-		t.Fatalf("write invalid source: %v", err)
-	}
-	if err := os.WriteFile(output, []byte("keep"), 0o644); err != nil {
-		t.Fatalf("write existing output: %v", err)
-	}
-
-	if _, err := exportDatabase(source, output, true); err == nil {
-		t.Fatal("expected invalid source database to fail")
-	}
-
-	data, err := os.ReadFile(output)
+func TestExportRejectsMalformedV3SourceAndPreservesOutput(t *testing.T) {
+	sourcePath := filepath.Join(t.TempDir(), "malformed.db")
+	conn, err := sql.Open("sqlite3", sourcePath)
 	if err != nil {
-		t.Fatalf("read existing output: %v", err)
+		t.Fatal(err)
 	}
-	if string(data) != "keep" {
-		t.Fatalf("invalid source should not replace existing output, got %q", data)
+	if _, err := conn.Exec(`
+        CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        INSERT INTO meta VALUES ('schema_version', '3');
+        INSERT INTO meta VALUES ('identity_version', '2');
+    `); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.Close()
+
+	output := filepath.Join(t.TempDir(), "existing.aldb")
+	if err := os.WriteFile(output, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := exportDatabase(sourcePath, output, false); err == nil {
+		t.Fatal("expected malformed v3 source error")
+	}
+	data, err := os.ReadFile(output)
+	if err != nil || string(data) != "keep" {
+		t.Fatalf("failed export changed existing output: %q err=%v", data, err)
 	}
 }

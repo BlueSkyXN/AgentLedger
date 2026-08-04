@@ -58,13 +58,13 @@ func TestClaudeAdapterDedupesByMessageIDAndRequestIDKeepingLargestUsage(t *testi
 			if rec.InputTokens != 20 || rec.OutputTokens != 10 || rec.CacheCreationTokens != 5 {
 				t.Fatalf("expected largest req-1 usage, got input=%d output=%d cache_create=%d", rec.InputTokens, rec.OutputTokens, rec.CacheCreationTokens)
 			}
-			if rec.DedupeID != "msg-1:req-1" {
-				t.Fatalf("unexpected req-1 dedupe id %q", rec.DedupeID)
+			if rec.IdentitySubkey != "msg-1:req-1" {
+				t.Fatalf("unexpected req-1 identity subkey %q", rec.IdentitySubkey)
 			}
 		case "req-2":
 			foundReq2 = true
-			if rec.DedupeID != "msg-1:req-2" {
-				t.Fatalf("unexpected req-2 dedupe id %q", rec.DedupeID)
+			if rec.IdentitySubkey != "msg-1:req-2" {
+				t.Fatalf("unexpected req-2 identity subkey %q", rec.IdentitySubkey)
 			}
 		default:
 			t.Fatalf("unexpected request id %q", rec.RequestID)
@@ -87,8 +87,8 @@ func TestClaudeAdapterFallbacksToUUIDWhenMessageIDMissing(t *testing.T) {
 	if len(records) != 1 {
 		t.Fatalf("expected 1 record, got %d", len(records))
 	}
-	if records[0].MessageID != "uuid-only" || records[0].DedupeID != "uuid-only" {
-		t.Fatalf("expected uuid fallback, message=%q dedupe=%q", records[0].MessageID, records[0].DedupeID)
+	if records[0].MessageID != "uuid-only" || records[0].NativeEventID != "uuid-only" {
+		t.Fatalf("expected uuid fallback, message=%q native=%q", records[0].MessageID, records[0].NativeEventID)
 	}
 }
 
@@ -139,8 +139,8 @@ func TestClaudeAdapterKeepsOpenCoworkAsProjectPath(t *testing.T) {
 	if records[0].ProjectPath != "/Users/test/Github/open-cowork" {
 		t.Fatalf("expected cwd project path, got %q", records[0].ProjectPath)
 	}
-	if records[0].SourceProduct != "" {
-		t.Fatalf("Claude adapter should not infer source product from project path, got %q", records[0].SourceProduct)
+	if records[0].SourceProduct != "claude-code" {
+		t.Fatalf("unexpected Claude source product %q", records[0].SourceProduct)
 	}
 }
 
@@ -198,7 +198,7 @@ func TestClaudeAdapterUsesFullSourceOnlyForFingerprint(t *testing.T) {
 		t.Fatalf("expected one record, got %d", len(records))
 	}
 	rec := records[0]
-	if rec.Model != "claude-sonnet-fast" || rec.InputTokens != 10 || rec.OutputTokens != 5 || !rec.IsSidechain || rec.CostUSD == nil || *rec.CostUSD != 1.25 {
+	if rec.Model != "claude-sonnet-fast" || rec.InputTokens != 10 || rec.OutputTokens != 5 || !rec.IsSidechain {
 		t.Fatalf("structured Claude parsing changed: %#v", rec)
 	}
 	if rec.FingerprintJSON == "" || rec.RawSHA256 != sha256Hex([]byte(rec.FingerprintJSON)) {

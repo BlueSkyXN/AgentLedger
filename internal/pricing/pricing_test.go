@@ -1,8 +1,11 @@
 package pricing
 
 import (
+	"fmt"
 	"testing"
 	"time"
+
+	"github.com/BlueSkyXN/AgentLedger/internal/model"
 )
 
 func TestDefaultProfileLoads(t *testing.T) {
@@ -518,6 +521,25 @@ func TestEstimateUsesTokenBucketsNotTotalTokens(t *testing.T) {
 	}
 }
 
+func TestCopilotSeparateReasoningUsesOutputRate(t *testing.T) {
+	profile := testProfile(t)
+	estimator, err := NewEstimator(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	estimate, err := estimator.Estimate(Event{
+		Provider: "openai", Channel: "codex", Model: "gpt-test",
+		OutputTokens: 2, ReasoningTokens: 3, TokenAccountingMethod: model.AccCopilotOtelParts,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Output rate is 10 micro USD/token in testProfile: (2 + 3) * 10.
+	if estimate.CostMicroUSD != 50 {
+		t.Fatalf("reasoning cost=%d want=50", estimate.CostMicroUSD)
+	}
+}
+
 func TestRulePriorityAndLongContextCondition(t *testing.T) {
 	profile := testProfile(t)
 	estimator, err := NewEstimator(profile)
@@ -552,6 +574,74 @@ func TestUnknownModelIsMissing(t *testing.T) {
 	}
 	if estimate.Priced || estimate.Confidence != "missing" || estimate.MissingReason == "" {
 		t.Fatalf("expected missing estimate, got %+v", estimate)
+	}
+}
+
+func TestRuleMatchesProviderAndChannel(t *testing.T) {
+	profile, err := DecodeProfile([]byte(`{
+	  "schema_version": 1,
+	  "id": "routing",
+	  "currency": "USD",
+	  "unit": "usd_per_1m_tokens",
+	  "rules": [{
+	    "id": "openai-codex",
+	    "provider": "openai",
+	    "channel": "codex",
+	    "model_patterns": ["same-model"],
+	    "rates": {"input": 1}
+	  }]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	estimator, err := NewEstimator(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name   string
+		event  Event
+		priced bool
+	}{
+		{name: "match", event: Event{Provider: "openai", Channel: "codex", Model: "same-model", InputTokens: 1}, priced: true},
+		{name: "wrong provider", event: Event{Provider: "anthropic", Channel: "codex", Model: "same-model", InputTokens: 1}, priced: false},
+		{name: "wrong channel", event: Event{Provider: "openai", Channel: "claude", Model: "same-model", InputTokens: 1}, priced: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			estimate, err := estimator.Estimate(test.event)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if estimate.Priced != test.priced {
+				t.Fatalf("priced=%v want=%v estimate=%+v", estimate.Priced, test.priced, estimate)
+			}
+		})
+	}
+}
+
+func TestProfileRejectsInvalidDatesNegativeAndUnsupportedRates(t *testing.T) {
+	base := `{
+	  "schema_version": 1,
+	  "id": "invalid",
+	  "currency": "USD",
+	  "unit": "usd_per_1m_tokens",
+	  "rules": [{"id":"rule","model_patterns":["m"],%s}]
+	}`
+	for _, test := range []struct {
+		name string
+		body string
+	}{
+		{name: "invalid effective date", body: `"effective_from":"2026-02-30","rates":{"input":1}`},
+		{name: "reversed date window", body: `"effective_from":"2026-03-02","effective_to":"2026-03-01","rates":{"input":1}`},
+		{name: "negative rate", body: `"rates":{"input":-1}`},
+		{name: "request rate", body: `"rates":{"request":1}`},
+		{name: "reasoning rate", body: `"rates":{"reasoning":1}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := DecodeProfile([]byte(fmt.Sprintf(base, test.body))); err == nil {
+				t.Fatal("expected invalid profile error")
+			}
+		})
 	}
 }
 

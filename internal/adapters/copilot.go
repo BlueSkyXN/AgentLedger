@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"github.com/BlueSkyXN/AgentLedger/internal/fingerprint"
@@ -201,13 +200,7 @@ func (a *CopilotAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, er
 		}
 		rawJSON, _ := json.Marshal(obj)
 		rawHash := sha256Hex(rawJSON)
-		var requestCounts map[string]*int64
-		// Only session shutdown records carry model metrics. Avoid shadow-decoding
-		// ordinary OTel records after their primary map decode.
-		if getString(obj, "type") == "session.shutdown" {
-			requestCounts = copilotSessionRequestCountsFromLine(line)
-		}
-		if sessionCandidates := copilotSessionMetricCandidatesFromObject(obj, path, lineNum, sessionContext, requestCounts); len(sessionCandidates) > 0 {
+		if sessionCandidates := copilotSessionMetricCandidatesFromObject(obj, rawHash, path, lineNum, sessionContext); len(sessionCandidates) > 0 {
 			candidates = append(candidates, sessionCandidates...)
 			sessionContext.observe(obj, path)
 			continue
@@ -235,7 +228,7 @@ type copilotCandidate struct {
 	key       string
 }
 
-func copilotSessionMetricCandidatesFromObject(obj map[string]interface{}, path string, lineNum int, context copilotSessionContext, requestCounts map[string]*int64) []copilotCandidate {
+func copilotSessionMetricCandidatesFromObject(obj map[string]interface{}, rawHash, path string, lineNum int, context copilotSessionContext) []copilotCandidate {
 	if getString(obj, "type") != "session.shutdown" {
 		return nil
 	}
@@ -250,7 +243,18 @@ func copilotSessionMetricCandidatesFromObject(obj map[string]interface{}, path s
 
 	sessionPathID := firstNonEmpty(context.SessionPathID, copilotSessionIDFromPath(path))
 	sessionID := firstNonEmpty(getString(data, "sessionId"), context.SessionID, sessionPathID)
-	shutdownID := firstNonEmpty(getString(obj, "id"), fmt.Sprintf("%s:%d", path, lineNum))
+	nativeShutdownID := strings.TrimSpace(getString(obj, "id"))
+	// Without a native shutdown id, the JSONL line is the stable record key
+	// within the source-relative session. Keep that fallback path-free and do
+	// not manufacture message/request ids from an internal dedupe label.
+	shutdownID := nativeShutdownID
+	identityKind := "event"
+	identitySubkeyPrefix := ""
+	if shutdownID == "" {
+		shutdownID = fmt.Sprintf("line:%d", lineNum)
+		identityKind = "record"
+		identitySubkeyPrefix = shutdownID + "|"
+	}
 	timestampMs := parseTimestamp(obj["timestamp"])
 	if timestampMs == 0 {
 		timestampMs = parseTimestamp(data["sessionStartTime"])
@@ -278,37 +282,33 @@ func copilotSessionMetricCandidatesFromObject(obj map[string]interface{}, path s
 		}
 		total := input + output + cacheRead + cacheWrite + reasoning
 		requests := getMap(metric, "requests")
-		var requestCount *int64
-		if requestCounts != nil {
-			requestCount = requestCounts[modelName]
-		}
-		// Zero-token model metrics are still source-backed request facts when
-		// requests.count is an explicit non-negative integer, including 0.
-		if total == 0 && requestCount == nil {
+		if total == 0 {
 			continue
 		}
 		fingerprintJSON := copilotSessionMetricFingerprintJSON(sessionID, sessionPathID, shutdownID, getString(obj, "timestamp"), modelName, usage, requests, data)
-		rawHash := sha256Hex([]byte(fingerprintJSON))
-		dedupeScope := firstNonEmpty(sessionID, sessionPathID, path)
+		dedupeScope := firstNonEmpty(sessionID, sessionPathID)
 		dedupeID := fmt.Sprintf("copilot-session-state|%s|%s|%s", dedupeScope, shutdownID, modelName)
 		record := &fingerprint.ParsedRecord{
 			Agent:                 "copilot",
 			Provider:              "github",
 			Model:                 modelName,
+			NativeSessionID:       firstNonEmpty(getString(data, "sessionId"), context.SessionID),
+			NativeEventID:         nativeShutdownID,
+			IdentityKind:          identityKind,
+			IdentityScope:         "session",
+			IdentitySubkey:        identitySubkeyPrefix + modelName,
+			ParserVersion:         "copilot-session-state-v1",
+			Granularity:           "session_model",
 			TimestampMs:           timestampMs,
 			SessionID:             sessionID,
 			SessionPathID:         sessionPathID,
 			ProjectPath:           context.ProjectPath,
-			DedupeID:              dedupeID,
-			MessageID:             dedupeID,
-			RequestID:             dedupeID,
 			InputTokens:           input,
 			OutputTokens:          output,
 			CacheCreationTokens:   cacheWrite,
 			CacheReadTokens:       cacheRead,
 			ReasoningTokens:       reasoning,
 			TotalTokens:           total,
-			RequestCount:          requestCount,
 			SourceProduct:         "copilot-session-state",
 			ObservabilityLevel:    "session_summary",
 			TokenAccountingMethod: ledgermodel.AccCopilotSessionMetrics,
@@ -332,75 +332,15 @@ func copilotSessionMetricCandidatesFromObject(obj map[string]interface{}, path s
 	return candidates
 }
 
-// copilotSessionRequestCountsFromLine performs a minimal shadow decode of one
-// JSONL line and extracts modelMetrics.<model>.requests.count with strict
-// integer text parsing. The main object decode stays map-based so token,
-// identity, and OTel behavior remain unchanged.
-func copilotSessionRequestCountsFromLine(line []byte) map[string]*int64 {
-	var shadow struct {
-		Type string `json:"type"`
-		Data *struct {
-			ModelMetrics map[string]json.RawMessage `json:"modelMetrics"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(line, &shadow); err != nil || shadow.Type != "session.shutdown" || shadow.Data == nil {
-		return nil
-	}
-	if len(shadow.Data.ModelMetrics) == 0 {
-		return nil
-	}
-	counts := make(map[string]*int64, len(shadow.Data.ModelMetrics))
-	for modelName, rawMetric := range shadow.Data.ModelMetrics {
-		var metric struct {
-			Requests *struct {
-				Count json.RawMessage `json:"count"`
-			} `json:"requests"`
-		}
-		if err := json.Unmarshal(rawMetric, &metric); err != nil || metric.Requests == nil {
-			continue
-		}
-		if count := parseStrictNonNegativeInt64JSON(metric.Requests.Count); count != nil {
-			counts[modelName] = count
-		}
-	}
-	if len(counts) == 0 {
-		return nil
-	}
-	return counts
-}
-
-// parseStrictNonNegativeInt64JSON accepts only decimal non-negative integer text.
-// Fractions, exponents, negatives, strings, booleans, null, and int64 overflow
-// all remain unknown (nil).
-func parseStrictNonNegativeInt64JSON(raw json.RawMessage) *int64 {
-	if len(raw) == 0 {
-		return nil
-	}
-	text := strings.TrimSpace(string(raw))
-	if text == "" || text == "null" {
-		return nil
-	}
-	for _, r := range text {
-		if r < '0' || r > '9' {
-			return nil
-		}
-	}
-	parsed, err := strconv.ParseInt(text, 10, 64)
-	if err != nil {
-		return nil
-	}
-	return int64Ptr(parsed)
-}
-
 func copilotCandidatesFromObject(obj map[string]interface{}, rawJSON, rawHash, path string, lineNum int) []copilotCandidate {
 	baseAttrs := flattenCopilotAttributes(obj)
 	var candidates []copilotCandidate
-	if candidate := copilotCandidateFromAttrs(obj, baseAttrs, rawJSON, rawHash, path, lineNum); candidate.record != nil {
+	if candidate := copilotCandidateFromAttrs(obj, baseAttrs, rawJSON, rawHash, path, lineNum, "root"); candidate.record != nil {
 		candidates = append(candidates, candidate)
 	}
 
 	if events, ok := obj["events"].([]interface{}); ok {
-		for _, item := range events {
+		for index, item := range events {
 			eventObj, ok := item.(map[string]interface{})
 			if !ok {
 				continue
@@ -410,7 +350,7 @@ func copilotCandidatesFromObject(obj map[string]interface{}, rawJSON, rawHash, p
 			if name := getString(eventObj, "name"); name != "" {
 				attrs["event.name"] = name
 			}
-			if candidate := copilotCandidateFromAttrs(obj, attrs, rawJSON, rawHash, path, lineNum); candidate.record != nil {
+			if candidate := copilotCandidateFromAttrs(obj, attrs, rawJSON, rawHash, path, lineNum, fmt.Sprintf("event:%d", index)); candidate.record != nil {
 				candidates = append(candidates, candidate)
 			}
 		}
@@ -418,7 +358,7 @@ func copilotCandidatesFromObject(obj map[string]interface{}, rawJSON, rawHash, p
 	return candidates
 }
 
-func copilotCandidateFromAttrs(obj, attrs map[string]interface{}, rawJSON, rawHash, path string, lineNum int) copilotCandidate {
+func copilotCandidateFromAttrs(obj, attrs map[string]interface{}, rawJSON, rawHash, path string, lineNum int, recordSubkey string) copilotCandidate {
 	rawInput, hasInput := attrFirstInt64(attrs, "gen_ai.usage.input_tokens", "gen_ai.usage.prompt_tokens")
 	output, hasOutput := attrFirstInt64(attrs, "gen_ai.usage.output_tokens", "gen_ai.usage.completion_tokens")
 	cacheRead, hasCacheRead := attrFirstInt64(attrs, "gen_ai.usage.cache_read.input_tokens", "gen_ai.usage.cached_input_tokens")
@@ -443,6 +383,7 @@ func copilotCandidateFromAttrs(obj, attrs map[string]interface{}, rawJSON, rawHa
 	spanID := firstNonEmpty(getString(obj, "spanId"), getNestedString(obj, "spanContext", "spanId"), attrString(attrs, "spanId"), attrString(attrs, "spanContext.spanId"))
 	responseID := attrString(attrs, "gen_ai.response.id")
 	interactionID := attrString(attrs, "github.copilot.interaction_id")
+	requestID := attrString(attrs, "gen_ai.request.id")
 	dedupKey := ""
 	if traceID != "" && spanID != "" {
 		dedupKey = traceID + ":" + spanID
@@ -450,6 +391,8 @@ func copilotCandidateFromAttrs(obj, attrs map[string]interface{}, rawJSON, rawHa
 		dedupKey = responseID
 	} else if interactionID != "" {
 		dedupKey = interactionID
+	} else if requestID != "" {
+		dedupKey = requestID
 	}
 
 	model := firstNonEmpty(attrString(attrs, "gen_ai.response.model"), attrString(attrs, "gen_ai.request.model"), getString(obj, "model"))
@@ -468,15 +411,36 @@ func copilotCandidateFromAttrs(obj, attrs map[string]interface{}, rawJSON, rawHa
 		observability = "inferred"
 		accountingMethod = ledgermodel.AccCopilotOtelTotalFallback
 	}
+	nativeEventID := firstNonEmpty(responseID, interactionID)
+	identityKind := "event"
+	if traceID != "" && spanID != "" {
+		nativeEventID = traceID + ":" + spanID
+	} else if nativeEventID == "" && requestID != "" {
+		nativeEventID = requestID
+		identityKind = "request"
+	}
+	identitySubkey := ""
+	if nativeEventID == "" {
+		identityKind = "record"
+		identitySubkey = stableRecordIdentitySubkey(lineNum, recordSubkey)
+	}
 
 	record := &fingerprint.ParsedRecord{
 		Agent:                 "copilot",
 		Provider:              "github",
 		Model:                 model,
+		NativeSessionID:       sessionID,
+		SessionPathID:         stableSessionPathID(path, "otel", "session-state"),
+		NativeEventID:         nativeEventID,
+		IdentityKind:          identityKind,
+		IdentityScope:         "session",
+		IdentitySubkey:        identitySubkey,
+		ParserVersion:         "copilot-otel-v1",
+		Granularity:           "request",
 		TimestampMs:           extractCopilotTimestamp(obj),
 		SessionID:             sessionID,
 		MessageID:             dedupKey,
-		RequestID:             firstNonEmpty(responseID, attrString(attrs, "gen_ai.request.id"), interactionID),
+		RequestID:             firstNonEmpty(responseID, requestID, interactionID),
 		InputTokens:           normalizedInput,
 		OutputTokens:          output,
 		CacheCreationTokens:   cacheCreation,

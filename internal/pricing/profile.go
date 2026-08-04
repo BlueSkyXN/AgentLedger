@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/big"
 	"strings"
+	"time"
 )
 
 type Profile struct {
@@ -126,6 +127,14 @@ func (r *Rate) Float64() float64 {
 	return f
 }
 
+func (r *Rate) isNegative() bool {
+	if r == nil || r.raw == "" {
+		return false
+	}
+	value, ok := new(big.Rat).SetString(r.raw)
+	return ok && value.Sign() < 0
+}
+
 func (p *Profile) Validate() error {
 	if p.SchemaVersion != 1 {
 		return fmt.Errorf("unsupported pricing schema_version %d", p.SchemaVersion)
@@ -142,6 +151,14 @@ func (p *Profile) Validate() error {
 	if len(p.Rules) == 0 {
 		return fmt.Errorf("pricing profile must contain at least one rule")
 	}
+	if err := validateOptionalProfileDate("checked_at", p.CheckedAt); err != nil {
+		return err
+	}
+	for _, source := range p.Sources {
+		if err := validateOptionalProfileDate("source.checked_at", source.CheckedAt); err != nil {
+			return err
+		}
+	}
 	seen := make(map[string]bool, len(p.Rules))
 	for _, rule := range p.Rules {
 		if strings.TrimSpace(rule.ID) == "" {
@@ -154,9 +171,53 @@ func (p *Profile) Validate() error {
 		if len(rule.ModelPatterns) == 0 {
 			return fmt.Errorf("pricing rule %q must include model_patterns", rule.ID)
 		}
-		if rule.Rates.Input == nil && rule.Rates.Output == nil && rule.Rates.CachedInput == nil && rule.Rates.CacheRead == nil && rule.Rates.CacheCreation == nil && rule.Rates.CacheWrite == nil && rule.Rates.CacheWrite5m == nil {
+		if err := validateOptionalProfileDate(fmt.Sprintf("pricing rule %q effective_from", rule.ID), rule.EffectiveFrom); err != nil {
+			return err
+		}
+		if err := validateOptionalProfileDate(fmt.Sprintf("pricing rule %q effective_to", rule.ID), rule.EffectiveTo); err != nil {
+			return err
+		}
+		if err := validateOptionalProfileDate(fmt.Sprintf("pricing rule %q as_of", rule.ID), rule.AsOf); err != nil {
+			return err
+		}
+		if rule.EffectiveFrom != "" && rule.EffectiveTo != "" && rule.EffectiveFrom > rule.EffectiveTo {
+			return fmt.Errorf("pricing rule %q effective_from must not be after effective_to", rule.ID)
+		}
+		if rule.Rates.Reasoning != nil || rule.Rates.Request != nil {
+			return fmt.Errorf("pricing rule %q uses an unsupported rate: reasoning and request rates are not part of the v3 token pricing contract", rule.ID)
+		}
+		allRates := []*Rate{
+			rule.Rates.Input, rule.Rates.CachedInput, rule.Rates.Output,
+			rule.Rates.CacheCreation, rule.Rates.CacheWrite, rule.Rates.CacheWrite5m,
+			rule.Rates.CacheWrite1h, rule.Rates.CacheRead,
+		}
+		if allNilRates(allRates) {
 			return fmt.Errorf("pricing rule %q must include at least one token rate", rule.ID)
+		}
+		for _, rate := range allRates {
+			if rate.isNegative() {
+				return fmt.Errorf("pricing rule %q contains a negative rate", rule.ID)
+			}
 		}
 	}
 	return nil
+}
+
+func validateOptionalProfileDate(field, value string) error {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	if _, err := time.Parse("2006-01-02", value); err != nil {
+		return fmt.Errorf("%s must use YYYY-MM-DD: %w", field, err)
+	}
+	return nil
+}
+
+func allNilRates(rates []*Rate) bool {
+	for _, rate := range rates {
+		if rate != nil {
+			return false
+		}
+	}
+	return true
 }

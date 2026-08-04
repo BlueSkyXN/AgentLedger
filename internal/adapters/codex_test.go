@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/BlueSkyXN/AgentLedger/internal/fingerprint"
 	"github.com/BlueSkyXN/AgentLedger/internal/model"
 )
 
@@ -196,7 +197,7 @@ func TestCodexCCUsageCompatibleCumulativeDeltaSaturatesEachComponent(t *testing.
 	if len(records) != 2 {
 		t.Fatalf("expected two compatible records, got %+v", records)
 	}
-	if records[1].InputTokens != 0 || records[1].OutputTokens != 20 || records[1].TotalTokens != 10 {
+	if records[1].InputTokens != 0 || records[1].OutputTokens != 10 || records[1].TotalTokens != 10 || records[1].ObservabilityLevel != "partial" {
 		t.Fatalf("component-wise saturated delta mismatch: %+v", records[1])
 	}
 	if records[1].TokenAccountingMethod != model.AccCodexTotalDelta {
@@ -349,7 +350,7 @@ func TestCodexModelStateFollowsDeclarationsBySessionAndTime(t *testing.T) {
 	}
 }
 
-func TestCodexTaskCompleteTimingAttachesToPreviousUsage(t *testing.T) {
+func TestCodexTaskCompleteOnlyAttachesTurnIdentity(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "codex.jsonl")
 	data := strings.Join([]string{
 		`{"type":"event_msg","timestamp":"2026-01-01T00:00:10Z","session_id":"A","payload":{"type":"token_count","model":"gpt-5-codex","info":{"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":40,"reasoning_output_tokens":5,"total_tokens":145}}}}`,
@@ -367,14 +368,46 @@ func TestCodexTaskCompleteTimingAttachesToPreviousUsage(t *testing.T) {
 		t.Fatalf("expected 1 record, got %d", len(records))
 	}
 	rec := records[0]
-	if rec.TotalDurationMs != 12000 || rec.TTFTMs != 1500 {
-		t.Fatalf("expected timing duration=12000 ttft=1500, got duration=%d ttft=%d", rec.TotalDurationMs, rec.TTFTMs)
-	}
-	if rec.CompletedAtMs != 1767225612000 || rec.RequestStartedAtMs != 1767225600000 || rec.FirstTokenAtMs != 1767225601500 {
-		t.Fatalf("unexpected timing anchors completed=%d started=%d first=%d", rec.CompletedAtMs, rec.RequestStartedAtMs, rec.FirstTokenAtMs)
-	}
 	if rec.TurnID != "turn-a" {
 		t.Fatalf("expected turn id turn-a, got %q", rec.TurnID)
+	}
+	if _, _, strategy, _, err := fingerprint.ComputeIdentity(rec); err != nil || strategy != fingerprint.StrategySessionTurn {
+		t.Fatalf("task_complete must upgrade identity to session_turn: strategy=%s err=%v", strategy, err)
+	}
+}
+
+func TestCodexSessionRecordIdentityIsStableAcrossSourceRoots(t *testing.T) {
+	lineFor := func(modelName string, input, output, total int) string {
+		return fmt.Sprintf(`{"type":"event_msg","timestamp":"2026-01-01T00:00:00Z","model":%q,"payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":%d,"output_tokens":%d,"total_tokens":%d}}}}`, modelName, input, output, total)
+	}
+	paths := []string{
+		filepath.Join(t.TempDir(), ".codex", "sessions", "2026", "01", "01", "rollout-session.jsonl"),
+		filepath.Join(t.TempDir(), ".codex", "sessions", "2026", "01", "01", "rollout-session.jsonl"),
+	}
+	lines := []string{lineFor("gpt-5", 10, 2, 12), lineFor("gpt-5.6", 20, 3, 23)}
+	var eventIDs []string
+	for index, path := range paths {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(lines[index]), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		records, err := NewCodexAdapter().ParseFile(path)
+		if err != nil || len(records) != 1 {
+			t.Fatalf("parse %d: records=%d err=%v", index, len(records), err)
+		}
+		if records[0].IdentityKind != "record" || records[0].IdentitySubkey != "line:1" {
+			t.Fatalf("expected stable line record identity: kind=%q subkey=%q", records[0].IdentityKind, records[0].IdentitySubkey)
+		}
+		_, eventID, strategy, _, err := fingerprint.ComputeIdentity(records[0])
+		if err != nil || strategy != fingerprint.StrategySessionRecord {
+			t.Fatalf("compute identity: strategy=%s err=%v", strategy, err)
+		}
+		eventIDs = append(eventIDs, eventID)
+	}
+	if eventIDs[0] != eventIDs[1] {
+		t.Fatalf("source relocation/model/token changes changed session-record identity: %q != %q", eventIDs[0], eventIDs[1])
 	}
 }
 
@@ -400,7 +433,7 @@ func TestCodexSessionPathIDFromNestedSessionsPath(t *testing.T) {
 	}
 }
 
-func TestCodexSkipsSessionTokenCountWithOnlyTotal(t *testing.T) {
+func TestCodexKeepsSessionTokenCountWithOnlyTotalAsPartial(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "codex.jsonl")
 	data := `{"type":"event_msg","timestamp":"2026-01-01T00:00:00Z","session_id":"A","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":0,"cached_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0,"total_tokens":20757}}}}`
 	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
@@ -411,8 +444,8 @@ func TestCodexSkipsSessionTokenCountWithOnlyTotal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if len(records) != 0 {
-		t.Fatalf("expected total-only session token_count to be skipped, got %d records", len(records))
+	if len(records) != 1 || records[0].TotalTokens != 20757 || records[0].ObservabilityLevel != "partial" {
+		t.Fatalf("expected partial total-only record, got %+v", records)
 	}
 }
 

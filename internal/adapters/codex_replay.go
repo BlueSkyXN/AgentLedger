@@ -23,6 +23,7 @@ const (
 	codexDiagnosticReplayUnresolved  = "codex_replay_unresolved"
 	codexDiagnosticReplayFileChanged = "codex_replay_file_changed"
 	codexDiagnosticReplayPlanFailed  = "codex_replay_plan_failed"
+	codexDiagnosticAccountingPartial = "codex_accounting_partial"
 )
 
 type codexReplayPhase uint8
@@ -86,17 +87,19 @@ type codexReplayDecision struct {
 }
 
 type codexReplayStats struct {
-	forkFiles       int64
-	parentResolved  int64
-	parentMissing   int64
-	parentAmbiguous int64
-	exactEvents     int64
-	exactTokens     int64
-	rewrittenEvents int64
-	rewrittenTokens int64
-	unresolved      int64
-	fileChanged     int64
-	planFailed      int64
+	forkFiles               int64
+	parentResolved          int64
+	parentMissing           int64
+	parentAmbiguous         int64
+	exactEvents             int64
+	exactTokens             int64
+	rewrittenEvents         int64
+	rewrittenTokens         int64
+	unresolved              int64
+	fileChanged             int64
+	planFailed              int64
+	accountingPartialEvents int64
+	accountingPartialTokens int64
 }
 
 type codexReplayQuarantineError struct {
@@ -254,6 +257,7 @@ func (a *CodexAdapter) ImportDiagnostics() []ImportDiagnostic {
 		{Code: codexDiagnosticReplayUnresolved, Unit: ImportDiagnosticUnitCount, Count: stats.unresolved},
 		{Code: codexDiagnosticReplayFileChanged, Unit: ImportDiagnosticUnitCount, Count: stats.fileChanged},
 		{Code: codexDiagnosticReplayPlanFailed, Unit: ImportDiagnosticUnitCount, Count: stats.planFailed},
+		{Code: codexDiagnosticAccountingPartial, Unit: ImportDiagnosticUnitUsage, Events: stats.accountingPartialEvents, Tokens: stats.accountingPartialTokens},
 	}
 }
 

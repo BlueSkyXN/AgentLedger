@@ -116,18 +116,21 @@ func exportDatabase(sourcePath, outputPath string, redact bool) (int64, error) {
 }
 
 func openExportSource(path string) (*sql.DB, error) {
+	validated, err := db.OpenReadOnlyV3(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to validate source database: %w", err)
+	}
+	if err := validated.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close validated source database: %w", err)
+	}
+
 	conn, err := sql.Open("sqlite3", fmt.Sprintf("file:%s?mode=ro&_busy_timeout=5000", path))
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
-	var version string
-	if err := conn.QueryRow(`SELECT value FROM meta WHERE key='schema_version'`).Scan(&version); err != nil {
+	if err := conn.Ping(); err != nil {
 		_ = conn.Close()
-		return nil, fmt.Errorf("failed to validate source database schema: %w", err)
-	}
-	if version != db.SchemaVersion {
-		_ = conn.Close()
-		return nil, fmt.Errorf("incompatible database schema version %s; expected %s", version, db.SchemaVersion)
+		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 	return conn, nil
 }
@@ -145,8 +148,7 @@ func redactExportedDatabase(path string) error {
 	if _, err := conn.Exec(`
 		UPDATE usage_events SET
 			project_path = NULL,
-			source_file = NULL,
-			raw_usage_json = NULL
+			source_file = NULL
 	`); err != nil {
 		return fmt.Errorf("failed to redact exported database: %w", err)
 	}

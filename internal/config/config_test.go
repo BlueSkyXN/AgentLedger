@@ -7,97 +7,55 @@ import (
 	"testing"
 )
 
-func TestLoadReadOnlyUsesDefaultsWithoutCreatingFiles(t *testing.T) {
-	dataDir := filepath.Join(t.TempDir(), "missing-data-dir")
-	t.Setenv("AGENT_LEDGER_DATA_DIR", dataDir)
-
-	cfg, err := LoadReadOnly()
-	if err != nil {
-		t.Fatalf("load read-only: %v", err)
-	}
-	if cfg.DBPath() != filepath.Join(dataDir, "agent-ledger.db") {
-		t.Fatalf("database path = %q", cfg.DBPath())
-	}
-	if _, err := os.Stat(dataDir); !os.IsNotExist(err) {
-		t.Fatalf("read-only load created data directory: %v", err)
-	}
-}
-
-func TestLoadReadOnlyReadsExistingConfig(t *testing.T) {
-	dataDir := t.TempDir()
-	t.Setenv("AGENT_LEDGER_DATA_DIR", dataDir)
-
+func TestDefaultContainsOnlyV3ConfigurationSurface(t *testing.T) {
+	t.Setenv("AGENT_LEDGER_DATA_DIR", t.TempDir())
 	cfg := Default()
-	cfg.Reports.Timezone = "UTC"
-	if err := cfg.Save(); err != nil {
-		t.Fatalf("save config: %v", err)
+	if cfg.Import.GracingMinutes != 15 || cfg.Reports.Timezone == "" {
+		t.Fatalf("unexpected defaults: %+v", cfg)
 	}
-
-	loaded, err := LoadReadOnly()
-	if err != nil {
-		t.Fatalf("load read-only: %v", err)
+	if !cfg.Privacy.RedactPathsOnExport {
+		t.Fatal("redacted export must default to true")
 	}
-	if loaded.Reports.Timezone != "UTC" {
-		t.Fatalf("timezone = %q, want UTC", loaded.Reports.Timezone)
+	if cfg.Reports.PricingPath != "" {
+		t.Fatalf("default pricing path should use embedded profile, got %q", cfg.Reports.PricingPath)
+	}
+	if cfg.DBPath() != filepath.Join(DataDir(), "agent-ledger.db") {
+		t.Fatalf("unexpected DB path %q", cfg.DBPath())
 	}
 }
 
-func TestLoadReadOnlyBackfillsWorkBuddyDefaults(t *testing.T) {
+func TestSavedConfigOmitsRemovedV2Keys(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("AGENT_LEDGER_DATA_DIR", dataDir)
-
-	legacy := strings.Join([]string{
-		"[database]",
-		`path = "agent-ledger.db"`,
-		"",
-		"[agents.claude]",
-		"enabled = false",
-	}, "\n")
-	if err := os.WriteFile(ConfigPath(), []byte(legacy), 0o600); err != nil {
-		t.Fatalf("write legacy config: %v", err)
+	cfg := Default()
+	cfg.Reports.PricingPath = "~/pricing.json"
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
 	}
-
-	cfg, err := LoadReadOnly()
+	data, err := os.ReadFile(ConfigPath())
 	if err != nil {
-		t.Fatalf("load legacy config: %v", err)
+		t.Fatal(err)
 	}
-	if !cfg.Agents.WorkBuddy.Enabled {
-		t.Fatal("expected missing WorkBuddy config to retain enabled default")
+	text := string(data)
+	for _, removed := range []string{"[cleanup]", "single_thread", "currency", "mode =", "envelope"} {
+		if strings.Contains(text, removed) {
+			t.Errorf("saved v3 config contains removed key %q:\n%s", removed, text)
+		}
 	}
-	if len(cfg.Agents.WorkBuddy.Paths) != 1 || cfg.Agents.WorkBuddy.Paths[0] != "~/.workbuddy/projects" {
-		t.Fatalf("unexpected WorkBuddy defaults: %+v", cfg.Agents.WorkBuddy)
-	}
-	if cfg.Agents.Claude.Enabled {
-		t.Fatal("expected explicit legacy Claude setting to remain disabled")
+	for _, required := range []string{"redact_paths_on_export", "gracing_minutes", "timezone", "pricing_path"} {
+		if !strings.Contains(text, required) {
+			t.Errorf("saved v3 config missing %q", required)
+		}
 	}
 }
 
-func TestValidateUsageEvidenceWritePolicy(t *testing.T) {
-	if got := Default().Privacy.Mode; got != PrivacyModeStatistics {
-		t.Fatalf("default privacy mode = %q, want %q", got, PrivacyModeStatistics)
+func TestLoadReadOnlyDoesNotCreateConfig(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENT_LEDGER_DATA_DIR", dataDir)
+	if _, err := LoadReadOnly(); err != nil {
+		t.Fatal(err)
 	}
-
-	tests := []struct {
-		name    string
-		mode    string
-		wantErr bool
-	}{
-		{name: "statistics", mode: PrivacyModeStatistics},
-		{name: "legacy envelope alias", mode: PrivacyModeEnvelope},
-		{name: "full", mode: "full", wantErr: true},
-		{name: "none", mode: "none", wantErr: true},
-		{name: "empty", mode: "", wantErr: true},
-		{name: "case variant", mode: "Envelope", wantErr: true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := Default()
-			cfg.Privacy.Mode = tt.mode
-			err := cfg.ValidateUsageEvidenceWritePolicy()
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("ValidateUsageEvidenceWritePolicy() error = %v, wantErr %v", err, tt.wantErr)
-			}
-		})
+	if _, err := os.Stat(ConfigPath()); !os.IsNotExist(err) {
+		t.Fatalf("LoadReadOnly created config: %v", err)
 	}
 }

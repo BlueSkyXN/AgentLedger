@@ -29,10 +29,6 @@ var importCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("failed to load config: %w", err)
 		}
-		if err := cfg.ValidateUsageEvidenceWritePolicy(); err != nil {
-			return err
-		}
-
 		database, err := db.Open(cfg.DBPath())
 		if err != nil {
 			return fmt.Errorf("failed to open database: %w", err)
@@ -52,7 +48,9 @@ var importCmd = &cobra.Command{
 		totalAdded := 0
 		totalUpdated := 0
 		totalSkipped := 0
+		totalRejected := 0
 		var warnings []string
+		var warningSourcePaths []string
 		importDiagnostics := map[string]adapters.ImportDiagnostic{}
 
 		allAdapters := adapters.AllAdapters()
@@ -70,6 +68,9 @@ var importCmd = &cobra.Command{
 				continue
 			}
 			adapter = configureImportAdapter(adapter, agentCfg)
+			for _, sourcePath := range agentCfg.Paths {
+				warningSourcePaths = append(warningSourcePaths, config.ExpandHome(sourcePath))
+			}
 
 			files, err := adapter.Discover(agentCfg.Paths)
 			if err != nil {
@@ -78,12 +79,14 @@ var importCmd = &cobra.Command{
 				fmt.Fprintf(os.Stderr, "Warning: %s\n", warning)
 				continue
 			}
+			warningSourcePaths = append(warningSourcePaths, files...)
 
 			result := importAdapterFiles(database, adapter, files, cutoff)
 			totalFiles += result.files
 			totalAdded += result.added
 			totalUpdated += result.updated
 			totalSkipped += result.skipped
+			totalRejected += result.rejected
 			warnings = append(warnings, result.warnings...)
 			collectImportDiagnostics(importDiagnostics, adapter)
 		}
@@ -92,9 +95,9 @@ var importCmd = &cobra.Command{
 		errorSummary := ""
 		if len(warnings) > 0 {
 			status = "completed_with_warnings"
-			errorSummary = summarizeImportWarnings(warnings)
+			errorSummary = summarizeImportWarnings(sanitizeImportWarnings(warnings, warningSourcePaths))
 		}
-		if err := database.FinishImportRunWithStatus(runID, totalFiles, totalAdded, totalUpdated, totalSkipped, status, errorSummary); err != nil {
+		if err := database.FinishImportRunWithStatus(runID, totalFiles, totalAdded, totalUpdated, totalSkipped, totalRejected, status, errorSummary); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: failed to record import run finish: %v\n", err)
 		}
 
@@ -103,6 +106,7 @@ var importCmd = &cobra.Command{
 		fmt.Printf("  Events added:    %d\n", totalAdded)
 		fmt.Printf("  Events updated:  %d\n", totalUpdated)
 		fmt.Printf("  Events skipped:  %d (duplicates)\n", totalSkipped)
+		fmt.Printf("  Events rejected: %d\n", totalRejected)
 		printImportDiagnostics(importDiagnostics)
 		if len(warnings) > 0 {
 			fmt.Printf("  Warnings:        %d\n", len(warnings))
@@ -116,6 +120,7 @@ type importAdapterResult struct {
 	added    int
 	updated  int
 	skipped  int
+	rejected int
 	warnings []string
 }
 
@@ -146,10 +151,11 @@ func importAdapterFiles(database *db.Database, adapter adapters.Adapter, files [
 			records = append(records, parsed...)
 		}
 		records = postProcessor.PostProcessRecords(records)
-		added, updated, skipped, recordWarnings := importParsedRecords(database, adapter.Name(), records)
+		added, updated, skipped, rejected, recordWarnings := importParsedRecords(database, adapter.Name(), records)
 		result.added += added
 		result.updated += updated
 		result.skipped += skipped
+		result.rejected += rejected
 		result.warnings = append(result.warnings, recordWarnings...)
 		return result
 	}
@@ -163,10 +169,11 @@ func importAdapterFiles(database *db.Database, adapter adapters.Adapter, files [
 			continue
 		}
 		result.files++
-		added, updated, skipped, recordWarnings := importParsedRecords(database, adapter.Name(), records)
+		added, updated, skipped, rejected, recordWarnings := importParsedRecords(database, adapter.Name(), records)
 		result.added += added
 		result.updated += updated
 		result.skipped += skipped
+		result.rejected += rejected
 		result.warnings = append(result.warnings, recordWarnings...)
 	}
 	return result
@@ -244,6 +251,9 @@ func sanitizeImportError(err error, sourcePaths []string) string {
 	message := err.Error()
 	replacements := make([]string, 0, len(sourcePaths)*2)
 	for _, path := range sourcePaths {
+		if strings.TrimSpace(path) == "" {
+			continue
+		}
 		replacements = append(replacements, path)
 		if canonical, canonicalErr := filepath.Abs(filepath.Clean(path)); canonicalErr == nil {
 			replacements = append(replacements, canonical)
@@ -333,23 +343,25 @@ func recentFileIsStable(filePath string, before os.FileInfo) (bool, string) {
 	return before.Size() == after.Size() && before.ModTime().Equal(after.ModTime()), ""
 }
 
-func importParsedRecords(database *db.Database, adapterName string, records []*fingerprint.ParsedRecord) (int, int, int, []string) {
+func importParsedRecords(database *db.Database, adapterName string, records []*fingerprint.ParsedRecord) (int, int, int, int, []string) {
 	added := 0
 	updated := 0
 	skipped := 0
+	rejected := 0
 	var warnings []string
 	for _, rec := range records {
-		fp, strategy := fingerprint.Compute(rec)
-		nowMs := time.Now().UnixMilli()
-
 		normalized, modelProvider, _ := adapters.NormalizeModelName(rec.Model)
 		if rec.ModelNormalized != "" {
 			normalized = rec.ModelNormalized
 		}
+		if strings.TrimSpace(normalized) == "" {
+			normalized = "unknown"
+		}
 		modelResolution := rec.ModelResolution
+		modelIsFallback := rec.ModelIsFallback || strings.EqualFold(strings.TrimSpace(normalized), "unknown")
 		if modelResolution == "" {
 			switch {
-			case rec.ModelIsFallback || strings.EqualFold(strings.TrimSpace(normalized), "unknown") || strings.TrimSpace(normalized) == "":
+			case modelIsFallback:
 				modelResolution = model.ModelResolutionUnknown
 			default:
 				modelResolution = model.ModelResolutionDirectEvent
@@ -359,42 +371,75 @@ func importParsedRecords(database *db.Database, adapterName string, records []*f
 		if provider == "" || provider == "unknown" {
 			provider = modelProvider
 		}
-		sourceAgent := rec.Agent
-		if sourceAgent == "" {
-			sourceAgent = adapterName
+		channel := rec.Agent
+		if channel == "" {
+			channel = adapterName
 		}
 		observability := rec.ObservabilityLevel
 		if observability == "" {
-			observability = defaultObservability(sourceAgent)
+			observability = defaultObservability(channel)
 		}
 		accountingMethod := rec.TokenAccountingMethod
 		if accountingMethod == "" {
-			accountingMethod = defaultAccountingMethod(sourceAgent)
+			accountingMethod = defaultAccountingMethod(channel)
 		}
 		sourceProduct := rec.SourceProduct
 		if sourceProduct == "" {
-			sourceProduct = sourceProductForAgent(sourceAgent)
+			sourceProduct = sourceProductForAgent(channel)
 		}
+		identityScope := normalizeIdentityScope(rec.IdentityScope)
+
+		// Identity content must be computed from the same normalized facts that
+		// are persisted. Adapters may intentionally leave a derived total unset.
+		rec.Agent = channel
+		rec.SourceProduct = sourceProduct
+		rec.Provider = provider
+		rec.ModelNormalized = normalized
+		rec.ModelResolution = modelResolution
+		rec.ModelIsFallback = modelIsFallback
+		rec.TokenAccountingMethod = accountingMethod
+		rec.ObservabilityLevel = observability
+		rec.IdentityScope = identityScope
+		if rec.TotalTokens == 0 {
+			rec.TotalTokens = totalForAccountingProfile(&model.UsageEvent{
+				InputTokens: rec.InputTokens, OutputTokens: rec.OutputTokens,
+				ReasoningTokens: rec.ReasoningTokens, CacheCreationTokens: rec.CacheCreationTokens,
+				CacheReadTokens: rec.CacheReadTokens, TokenAccountingMethod: accountingMethod,
+			})
+		}
+		sessionKey, eventID, strategy, contentSHA256, identityErr := fingerprint.ComputeIdentity(rec)
+		if identityErr != nil {
+			rejected++
+			warning := fmt.Sprintf("%s record rejected: %s", adapterName, fingerprint.IdentityErrorCode(identityErr))
+			warnings = append(warnings, warning)
+			fmt.Fprintf(os.Stderr, "Warning: %s\n", warning)
+			continue
+		}
+		nowMs := time.Now().UnixMilli()
 
 		event := &model.UsageEvent{
-			EventID:               fp,
-			DedupeKey:             fp,
-			DedupeStrategy:        string(strategy),
-			Channel:               sourceAgent,
+			EventID:               eventID,
+			IdentityVersion:       model.IdentityVersion,
+			IdentityStrategy:      string(strategy),
+			IdentityScope:         identityScope,
+			ContentSHA256:         contentSHA256,
+			ParserVersion:         rec.ParserVersion,
+			EventGranularity:      rec.Granularity,
+			Channel:               channel,
+			SourceProduct:         sourceProduct,
 			Provider:              provider,
 			ModelRaw:              rec.Model,
 			ModelNormalized:       normalized,
 			ModelResolution:       modelResolution,
-			SourceAgent:           sourceAgent,
-			SourceProduct:         sourceProduct,
 			ObservabilityLevel:    observability,
-			ModelIsFallback:       rec.ModelIsFallback,
+			ModelIsFallback:       modelIsFallback,
 			SourceTotalTokens:     rec.SourceTotalTokens,
 			RawInputTokens:        rec.RawInputTokens,
 			TokenAccountingMethod: accountingMethod,
 			AccountingProfile:     rec.AccountingProfile,
 			TimestampMs:           rec.TimestampMs,
-			SessionID:             rec.SessionID,
+			SessionKey:            sessionKey,
+			SessionID:             firstNonEmpty(rec.NativeSessionID, rec.SessionID),
 			SessionPathID:         rec.SessionPathID,
 			TurnID:                rec.TurnID,
 			ProjectPath:           rec.ProjectPath,
@@ -409,34 +454,36 @@ func importParsedRecords(database *db.Database, adapterName string, records []*f
 			CacheReadTokens:       rec.CacheReadTokens,
 			ReasoningTokens:       rec.ReasoningTokens,
 			TotalTokens:           rec.TotalTokens,
-			RequestCount:          rec.RequestCount,
-			RecordedCostUSD:       rec.CostUSD,
 			ImportedAtMs:          nowMs,
 			UpdatedAtMs:           nowMs,
 		}
 
-		if event.TotalTokens == 0 {
-			event.TotalTokens = event.TotalTokensComputed()
-		}
-		applyTimingFields(event, rec)
-
 		result, err := database.UpsertEvent(event)
 		if err != nil {
-			warning := fmt.Sprintf("insert error for %s:%d: %v", rec.SourceFile, rec.LineNumber, err)
+			if db.IsRejectError(err) || result == db.ReconcileRejected {
+				rejected++
+				warning := fmt.Sprintf("%s record rejected: %v", adapterName, err)
+				warnings = append(warnings, warning)
+				fmt.Fprintf(os.Stderr, "Warning: %s\n", warning)
+				continue
+			}
+			warning := fmt.Sprintf("%s database write failed: %v", adapterName, err)
 			warnings = append(warnings, warning)
 			fmt.Fprintf(os.Stderr, "Warning: %s\n", warning)
 			continue
 		}
 		switch result {
-		case "inserted":
+		case db.ReconcileInserted:
 			added++
-		case "updated":
+		case db.ReconcileUpdated:
 			updated++
+		case db.ReconcileRejected:
+			rejected++
 		default:
 			skipped++
 		}
 	}
-	return added, updated, skipped, warnings
+	return added, updated, skipped, rejected, warnings
 }
 
 func configureImportAdapter(adapter adapters.Adapter, agentCfg *config.AgentConfig) adapters.Adapter {
@@ -456,6 +503,8 @@ func sourceProductForAgent(agent string) string {
 		return "codex-cli"
 	case "copilot":
 		return "copilot-otel"
+	case "gemini":
+		return "gemini-cli"
 	case "workbuddy":
 		return "workbuddy"
 	default:
@@ -501,63 +550,46 @@ func summarizeImportWarnings(warnings []string) string {
 	return summary
 }
 
-func applyTimingFields(event *model.UsageEvent, rec *fingerprint.ParsedRecord) {
-	event.RequestStartedAtMs = positiveInt64Ptr(rec.RequestStartedAtMs)
-	event.FirstTokenAtMs = positiveInt64Ptr(rec.FirstTokenAtMs)
-	event.CompletedAtMs = positiveInt64Ptr(rec.CompletedAtMs)
-	event.TotalDurationMs = positiveInt64Ptr(rec.TotalDurationMs)
-	event.TTFTMs = positiveInt64Ptr(rec.TTFTMs)
-	event.OutputDurationMs = positiveInt64Ptr(rec.OutputDurationMs)
+func sanitizeImportWarnings(warnings, sourcePaths []string) []string {
+	sanitized := make([]string, 0, len(warnings))
+	for _, warning := range warnings {
+		sanitized = append(sanitized, sanitizeImportError(errors.New(warning), sourcePaths))
+	}
+	return sanitized
+}
 
-	if event.TTFTMs == nil && event.RequestStartedAtMs != nil && event.FirstTokenAtMs != nil {
-		if value := *event.FirstTokenAtMs - *event.RequestStartedAtMs; value >= 0 {
-			event.TTFTMs = &value
-		}
-	}
-	if event.OutputDurationMs == nil && event.FirstTokenAtMs != nil && event.CompletedAtMs != nil {
-		if value := *event.CompletedAtMs - *event.FirstTokenAtMs; value > 0 {
-			event.OutputDurationMs = &value
-		}
-	}
-	if event.TotalDurationMs == nil && event.RequestStartedAtMs != nil && event.CompletedAtMs != nil {
-		if value := *event.CompletedAtMs - *event.RequestStartedAtMs; value >= 0 {
-			event.TotalDurationMs = &value
-		}
-	}
-	if event.RequestStartedAtMs == nil && event.CompletedAtMs != nil && event.TotalDurationMs != nil {
-		if value := *event.CompletedAtMs - *event.TotalDurationMs; value > 0 {
-			event.RequestStartedAtMs = &value
-		}
-	}
-	if event.FirstTokenAtMs == nil && event.RequestStartedAtMs != nil && event.TTFTMs != nil {
-		if value := *event.RequestStartedAtMs + *event.TTFTMs; value > 0 {
-			event.FirstTokenAtMs = &value
-		}
-	}
-	if event.CompletedAtMs == nil && event.RequestStartedAtMs != nil && event.TotalDurationMs != nil {
-		if value := *event.RequestStartedAtMs + *event.TotalDurationMs; value > 0 {
-			event.CompletedAtMs = &value
-		}
-	}
-	if event.OutputDurationMs == nil && event.TotalDurationMs != nil && event.TTFTMs != nil {
-		if value := *event.TotalDurationMs - *event.TTFTMs; value > 0 {
-			event.OutputDurationMs = &value
-		}
-	}
-	if event.OutputDurationMs == nil && event.FirstTokenAtMs != nil && event.CompletedAtMs != nil {
-		if value := *event.CompletedAtMs - *event.FirstTokenAtMs; value > 0 {
-			event.OutputDurationMs = &value
-		}
-	}
-	if event.OutputTPS == nil && event.OutputDurationMs != nil && *event.OutputDurationMs > 0 && event.OutputTokens > 0 {
-		value := float64(event.OutputTokens) / (float64(*event.OutputDurationMs) / 1000.0)
-		event.OutputTPS = &value
+func totalForAccountingProfile(event *model.UsageEvent) int64 {
+	switch event.TokenAccountingMethod {
+	case model.AccCodexLastTokenUsage, model.AccCodexTotalDelta, model.AccCodexHeadlessUsage:
+		return event.InputTokens + event.CacheCreationTokens + event.CacheReadTokens + maxInt64(event.OutputTokens, event.ReasoningTokens)
+	case model.AccWorkBuddyRawUsage:
+		return event.InputTokens + event.OutputTokens + event.CacheCreationTokens + event.CacheReadTokens
+	default:
+		return event.InputTokens + event.OutputTokens + event.ReasoningTokens + event.CacheCreationTokens + event.CacheReadTokens
 	}
 }
 
-func positiveInt64Ptr(value int64) *int64 {
-	if value <= 0 {
-		return nil
+func maxInt64(left, right int64) int64 {
+	if left > right {
+		return left
 	}
-	return &value
+	return right
+}
+
+func normalizeIdentityScope(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "global", "source", "account":
+		return "global"
+	default:
+		return "session"
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }

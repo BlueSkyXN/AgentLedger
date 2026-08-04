@@ -2,11 +2,13 @@ package adapters
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/BlueSkyXN/AgentLedger/internal/fingerprint"
 	"github.com/BlueSkyXN/AgentLedger/internal/model"
 )
 
@@ -31,7 +33,7 @@ func TestWorkBuddyAdapterParsesUsageWithPrivacyEnvelope(t *testing.T) {
 	if rec.Model != "deepseek-v4-pro-202606" || rec.ModelNormalized != "deepseek-v4-pro" {
 		t.Fatalf("unexpected model raw=%q normalized=%q", rec.Model, rec.ModelNormalized)
 	}
-	if rec.DedupeID != "req-1" || rec.RequestID != "req-1" || rec.MessageID != "message-1" || rec.TurnID != "turn-1" || rec.SessionID != "session-1" || rec.ProjectPath != "/private/project" {
+	if rec.NativeEventID != "req-1" || rec.RequestID != "req-1" || rec.MessageID != "message-1" || rec.TurnID != "turn-1" || rec.SessionID != "session-1" || rec.ProjectPath != "/private/project" {
 		t.Fatalf("unexpected identity fields: %#v", rec)
 	}
 	if rec.InputTokens != 50 || rec.CacheReadTokens != 30 || rec.CacheCreationTokens != 20 || rec.OutputTokens != 40 || rec.ReasoningTokens != 7 || rec.TotalTokens != 140 {
@@ -43,9 +45,6 @@ func TestWorkBuddyAdapterParsesUsageWithPrivacyEnvelope(t *testing.T) {
 	if rec.ObservabilityLevel != "full" || rec.TokenAccountingMethod != model.AccWorkBuddyRawUsage || rec.AccountingProfile != workBuddyAccountingProfile {
 		t.Fatalf("unexpected accounting metadata: observability=%q method=%q profile=%q", rec.ObservabilityLevel, rec.TokenAccountingMethod, rec.AccountingProfile)
 	}
-	if rec.CostUSD != nil {
-		t.Fatalf("credit must not become recorded USD cost: %v", rec.CostUSD)
-	}
 	assertWorkBuddyEnvelopeIsPrivate(t, rec.FingerprintJSON)
 
 	var envelope map[string]interface{}
@@ -54,6 +53,36 @@ func TestWorkBuddyAdapterParsesUsageWithPrivacyEnvelope(t *testing.T) {
 	}
 	if envelope["route_kind"] != "custom-local" || envelope["usage_model"] != "deepseek-v4-pro-202606" || envelope["cached_tokens"] != float64(30) || envelope["cache_write_tokens"] != float64(20) || envelope["reasoning_tokens"] != float64(7) {
 		t.Fatalf("unexpected fingerprint envelope: %#v", envelope)
+	}
+}
+
+func TestWorkBuddyRootIdentityIgnoresSupplementalMessageMetadata(t *testing.T) {
+	dir := t.TempDir()
+	lines := []string{
+		`{"id":"req-1","timestamp":1710000000000,"sessionId":"session-1","cwd":"/project","providerData":{"model":"deepseek-v4-pro","usage":{"requests":1},"rawUsage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}}`,
+		`{"id":"req-1","timestamp":1710000000000,"sessionId":"session-1","cwd":"/project","providerData":{"messageId":"message-later","conversationRequestId":"turn-later","model":"deepseek-v4-pro","usage":{"requests":1},"rawUsage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}}`,
+	}
+	var eventIDs []string
+	for index, line := range lines {
+		path := filepath.Join(dir, fmt.Sprintf("fixture-%d.jsonl", index))
+		if err := os.WriteFile(path, []byte(line), 0o644); err != nil {
+			t.Fatalf("write fixture: %v", err)
+		}
+		records, err := NewWorkBuddyAdapter().ParseFile(path)
+		if err != nil || len(records) != 1 {
+			t.Fatalf("parse fixture %d: records=%d err=%v", index, len(records), err)
+		}
+		if records[0].IdentitySubkey != "" {
+			t.Fatalf("root request id must not be qualified by supplemental metadata: %q", records[0].IdentitySubkey)
+		}
+		_, eventID, _, _, err := fingerprint.ComputeIdentity(records[0])
+		if err != nil {
+			t.Fatalf("compute identity: %v", err)
+		}
+		eventIDs = append(eventIDs, eventID)
+	}
+	if eventIDs[0] != eventIDs[1] {
+		t.Fatalf("supplemental message metadata changed root identity: %q != %q", eventIDs[0], eventIDs[1])
 	}
 }
 
@@ -103,13 +132,13 @@ func TestWorkBuddyAdapterSkipsInvalidUsage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseFile: %v", err)
 	}
-	if len(records) != 1 || records[0].DedupeID != "valid" || records[0].ModelNormalized != "hy3" {
+	if len(records) != 1 || records[0].NativeEventID != "valid" || records[0].ModelNormalized != "hy3" {
 		t.Fatalf("invalid records should be skipped and later valid line retained: %#v", records)
 	}
 	if len(warnings) != 1 {
 		t.Fatalf("expected one aggregated diagnostic warning, got %#v", warnings)
 	}
-	for _, want := range []string{"skipped 8 invalid WorkBuddy line(s)", "invalid_json=1", "invalid_request_count=1", "invalid_token_details=2", "invalid_token_totals=2", "missing_required_fields=2", "line 1 invalid_json", "3 more"} {
+	for _, want := range []string{"skipped 8 invalid WorkBuddy line(s)", "invalid_json=1", "invalid_usage_multiplicity=1", "invalid_token_details=2", "invalid_token_totals=2", "missing_required_fields=2", "line 1 invalid_json", "3 more"} {
 		if !strings.Contains(warnings[0], want) {
 			t.Fatalf("warning missing %q: %s", want, warnings[0])
 		}
@@ -128,7 +157,7 @@ func TestWorkBuddyAdapterUsesRootIDRatherThanMessageIDForDedupe(t *testing.T) {
 	if len(records) != 2 {
 		t.Fatalf("shared message id must not collapse distinct root ids: %#v", records)
 	}
-	if records[0].DedupeID != "root-a" || records[1].DedupeID != "root-b" || records[0].MessageID != "shared-message" || records[1].TurnID != "shared-turn" {
+	if records[0].NativeEventID != "root-a" || records[1].NativeEventID != "root-b" || records[0].MessageID != "shared-message" || records[1].TurnID != "shared-turn" {
 		t.Fatalf("unexpected identity mapping: %#v", records)
 	}
 }
@@ -202,7 +231,7 @@ func TestWorkBuddyLiveCorpus(t *testing.T) {
 			if rec.Model == "auto" && rec.ModelNormalized == "unknown" {
 				auto++
 			}
-			if rec.Agent != "workbuddy" || rec.SourceProduct != "workbuddy" || rec.DedupeID == "" || rec.ProjectPath == "" || rec.TotalTokens <= 0 {
+			if rec.Agent != "workbuddy" || rec.SourceProduct != "workbuddy" || rec.NativeEventID == "" || rec.ProjectPath == "" || rec.TotalTokens <= 0 {
 				t.Fatalf("invalid live WorkBuddy record metadata")
 			}
 			assertWorkBuddyEnvelopeIsPrivate(t, rec.FingerprintJSON)
