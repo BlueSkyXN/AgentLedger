@@ -42,6 +42,8 @@ export type MetricRow = {
   cache_creation_tokens: number;
   cache_read_tokens: number;
   reasoning_tokens: number;
+  estimated_cost_usd: number | null;
+  pricing: PricingSummary | null;
 };
 
 export type Health = {
@@ -55,7 +57,9 @@ export type Health = {
 export type Status = {
   database: string;
   schema_version: string;
+  identity_version: string;
   total_events: number;
+  total_sessions: number;
   total_import_runs: number;
   total_tokens: number;
 };
@@ -64,6 +68,7 @@ export type ConfigSnapshot = {
   config_path: string;
   database: { path: string };
   import: { gracing_minutes: number };
+  reports: { timezone: string; pricing_path: string };
   agents: Record<string, { enabled: boolean; paths: string[] }>;
   privacy_note: string;
 };
@@ -72,6 +77,8 @@ export type ImportRun = {
   id: string;
   started_at: string | null;
   finished_at: string | null;
+  started_at_ms: number;
+  finished_at_ms: number | null;
   status: string;
   files_scanned: number;
   events_added: number;
@@ -92,10 +99,6 @@ export type EventItem = {
   model_resolution: "direct_event" | "thread_settings" | "turn_context" | "unknown" | "legacy_unclassified" | null;
   timestamp: string | null;
   session_key: string | null;
-  session_id: string | null;
-  project_path: string | null;
-  message_id: string | null;
-  request_id: string | null;
   input_tokens: number;
   output_tokens: number;
   cache_creation_tokens: number;

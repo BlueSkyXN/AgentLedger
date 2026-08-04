@@ -8,7 +8,7 @@ export function ImportsPage() {
     <div className="page-stack">
       <section className="kpi-grid small">
         <article className="kpi-card"><span>导入运行</span><strong>{formatInt(status?.total_import_runs)}</strong></article>
-        <article className="kpi-card"><span>Schema</span><strong>v{status?.schema_version ?? "-"}</strong><small>v2 简化统计表</small></article>
+        <article className="kpi-card"><span>Schema</span><strong>v{status?.schema_version ?? "-"}</strong><small>identity v{status?.identity_version ?? "-"}</small></article>
       </section>
       <section className="panel">
         <h2>最近导入记录</h2>

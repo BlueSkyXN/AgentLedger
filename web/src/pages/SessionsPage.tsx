@@ -40,7 +40,7 @@ const eventColumns: Array<DataTableColumn<EventItem>> = [
   { key: "channel", label: "Channel", render: (row) => row.channel, value: (row) => row.channel },
   { key: "source_product", label: "来源", render: (row) => row.source_product || "-", value: (row) => row.source_product ?? "" },
   { key: "model", label: "模型", render: (row) => row.model_normalized ?? row.model_raw ?? "-", value: (row) => row.model_normalized ?? row.model_raw ?? "" },
-  { key: "session", label: "会话", render: (row) => <span className="mono">{shortHash(row.session_id ?? row.session_key)}</span>, value: (row) => row.session_key ?? "" },
+  { key: "session", label: "会话", render: (row) => <span className="mono">{shortHash(row.session_key)}</span>, value: (row) => row.session_key ?? "" },
   { key: "total_tokens", label: "Tokens", render: (row) => formatInt(row.total_tokens), value: (row) => row.total_tokens, numeric: true },
   { key: "input_tokens", label: "输入", render: (row) => formatInt(row.input_tokens), value: (row) => row.input_tokens, numeric: true },
   { key: "output_tokens", label: "输出", render: (row) => formatInt(row.output_tokens), value: (row) => row.output_tokens, numeric: true },

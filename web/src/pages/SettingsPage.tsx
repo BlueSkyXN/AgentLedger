@@ -13,6 +13,7 @@ export function SettingsPage() {
           <dl>
             <dt>版本</dt><dd>{health?.version ?? "-"}</dd>
             <dt>Schema</dt><dd>v{status?.schema_version ?? "-"}</dd>
+            <dt>Identity</dt><dd>v{status?.identity_version ?? "-"}</dd>
             <dt>前端资源</dt><dd>{health?.asset_mode ?? "-"}</dd>
             <dt>数据库</dt><dd className="mono">{health?.database ?? "-"}</dd>
             <dt>数据库大小</dt><dd>{formatInt(health?.database_bytes)} bytes</dd>
@@ -22,6 +23,7 @@ export function SettingsPage() {
           <h2>统计概况</h2>
           <dl>
             <dt>总事件</dt><dd>{formatInt(status?.total_events)}</dd>
+            <dt>总会话</dt><dd>{formatInt(status?.total_sessions)}</dd>
             <dt>总 Tokens</dt><dd>{formatInt(status?.total_tokens)}</dd>
             <dt>配置路径</dt><dd className="mono">{config?.config_path ?? "-"}</dd>
           </dl>

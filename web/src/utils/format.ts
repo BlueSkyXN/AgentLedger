@@ -6,6 +6,15 @@ export function formatCost(value: number | null | undefined): string {
   return value == null ? "-" : `$${value.toFixed(4)}`;
 }
 
+export function formatEstimatedCost(
+  value: number | null | undefined,
+  pricing: { status: string; priced_events: number; unpriced_events: number; policy_zero_events: number } | null | undefined,
+): string {
+  if (value == null || pricing?.status !== "available") return "不可用";
+  if (pricing.priced_events === 0 && pricing.unpriced_events > 0) return "不可用";
+  return formatCost(value);
+}
+
 export function formatPercent(value: number | null | undefined): string {
   return value == null ? "-" : `${(value * 100).toFixed(1)}%`;
 }

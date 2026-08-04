@@ -4,7 +4,7 @@ import type { MetricRow } from "@/api/types";
 import { Chart } from "@/components/Chart";
 import { DataTable, type DataTableColumn } from "@/components/DataTable";
 import { useBreakdown } from "@/hooks/queries";
-import { formatInt } from "@/utils/format";
+import { formatEstimatedCost, formatInt } from "@/utils/format";
 
 const sourceColumns: Array<DataTableColumn<MetricRow>> = [
   { key: "source_product", label: "来源", render: (row) => row.label, value: (row) => row.label },
@@ -15,6 +15,7 @@ const sourceColumns: Array<DataTableColumn<MetricRow>> = [
   { key: "cache_creation_tokens", label: "缓存写入", render: (row) => formatInt(row.cache_creation_tokens), value: (row) => row.cache_creation_tokens, numeric: true },
   { key: "cache_read_tokens", label: "缓存读取", render: (row) => formatInt(row.cache_read_tokens), value: (row) => row.cache_read_tokens, numeric: true },
   { key: "reasoning_tokens", label: "推理", render: (row) => formatInt(row.reasoning_tokens), value: (row) => row.reasoning_tokens, numeric: true },
+  { key: "estimated_cost_usd", label: "即时估算", render: (row) => formatEstimatedCost(row.estimated_cost_usd, row.pricing), value: (row) => row.estimated_cost_usd, numeric: true },
 ];
 
 export function SourcesPage() {

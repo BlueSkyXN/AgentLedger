@@ -1,5 +1,7 @@
 import { createContext, ReactNode, useContext, useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 
+import { api } from "@/api/client";
 import type { Filters } from "@/api/types";
 
 export type TimeRange = "all" | "24h" | "7d" | "30d" | "month" | "last_month" | "custom";
@@ -44,36 +46,40 @@ type FilterContextValue = {
 const STORAGE_KEY = "agent-ledger-filters";
 const FilterContext = createContext<FilterContextValue | null>(null);
 
-function dateInput(value: Date): string {
-  const year = value.getFullYear();
-  const month = String(value.getMonth() + 1).padStart(2, "0");
-  const day = String(value.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
+type CalendarDate = { year: number; month: number; day: number };
+
+function formatCalendarDate(value: CalendarDate): string {
+  return `${value.year}-${String(value.month).padStart(2, "0")}-${String(value.day).padStart(2, "0")}`;
 }
 
-function shiftDays(days: number): string {
-  const date = new Date();
-  date.setDate(date.getDate() + days);
-  return dateInput(date);
+function calendarDateAt(value: Date, timezone: string): CalendarDate {
+  try {
+    const options: Intl.DateTimeFormatOptions = { year: "numeric", month: "2-digit", day: "2-digit" };
+    if (timezone && timezone !== "Local") options.timeZone = timezone;
+    const parts = new Intl.DateTimeFormat("en-US-u-ca-iso8601", options).formatToParts(value);
+    const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+    return { year: Number(values.year), month: Number(values.month), day: Number(values.day) };
+  } catch (_) {
+    return { year: value.getFullYear(), month: value.getMonth() + 1, day: value.getDate() };
+  }
 }
 
-function shiftHoursISO(hours: number): string {
-  const date = new Date();
-  date.setHours(date.getHours() + hours);
-  return date.toISOString();
+function shiftCalendarDays(value: CalendarDate, days: number): CalendarDate {
+  const shifted = new Date(Date.UTC(value.year, value.month - 1, value.day + days));
+  return { year: shifted.getUTCFullYear(), month: shifted.getUTCMonth() + 1, day: shifted.getUTCDate() };
 }
 
-function monthStart(): string {
-  const date = new Date();
-  date.setDate(1);
-  return dateInput(date);
+function shiftHoursISO(value: Date, hours: number): string {
+  return new Date(value.getTime() + hours * 60 * 60 * 1000).toISOString();
 }
 
-function lastMonthRange(): { since: string; until: string } {
-  const now = new Date();
-  const start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-  const end = new Date(now.getFullYear(), now.getMonth(), 0);
-  return { since: dateInput(start), until: dateInput(end) };
+function lastMonthRange(today: CalendarDate): { since: string; until: string } {
+  const start = new Date(Date.UTC(today.year, today.month - 2, 1));
+  const end = new Date(Date.UTC(today.year, today.month - 1, 0));
+  return {
+    since: formatCalendarDate({ year: start.getUTCFullYear(), month: start.getUTCMonth() + 1, day: start.getUTCDate() }),
+    until: formatCalendarDate({ year: end.getUTCFullYear(), month: end.getUTCMonth() + 1, day: end.getUTCDate() }),
+  };
 }
 
 function readInitialState(): StoredFilterState {
@@ -100,18 +106,20 @@ function readInitialState(): StoredFilterState {
   }
 }
 
-function buildDateRange(range: TimeRange, customSince: string, customUntil: string): { since: string; until: string } {
+function buildDateRange(range: TimeRange, customSince: string, customUntil: string, timezone: string): { since: string; until: string } {
+  const now = new Date();
+  const today = calendarDateAt(now, timezone);
   switch (range) {
     case "24h":
-      return { since: shiftHoursISO(-24), until: shiftHoursISO(0) };
+      return { since: shiftHoursISO(now, -24), until: shiftHoursISO(now, 0) };
     case "7d":
-      return { since: shiftDays(-6), until: shiftDays(0) };
+      return { since: formatCalendarDate(shiftCalendarDays(today, -6)), until: formatCalendarDate(today) };
     case "30d":
-      return { since: shiftDays(-29), until: shiftDays(0) };
+      return { since: formatCalendarDate(shiftCalendarDays(today, -29)), until: formatCalendarDate(today) };
     case "month":
-      return { since: monthStart(), until: shiftDays(0) };
+      return { since: formatCalendarDate({ ...today, day: 1 }), until: formatCalendarDate(today) };
     case "last_month":
-      return lastMonthRange();
+      return lastMonthRange(today);
     case "custom":
       return { since: customSince, until: customUntil };
     case "all":
@@ -122,9 +130,11 @@ function buildDateRange(range: TimeRange, customSince: string, customUntil: stri
 
 export function FilterProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<StoredFilterState>(readInitialState);
+  const { data: config } = useQuery({ queryKey: ["config"], queryFn: api.config });
+  const reportTimezone = config?.reports.timezone || "Local";
   const { since: activeSince, until: activeUntil } = useMemo(
-    () => buildDateRange(state.range, state.customSince, state.customUntil),
-    [state.range, state.customSince, state.customUntil]
+    () => buildDateRange(state.range, state.customSince, state.customUntil, reportTimezone),
+    [reportTimezone, state.range, state.customSince, state.customUntil]
   );
   const filters = useMemo(() => ({
     since: activeSince,

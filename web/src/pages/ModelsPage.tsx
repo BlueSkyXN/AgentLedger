@@ -4,7 +4,7 @@ import { Chart } from "@/components/Chart";
 import { DataTable, type DataTableColumn } from "@/components/DataTable";
 import type { MetricRow } from "@/api/types";
 import { useBreakdown } from "@/hooks/queries";
-import { formatInt } from "@/utils/format";
+import { formatEstimatedCost, formatInt } from "@/utils/format";
 
 const modelColumns: Array<DataTableColumn<MetricRow>> = [
   { key: "model", label: "模型", render: (row) => row.label, value: (row) => row.label },
@@ -15,6 +15,7 @@ const modelColumns: Array<DataTableColumn<MetricRow>> = [
   { key: "cache_creation_tokens", label: "缓存写入", render: (row) => formatInt(row.cache_creation_tokens), value: (row) => row.cache_creation_tokens, numeric: true },
   { key: "cache_read_tokens", label: "缓存读取", render: (row) => formatInt(row.cache_read_tokens), value: (row) => row.cache_read_tokens, numeric: true },
   { key: "reasoning_tokens", label: "推理", render: (row) => formatInt(row.reasoning_tokens), value: (row) => row.reasoning_tokens, numeric: true },
+  { key: "estimated_cost_usd", label: "即时估算", render: (row) => formatEstimatedCost(row.estimated_cost_usd, row.pricing), value: (row) => row.estimated_cost_usd, numeric: true },
 ];
 
 export function ModelsPage() {
@@ -49,7 +50,7 @@ export function ModelsPage() {
         </div>
       </section>
       <section className="panel">
-        <h2>模型明细</h2>
+        <h2>模型明细</h2><p className="panel-subtitle">成本按当前 pricing profile 即时估算；缺价不会伪造为 0。</p>
         <DataTable rows={models ?? []} columns={modelColumns} rowKey={(row) => row.label} emptyText="暂无模型数据" defaultSortKey="total_tokens" />
       </section>
     </div>
