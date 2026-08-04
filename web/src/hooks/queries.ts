@@ -29,26 +29,21 @@ export function useTimeseries(bucket: "daily" | "weekly" | "monthly") {
   return useQuery({ queryKey: ["timeseries", bucket, filters], queryFn: () => api.timeseries(bucket, filters) });
 }
 
-export function useBreakdown(by: "channel" | "model" | "provider" | "session" | "project") {
+export function useBreakdown(by: "channel" | "source_product" | "model" | "provider" | "session" | "project") {
   const { filters } = useFilterContext();
   return useQuery({ queryKey: ["breakdown", by, filters], queryFn: () => api.breakdown(by, filters) });
 }
 
-export function useSlow(sort: "output_tps" | "ttft_ms" | "total_duration_ms", limit = 50) {
+export function useSessions(limit = 50, offset = 0) {
   const { filters } = useFilterContext();
-  return useQuery({ queryKey: ["slow", sort, filters, limit], queryFn: () => api.slow(sort, filters, limit) });
-}
-
-export function useSessions(limit = 50) {
-  const { filters } = useFilterContext();
-  return useQuery({ queryKey: ["sessions", filters, limit], queryFn: () => api.sessions(filters, limit) });
+  return useQuery({ queryKey: ["sessions", filters, limit, offset], queryFn: () => api.sessions(filters, limit, offset) });
 }
 
 export function useImportRuns(limit = 20) {
   return useQuery({ queryKey: ["import-runs", limit], queryFn: () => api.importRuns(limit) });
 }
 
-export function useEvents(limit = 200) {
+export function useEvents(limit = 200, offset = 0) {
   const { filters } = useFilterContext();
-  return useQuery({ queryKey: ["events", filters, limit], queryFn: () => api.events(filters, limit) });
+  return useQuery({ queryKey: ["events", filters, limit, offset], queryFn: () => api.events(filters, limit, offset) });
 }

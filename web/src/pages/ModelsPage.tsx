@@ -4,25 +4,7 @@ import { Chart } from "@/components/Chart";
 import { DataTable, type DataTableColumn } from "@/components/DataTable";
 import type { MetricRow } from "@/api/types";
 import { useBreakdown } from "@/hooks/queries";
-import { formatCost, formatInt, formatMs, formatPercent, formatTPS } from "@/utils/format";
-
-function pricingStatus(row: MetricRow) {
-  const pricing = row.pricing;
-  if ((pricing?.policy_zero_models?.length ?? 0) > 0) {
-    return "模型未识别（零值政策）";
-  }
-  const reasons = new Set((pricing?.missing_models ?? []).map((item) => item.reason));
-  if (reasons.has("missing_model")) {
-    return "模型未识别";
-  }
-  if (reasons.has("missing_pricing_rule")) {
-    return (pricing?.priced_events ?? 0) > 0 ? "部分缺价" : "已识别，缺价";
-  }
-  if (pricing != null && pricing.priced_events > 0 && row.estimated_cost_usd === 0) {
-    return "已计价（$0）";
-  }
-  return pricing == null ? "无计价数据" : "已计价";
-}
+import { formatInt } from "@/utils/format";
 
 const modelColumns: Array<DataTableColumn<MetricRow>> = [
   { key: "model", label: "模型", render: (row) => row.label, value: (row) => row.label },
@@ -33,11 +15,6 @@ const modelColumns: Array<DataTableColumn<MetricRow>> = [
   { key: "cache_creation_tokens", label: "缓存写入", render: (row) => formatInt(row.cache_creation_tokens), value: (row) => row.cache_creation_tokens, numeric: true },
   { key: "cache_read_tokens", label: "缓存读取", render: (row) => formatInt(row.cache_read_tokens), value: (row) => row.cache_read_tokens, numeric: true },
   { key: "reasoning_tokens", label: "推理", render: (row) => formatInt(row.reasoning_tokens), value: (row) => row.reasoning_tokens, numeric: true },
-  { key: "avg_output_tps", label: "平均 TPS", render: (row) => formatTPS(row.avg_output_tps), value: (row) => row.avg_output_tps, numeric: true },
-  { key: "avg_ttft_ms", label: "平均 TTFT", render: (row) => formatMs(row.avg_ttft_ms), value: (row) => row.avg_ttft_ms, numeric: true },
-  { key: "cost", label: "成本", render: (row) => formatCost(row.estimated_cost_usd), value: (row) => row.estimated_cost_usd, numeric: true },
-  { key: "coverage", label: "覆盖率", render: (row) => formatPercent(row.pricing?.token_coverage_ratio ?? row.pricing?.coverage_ratio), value: (row) => row.pricing?.token_coverage_ratio ?? row.pricing?.coverage_ratio, numeric: true },
-  { key: "pricing_status", label: "计价状态", render: pricingStatus, value: pricingStatus },
 ];
 
 export function ModelsPage() {

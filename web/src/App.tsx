@@ -8,8 +8,9 @@ const OverviewPage = lazy(() => import("@/pages/OverviewPage").then((module) => 
 const TrendsPage = lazy(() => import("@/pages/TrendsPage").then((module) => ({ default: module.TrendsPage })));
 const ModelsPage = lazy(() => import("@/pages/ModelsPage").then((module) => ({ default: module.ModelsPage })));
 const AgentsPage = lazy(() => import("@/pages/AgentsPage").then((module) => ({ default: module.AgentsPage })));
+const SourcesPage = lazy(() => import("@/pages/SourcesPage").then((module) => ({ default: module.SourcesPage })));
+const ProjectsPage = lazy(() => import("@/pages/ProjectsPage").then((module) => ({ default: module.ProjectsPage })));
 const SessionsPage = lazy(() => import("@/pages/SessionsPage").then((module) => ({ default: module.SessionsPage })));
-const SlowPage = lazy(() => import("@/pages/SlowPage").then((module) => ({ default: module.SlowPage })));
 const ImportsPage = lazy(() => import("@/pages/ImportsPage").then((module) => ({ default: module.ImportsPage })));
 const SettingsPage = lazy(() => import("@/pages/SettingsPage").then((module) => ({ default: module.SettingsPage })));
 
@@ -18,8 +19,9 @@ const routes = {
   "/trends": TrendsPage,
   "/models": ModelsPage,
   "/agents": AgentsPage,
+  "/sources": SourcesPage,
+  "/projects": ProjectsPage,
   "/sessions": SessionsPage,
-  "/slow": SlowPage,
   "/imports": ImportsPage,
   "/settings": SettingsPage,
 } as const;

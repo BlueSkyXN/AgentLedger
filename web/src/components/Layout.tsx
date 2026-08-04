@@ -8,8 +8,9 @@ const links = [
   { to: "/trends", label: "趋势" },
   { to: "/models", label: "模型" },
   { to: "/agents", label: "渠道" },
+  { to: "/sources", label: "来源" },
+  { to: "/projects", label: "项目" },
   { to: "/sessions", label: "会话" },
-  { to: "/slow", label: "慢请求" },
   { to: "/imports", label: "导入" },
   { to: "/settings", label: "设置" },
 ];

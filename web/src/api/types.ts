@@ -2,36 +2,11 @@ export type Filters = {
   since?: string;
   until?: string;
   channel?: string;
+  source_product?: string;
   provider?: string;
   model?: string;
   session?: string;
   project?: string;
-};
-
-export type PricingIssue = {
-  provider: string;
-  channel: string;
-  model: string;
-  reason: string;
-  events: number;
-  tokens: number;
-};
-
-export type PricingCoverage = {
-  profile_id: string;
-  currency: string;
-  priced_events: number;
-  total_events: number;
-  priced_tokens: number;
-  total_tokens: number;
-  event_coverage_ratio?: number;
-  token_coverage_ratio?: number;
-  coverage_ratio: number;
-  confidence: string;
-  missing_models?: PricingIssue[];
-  policy_zero_events?: number;
-  policy_zero_tokens?: number;
-  policy_zero_models?: PricingIssue[];
 };
 
 export type Summary = {
@@ -43,15 +18,8 @@ export type Summary = {
   cache_creation_tokens: number;
   cache_read_tokens: number;
   reasoning_tokens: number;
-  recorded_cost_usd: number;
-  avg_total_duration_ms: number | null;
-  avg_ttft_ms: number | null;
-  avg_output_tps: number | null;
-  first_event_at: string | null;
-  last_event_at: string | null;
-  estimated_cost_usd?: number | null;
-  estimated_cost_micro_usd?: number | null;
-  pricing?: PricingCoverage | null;
+  first_date: string | null;
+  last_date: string | null;
 };
 
 export type MetricRow = {
@@ -63,17 +31,6 @@ export type MetricRow = {
   cache_creation_tokens: number;
   cache_read_tokens: number;
   reasoning_tokens: number;
-  recorded_cost_usd: number;
-  avg_total_duration_ms: number | null;
-  avg_ttft_ms: number | null;
-  avg_output_tps: number | null;
-  estimated_cost_usd?: number | null;
-  estimated_cost_micro_usd?: number | null;
-  pricing?: PricingCoverage | null;
-};
-
-export type TimeBreakdownRow = MetricRow & {
-  bucket: string;
 };
 
 export type Health = {
@@ -90,7 +47,6 @@ export type Status = {
   total_events: number;
   total_import_runs: number;
   total_tokens: number;
-  total_recorded_cost_usd: number;
 };
 
 export type ConfigSnapshot = {
@@ -117,6 +73,7 @@ export type EventItem = {
   event_id: string;
   dedupe_strategy: string;
   channel: string;
+  source_product: string | null;
   provider: string | null;
   model_raw: string | null;
   model_normalized: string | null;
@@ -126,26 +83,47 @@ export type EventItem = {
   project_path: string | null;
   message_id: string | null;
   request_id: string | null;
-  request_count: number | null;
   input_tokens: number;
   output_tokens: number;
   cache_creation_tokens: number;
   cache_read_tokens: number;
   reasoning_tokens: number;
   total_tokens: number;
-  total_duration_ms: number | null;
-  ttft_ms: number | null;
-  output_duration_ms: number | null;
-  output_tps: number | null;
-  recorded_cost_usd: number | null;
+};
+
+export type SessionItem = {
+  session_id: string;
+  first_date: string | null;
+  last_date: string | null;
+  channel: string;
+  source_product: string | null;
+  primary_model: string | null;
+  model_count: number;
+  event_count: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_tokens: number;
+  cache_read_tokens: number;
+  reasoning_tokens: number;
+  total_tokens: number;
+  estimated_cost_usd: number | null;
+  priced_events: number;
+  unpriced_events: number;
+  policy_zero_events: number;
+};
+
+export type Paginated<T> = {
+  items: T[];
+  limit: number;
+  offset: number;
+  total: number;
 };
 
 export type FilterOptions = {
   channels: string[];
+  source_products: string[];
   providers: string[];
   models: string[];
   sessions: string[];
   projects: string[];
 };
-
-export type SlowSort = "output_tps" | "ttft_ms" | "total_duration_ms";

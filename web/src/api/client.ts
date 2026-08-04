@@ -1,6 +1,6 @@
-import type { ConfigSnapshot, EventItem, FilterOptions, Filters, Health, ImportRun, MetricRow, SlowSort, Status, Summary } from "./types";
+import type { ConfigSnapshot, EventItem, FilterOptions, Filters, Health, ImportRun, MetricRow, Paginated, SessionItem, Status, Summary } from "./types";
 
-const API_BASE = "/api/v1";
+const API_BASE = "/api/v2";
 
 type QueryValue = string | number | boolean | undefined | null;
 
@@ -22,7 +22,7 @@ async function request<T>(path: string): Promise<T> {
       const payload = (await response.json()) as { error?: string };
       message = payload.error ?? message;
     } catch (_) {
-      // ignore non-JSON errors
+      // Ignore non-JSON errors so the user still gets the HTTP status.
     }
     throw new Error(message);
   }
@@ -36,13 +36,12 @@ export const api = {
   summary: (filters: Filters) => request<Summary>(`/analytics/summary${query(filters)}`),
   timeseries: (bucket: "daily" | "weekly" | "monthly", filters: Filters) =>
     request<MetricRow[]>(`/analytics/timeseries${query({ ...filters, bucket })}`),
-  breakdown: (by: "channel" | "model" | "provider" | "session" | "project", filters: Filters) =>
+  breakdown: (by: "channel" | "source_product" | "model" | "provider" | "session" | "project", filters: Filters) =>
     request<MetricRow[]>(`/analytics/breakdown${query({ ...filters, by })}`),
-  slow: (sort: SlowSort, filters: Filters, limit = 50) =>
-    request<EventItem[]>(`/analytics/slow${query({ ...filters, sort, limit })}`),
   filterOptions: () => request<FilterOptions>("/filter-options"),
-  sessions: (filters: Filters, limit = 50) =>
-    request<MetricRow[]>(`/sessions${query({ ...filters, limit })}`),
+  sessions: (filters: Filters, limit = 50, offset = 0) =>
+    request<Paginated<SessionItem>>(`/sessions${query({ ...filters, limit, offset })}`),
   importRuns: (limit = 20) => request<ImportRun[]>(`/import-runs${query({ limit })}`),
-  events: (filters: Filters, limit = 200) => request<EventItem[]>(`/events${query({ ...filters, limit })}`),
+  events: (filters: Filters, limit = 200, offset = 0) =>
+    request<Paginated<EventItem>>(`/events${query({ ...filters, limit, offset })}`),
 };
