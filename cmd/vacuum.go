@@ -17,7 +17,7 @@ var vacuumCmd = &cobra.Command{
 			return err
 		}
 
-		database, err := db.OpenReadWriteV2(cfg.DBPath())
+		database, err := db.OpenReadWriteV3(cfg.DBPath())
 		if err != nil {
 			return err
 		}

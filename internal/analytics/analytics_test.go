@@ -6,293 +6,125 @@ import (
 	"time"
 
 	"github.com/BlueSkyXN/AgentLedger/internal/db"
-	"github.com/BlueSkyXN/AgentLedger/internal/pricing"
+	"github.com/BlueSkyXN/AgentLedger/internal/model"
 )
 
-func testDB(t *testing.T) *db.Database {
+func TestSummaryFiltersAndUnavailablePricing(t *testing.T) {
+	database := analyticsTestDatabase(t)
+	defer database.Close()
+	insertAnalyticsEvent(t, database, "e1", "s1", "codex", "codex-cli", "openai", "model-a", 10, atUTC(2026, 3, 7, 23, 30), "/private/project-a")
+	insertAnalyticsEvent(t, database, "e2", "s2", "claude", "claude-code", "anthropic", "model-b", 20, atUTC(2026, 3, 8, 8, 30), "/private/project-b")
+
+	summary, err := BuildSummary(database.Conn(), Filters{
+		Channel: "codex", Timezone: "America/New_York",
+		PricingPath: filepath.Join(t.TempDir(), "missing.json"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.TotalEvents != 1 || summary.TotalSessions != 1 || summary.TotalTokens != 10 {
+		t.Fatalf("unexpected filtered summary: %+v", summary)
+	}
+	if summary.FirstDate == nil || *summary.FirstDate != "2026-03-07" {
+		t.Fatalf("unexpected first date: %+v", summary.FirstDate)
+	}
+	if summary.EstimatedCostUSD != nil || summary.Pricing == nil || summary.Pricing.Status != "unavailable" || summary.Pricing.ErrorCode != "pricing_profile_invalid" {
+		t.Fatalf("invalid configured pricing should not fail usage query: %+v", summary)
+	}
+}
+
+func TestTimeseriesUsesHistoricalIANAOffset(t *testing.T) {
+	database := analyticsTestDatabase(t)
+	defer database.Close()
+	// 04:30 UTC is still the previous calendar date in New York before DST.
+	insertAnalyticsEvent(t, database, "dst-a", "s1", "codex", "codex-cli", "openai", "unknown", 1, atUTC(2026, 3, 8, 4, 30), "")
+	// 04:30 UTC in July uses UTC-4 and therefore belongs to the same date.
+	insertAnalyticsEvent(t, database, "dst-b", "s2", "codex", "codex-cli", "openai", "unknown", 1, atUTC(2026, 7, 8, 4, 30), "")
+	rows, err := BuildTimeseries(database.Conn(), "daily", Filters{Timezone: "America/New_York", CostMode: "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 || rows[0].Label != "2026-03-07" || rows[1].Label != "2026-07-08" {
+		t.Fatalf("historical timezone buckets are wrong: %+v", rows)
+	}
+}
+
+func TestSessionsPrimaryModelPaginationAndFilters(t *testing.T) {
+	database := analyticsTestDatabase(t)
+	defer database.Close()
+	timestamp := atUTC(2026, 5, 1, 12, 0)
+	insertAnalyticsEvent(t, database, "s1-a", "session-one", "codex", "codex-cli", "openai", "z-model", 10, timestamp, "/work/project")
+	insertAnalyticsEvent(t, database, "s1-b", "session-one", "codex", "codex-cli", "openai", "a-model", 10, timestamp+1000, "/work/project")
+	insertAnalyticsEvent(t, database, "s2", "session-two", "claude", "claude-code", "anthropic", "claude-model", 5, timestamp+2000, "/work/other")
+
+	page, err := BuildSessions(database.Conn(), Filters{Timezone: "UTC", CostMode: "none"}, 1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Total != 2 || len(page.Items) != 1 || page.Limit != 1 || page.Offset != 0 {
+		t.Fatalf("unexpected page: %+v", page)
+	}
+	filtered, err := BuildSessions(database.Conn(), Filters{Timezone: "UTC", SourceProduct: "codex-cli", CostMode: "none"}, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filtered.Total != 1 || len(filtered.Items) != 1 {
+		t.Fatalf("source filter failed: %+v", filtered)
+	}
+	session := filtered.Items[0]
+	if session.SessionKey != "session-one" || session.PrimaryModel != "a-model" || session.ModelCount != 2 || session.EventCount != 2 || session.TotalTokens != 20 {
+		t.Fatalf("session aggregation or primary-model tie break failed: %+v", session)
+	}
+	if session.FirstDate != "2026-05-01" || session.LastDate != "2026-05-01" {
+		t.Fatalf("unexpected filtered dates: %+v", session)
+	}
+}
+
+func TestEventsPaginationAndFilterOptions(t *testing.T) {
+	database := analyticsTestDatabase(t)
+	defer database.Close()
+	insertAnalyticsEvent(t, database, "e1", "s1", "workbuddy", "workbuddy", "workbuddy", "m1", 1, atUTC(2026, 1, 1, 0, 0), "/a/project")
+	insertAnalyticsEvent(t, database, "e2", "s2", "codex", "codex-cli", "openai", "m2", 2, atUTC(2026, 1, 2, 0, 0), "/b/other")
+	page, err := ListEvents(database.Conn(), Filters{Timezone: "UTC", Provider: "openai", CostMode: "none"}, 1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Total != 1 || len(page.Items) != 1 || page.Items[0].EventID != "e2" || page.Items[0].SessionKey != "s2" {
+		t.Fatalf("event pagination/filter failed: %+v", page)
+	}
+	options, err := BuildFilterOptions(database.Conn())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(options.SourceProducts) != 2 || len(options.Sessions) != 2 || len(options.Projects) != 2 {
+		t.Fatalf("unexpected filter options: %+v", options)
+	}
+}
+
+func analyticsTestDatabase(t *testing.T) *db.Database {
 	t.Helper()
-	database, err := db.Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
+	database, err := db.Open(filepath.Join(t.TempDir(), "analytics.db"))
 	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	t.Cleanup(func() { _ = database.Close() })
-	base := time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC).UnixMilli()
-	_, err = database.Conn().Exec(`INSERT INTO usage_events (
-		event_id, dedupe_key, dedupe_strategy,
-		channel, provider, model_raw, model_normalized, model_resolution, timestamp_ms, session_id, project_path, message_id,
-			input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, reasoning_tokens, total_tokens, request_count,
-		request_started_at_ms, first_token_at_ms, completed_at_ms, total_duration_ms, ttft_ms, output_duration_ms, output_tps,
-		recorded_cost_usd, raw_usage_json, imported_at_ms, updated_at_ms
-	) VALUES
-			('fp1', 'fp1', 'message_id', 'codex', 'openai', 'gpt-5', 'gpt-5', 'direct_event', ?, 's1', '/Users/test/Github/project-a', 'm1', 100, 50, 10, 5, 20, 185, 3, ?, ?, ?, 3000, 500, 2500, 20.0, 0.1, '{"secret":"hidden"}', 1, 1),
-			('fp2', 'fp2', 'message_id', 'claude', 'anthropic', 'claude-sonnet', 'claude-sonnet', 'direct_event', ?, 's2', '/Users/test/Github/project-b', 'm2', 200, 80, 0, 0, 0, 280, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0.2, '{"secret":"hidden"}', 2, 2)`,
-		base, base, base+500, base+3000, base+86400000)
-	if err != nil {
-		t.Fatalf("insert events: %v", err)
-	}
-	_, err = database.Conn().Exec(`INSERT INTO import_runs (id, started_at_ms, finished_at_ms, status, files_scanned, events_added, events_updated, events_skipped)
-		VALUES ('run1', ?, ?, 'completed', 2, 2, 1, 0)`, base, base+1000)
-	if err != nil {
-		t.Fatalf("insert import run: %v", err)
+		t.Fatal(err)
 	}
 	return database
 }
 
-func TestBuildSummary(t *testing.T) {
-	database := testDB(t)
-	summary, err := BuildSummary(database.Conn(), Filters{})
-	if err != nil {
-		t.Fatalf("summary: %v", err)
+func insertAnalyticsEvent(t *testing.T, database *db.Database, id, session, channel, source, provider, modelID string, total, timestamp int64, project string) {
+	t.Helper()
+	event := &model.UsageEvent{
+		EventID: id, IdentityVersion: model.IdentityVersion, IdentityStrategy: "native_event", IdentityScope: "session",
+		ContentSHA256: "content-" + id, ParserVersion: "test-v1", EventGranularity: "request",
+		Channel: channel, SourceProduct: source, Provider: provider,
+		ModelRaw: modelID, ModelNormalized: modelID, ModelResolution: model.ModelResolutionDirectEvent,
+		TimestampMs: timestamp, SessionKey: session, SessionID: session, ProjectPath: project,
+		InputTokens: total, TotalTokens: total, ImportedAtMs: timestamp, UpdatedAtMs: timestamp,
 	}
-	if summary.TotalEvents != 2 || summary.TotalTokens != 465 || summary.ImportRuns != 1 {
-		t.Fatalf("unexpected summary: %+v", summary)
-	}
-	if summary.InputTokens != 300 {
-		t.Fatalf("expected stored input tokens to be used without report-time cache subtraction, got %d", summary.InputTokens)
-	}
-	if summary.AvgOutputTPS == nil || *summary.AvgOutputTPS != 20 {
-		t.Fatalf("expected avg tps from timed rows, got %+v", summary.AvgOutputTPS)
+	if _, err := database.UpsertEvent(event); err != nil {
+		t.Fatal(err)
 	}
 }
 
-func TestBuildTimeseriesBreakdownAndFilters(t *testing.T) {
-	database := testDB(t)
-	series, err := BuildTimeseries(database.Conn(), "daily", Filters{})
-	if err != nil {
-		t.Fatalf("timeseries: %v", err)
-	}
-	if len(series) != 2 {
-		t.Fatalf("expected 2 daily rows, got %d", len(series))
-	}
-	models, err := BuildBreakdown(database.Conn(), "model", Filters{Channel: "claude"})
-	if err != nil {
-		t.Fatalf("breakdown: %v", err)
-	}
-	if len(models) != 1 || models[0].Label != "claude-sonnet" || models[0].TotalTokens != 280 {
-		t.Fatalf("unexpected model breakdown: %+v", models)
-	}
-	timeByModel, err := BuildTimeseriesBreakdown(database.Conn(), "daily", "model", Filters{})
-	if err != nil {
-		t.Fatalf("timeseries breakdown: %v", err)
-	}
-	if len(timeByModel) != 2 || timeByModel[0].Bucket != "2026-05-01" || timeByModel[0].Label != "gpt-5" || timeByModel[0].InputTokens != 100 {
-		t.Fatalf("unexpected time model breakdown: %+v", timeByModel)
-	}
-	projects, err := BuildBreakdown(database.Conn(), "project", Filters{Project: "project-b"})
-	if err != nil {
-		t.Fatalf("project breakdown: %v", err)
-	}
-	if len(projects) != 1 || projects[0].Label != "project-b" || projects[0].TotalTokens != 280 {
-		t.Fatalf("unexpected project breakdown: %+v", projects)
-	}
-}
-
-func TestBuildTimeseriesUsesReportTimezone(t *testing.T) {
-	database, err := db.Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	t.Cleanup(func() { _ = database.Close() })
-	lateUTC := time.Date(2026, 5, 1, 23, 30, 0, 0, time.UTC).UnixMilli()
-	earlyUTC := time.Date(2026, 5, 2, 0, 30, 0, 0, time.UTC).UnixMilli()
-	_, err = database.Conn().Exec(`INSERT INTO usage_events (
-		event_id, dedupe_key, dedupe_strategy, channel, provider, model_raw, model_normalized, timestamp_ms,
-		input_tokens, output_tokens, total_tokens, imported_at_ms, updated_at_ms
-	) VALUES
-		('tz-a', 'tz-a', 'message_id', 'claude', 'anthropic', 'claude-sonnet', 'claude-sonnet', ?, 10, 5, 15, 1, 1),
-		('tz-b', 'tz-b', 'message_id', 'claude', 'anthropic', 'claude-sonnet', 'claude-sonnet', ?, 20, 8, 28, 1, 1)`,
-		lateUTC, earlyUTC)
-	if err != nil {
-		t.Fatalf("insert timezone events: %v", err)
-	}
-
-	series, err := BuildTimeseries(database.Conn(), "daily", Filters{Channel: "claude", Timezone: "+08:00"})
-	if err != nil {
-		t.Fatalf("timeseries: %v", err)
-	}
-	if len(series) != 1 || series[0].Label != "2026-05-02" || series[0].TotalTokens != 43 {
-		t.Fatalf("unexpected timezone series: %+v", series)
-	}
-}
-
-func TestSessionsImportRunsEventsSlowAndOptions(t *testing.T) {
-	database := testDB(t)
-	sessions, err := BuildSessions(database.Conn(), Filters{}, 10)
-	if err != nil {
-		t.Fatalf("sessions: %v", err)
-	}
-	if len(sessions) != 2 || sessions[0].Label != "s2" {
-		t.Fatalf("unexpected sessions: %+v", sessions)
-	}
-	runs, err := ListImportRuns(database.Conn(), 10)
-	if err != nil {
-		t.Fatalf("import runs: %v", err)
-	}
-	if len(runs) != 1 || runs[0].EventsAdded != 2 || runs[0].EventsUpdated != 1 {
-		t.Fatalf("unexpected runs: %+v", runs)
-	}
-	events, err := ListEvents(database.Conn(), Filters{}, 10)
-	if err != nil {
-		t.Fatalf("events: %v", err)
-	}
-	if len(events) != 2 || events[0].EventID != "fp2" {
-		t.Fatalf("unexpected events: %+v", events)
-	}
-	if events[1].EventID != "fp1" || events[1].InputTokens != 100 {
-		t.Fatalf("expected Codex event input to use stored non-cache input tokens, got %+v", events[1])
-	}
-	if events[1].RequestCount == nil || *events[1].RequestCount != 3 || events[0].RequestCount != nil {
-		t.Fatalf("unexpected event request counts: %+v", events)
-	}
-	if events[1].ModelResolution == nil || *events[1].ModelResolution != "direct_event" {
-		t.Fatalf("expected event model resolution, got %+v", events[1])
-	}
-	slow, err := BuildSlow(database.Conn(), "output_tps", Filters{}, 10)
-	if err != nil {
-		t.Fatalf("slow: %v", err)
-	}
-	if len(slow) != 1 || slow[0].OutputTPS == nil {
-		t.Fatalf("unexpected slow rows: %+v", slow)
-	}
-	options, err := BuildFilterOptions(database.Conn())
-	if err != nil {
-		t.Fatalf("options: %v", err)
-	}
-	if len(options.Channels) != 2 || len(options.Models) != 2 || len(options.Projects) != 2 {
-		t.Fatalf("unexpected options: %+v", options)
-	}
-}
-
-func TestInvalidAnalyticsOptions(t *testing.T) {
-	database := testDB(t)
-	if _, err := BuildTimeseries(database.Conn(), "hourly", Filters{}); err == nil {
-		t.Fatal("expected invalid bucket error")
-	}
-	if _, err := BuildBreakdown(database.Conn(), "raw", Filters{}); err == nil {
-		t.Fatal("expected invalid breakdown error")
-	}
-	if _, err := BuildTimeseriesBreakdown(database.Conn(), "daily", "raw", Filters{}); err == nil {
-		t.Fatal("expected invalid time breakdown error")
-	}
-	if _, err := BuildSlow(database.Conn(), "raw", Filters{}, 10); err == nil {
-		t.Fatal("expected invalid slow sort error")
-	}
-	if _, err := BuildSummary(database.Conn(), Filters{Since: "2026/05/01"}); err == nil {
-		t.Fatal("expected invalid since error")
-	}
-	if _, err := ListEvents(database.Conn(), Filters{Until: "tomorrow"}, 10); err == nil {
-		t.Fatal("expected invalid until error")
-	}
-	if _, err := distinctStrings(database.Conn(), "raw SQL"); err == nil {
-		t.Fatal("expected invalid filter option error")
-	}
-}
-
-func TestAttachEstimatesOmitUnpricedCostButKeepCoverage(t *testing.T) {
-	missing := &pricing.CoverageSummary{TotalEvents: 1, Confidence: "missing"}
-	estimate := costResult{Summary: missing}
-
-	summary := Summary{}
-	attachSummaryEstimate(&summary, estimate)
-	if summary.Pricing != missing || summary.EstimatedCostUSD != nil || summary.EstimatedCostMicroUSD != nil {
-		t.Fatalf("summary should keep missing coverage without a zero cost: %+v", summary)
-	}
-
-	metric := MetricRow{}
-	attachMetricEstimate(&metric, estimate)
-	if metric.Pricing != missing || metric.EstimatedCostUSD != nil || metric.EstimatedCostMicroUSD != nil {
-		t.Fatalf("metric should keep missing coverage without a zero cost: %+v", metric)
-	}
-
-	timeRow := TimeBreakdownRow{}
-	attachTimeEstimate(&timeRow, estimate)
-	if timeRow.Pricing != missing || timeRow.EstimatedCostUSD != nil || timeRow.EstimatedCostMicroUSD != nil {
-		t.Fatalf("time row should keep missing coverage without a zero cost: %+v", timeRow)
-	}
-}
-
-func TestAttachEstimatesPreserveExplicitZeroPrice(t *testing.T) {
-	priced := &pricing.CoverageSummary{TotalEvents: 1, PricedEvents: 1, CoverageRatio: 1, Confidence: "exact"}
-	estimate := costResult{Summary: priced}
-
-	summary := Summary{}
-	attachSummaryEstimate(&summary, estimate)
-	if summary.EstimatedCostUSD == nil || *summary.EstimatedCostUSD != 0 || summary.EstimatedCostMicroUSD == nil || *summary.EstimatedCostMicroUSD != 0 {
-		t.Fatalf("summary should expose an explicit zero price: %+v", summary)
-	}
-
-	metric := MetricRow{}
-	attachMetricEstimate(&metric, estimate)
-	if metric.EstimatedCostUSD == nil || *metric.EstimatedCostUSD != 0 || metric.EstimatedCostMicroUSD == nil || *metric.EstimatedCostMicroUSD != 0 {
-		t.Fatalf("metric should expose an explicit zero price: %+v", metric)
-	}
-
-	timeRow := TimeBreakdownRow{}
-	attachTimeEstimate(&timeRow, estimate)
-	if timeRow.EstimatedCostUSD == nil || *timeRow.EstimatedCostUSD != 0 || timeRow.EstimatedCostMicroUSD == nil || *timeRow.EstimatedCostMicroUSD != 0 {
-		t.Fatalf("time row should expose an explicit zero price: %+v", timeRow)
-	}
-}
-
-func TestAttachEstimatesExposePolicyZeroAmount(t *testing.T) {
-	policyZero := &pricing.CoverageSummary{TotalEvents: 1, PolicyZeroEvents: 1, Confidence: "missing"}
-	estimate := costResult{Summary: policyZero}
-
-	summary := Summary{}
-	attachSummaryEstimate(&summary, estimate)
-	if summary.EstimatedCostUSD == nil || *summary.EstimatedCostUSD != 0 || summary.EstimatedCostMicroUSD == nil || *summary.EstimatedCostMicroUSD != 0 {
-		t.Fatalf("summary should expose the explicit policy-zero amount: %+v", summary)
-	}
-
-	metric := MetricRow{}
-	attachMetricEstimate(&metric, estimate)
-	if metric.EstimatedCostUSD == nil || *metric.EstimatedCostUSD != 0 || metric.EstimatedCostMicroUSD == nil || *metric.EstimatedCostMicroUSD != 0 {
-		t.Fatalf("metric should expose the explicit policy-zero amount: %+v", metric)
-	}
-
-	timeRow := TimeBreakdownRow{}
-	attachTimeEstimate(&timeRow, estimate)
-	if timeRow.EstimatedCostUSD == nil || *timeRow.EstimatedCostUSD != 0 || timeRow.EstimatedCostMicroUSD == nil || *timeRow.EstimatedCostMicroUSD != 0 {
-		t.Fatalf("time row should expose the explicit policy-zero amount: %+v", timeRow)
-	}
-}
-
-func TestAnalyticsSeparatesPolicyZeroMissingPricingAndOfficialFree(t *testing.T) {
-	database, err := db.Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	t.Cleanup(func() { _ = database.Close() })
-	_, err = database.Conn().Exec(`INSERT INTO usage_events (
-		event_id, dedupe_key, dedupe_strategy, channel, provider, model_raw, model_normalized, model_resolution,
-		timestamp_ms, input_tokens, output_tokens, total_tokens, imported_at_ms, updated_at_ms
-	) VALUES
-		('unknown', 'unknown', 'message_id', 'codex', 'openai', 'unknown', 'unknown', 'unknown', 1, 10, 0, 10, 1, 1),
-		('missing', 'missing', 'message_id', 'workbuddy', 'custom', 'unpriced-model', 'unpriced-model', 'direct_event', 2, 20, 0, 20, 1, 1),
-		('free', 'free', 'message_id', 'codex', 'openai', 'gpt-5.3-codex-spark', 'gpt-5.3-codex-spark', 'direct_event', 3, 30, 0, 30, 1, 1)`)
-	if err != nil {
-		t.Fatalf("insert pricing events: %v", err)
-	}
-
-	summary, err := BuildSummary(database.Conn(), Filters{})
-	if err != nil {
-		t.Fatalf("summary: %v", err)
-	}
-	if summary.Pricing == nil || summary.Pricing.PricedEvents != 1 || summary.Pricing.PricedTokens != 30 || summary.Pricing.PolicyZeroEvents != 1 || summary.Pricing.PolicyZeroTokens != 10 {
-		t.Fatalf("unexpected pricing summary: %+v", summary.Pricing)
-	}
-	if len(summary.Pricing.PolicyZeroModels) != 1 || len(summary.Pricing.MissingModels) != 1 || summary.Pricing.MissingModels[0].Reason != pricing.ResolutionMissingPricingRule {
-		t.Fatalf("unexpected pricing diagnostics: %+v", summary.Pricing)
-	}
-	if summary.EstimatedCostUSD == nil || *summary.EstimatedCostUSD != 0 {
-		t.Fatalf("official free model should preserve explicit zero estimate: %+v", summary)
-	}
-
-	unknownOnly, err := BuildSummary(database.Conn(), Filters{Model: "unknown"})
-	if err != nil {
-		t.Fatalf("unknown-only summary: %v", err)
-	}
-	if unknownOnly.EstimatedCostUSD == nil || *unknownOnly.EstimatedCostUSD != 0 || unknownOnly.EstimatedCostMicroUSD == nil || *unknownOnly.EstimatedCostMicroUSD != 0 || unknownOnly.Pricing == nil || unknownOnly.Pricing.PolicyZeroEvents != 1 || unknownOnly.Pricing.PricedEvents != 0 {
-		t.Fatalf("unknown-only cost should expose the explicit policy-zero amount with diagnostics: %+v", unknownOnly)
-	}
+func atUTC(year int, month time.Month, day, hour, minute int) int64 {
+	return time.Date(year, month, day, hour, minute, 0, 0, time.UTC).UnixMilli()
 }

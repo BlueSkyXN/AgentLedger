@@ -20,7 +20,7 @@ import (
 //go:embed embed/placeholder.html
 var embeddedFS embed.FS
 
-const Version = "0.1.0"
+const Version = "0.3.0"
 
 type Options struct {
 	StaticDir string
@@ -51,7 +51,7 @@ func (s *Server) AssetMode() string {
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/", s.handleAPI)
+	mux.HandleFunc("/api/", s.handleAPI)
 	mux.HandleFunc("/", s.handleStatic)
 	return mux
 }
@@ -63,27 +63,25 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch r.URL.Path {
-	case "/api/v1/health":
+	case "/api/v2/health":
 		s.handleHealth(w, r)
-	case "/api/v1/status":
+	case "/api/v2/status":
 		s.handleStatus(w, r)
-	case "/api/v1/config":
+	case "/api/v2/config":
 		s.handleConfig(w, r)
-	case "/api/v1/analytics/summary":
+	case "/api/v2/analytics/summary":
 		s.handleSummary(w, r)
-	case "/api/v1/analytics/timeseries":
+	case "/api/v2/analytics/timeseries":
 		s.handleTimeseries(w, r)
-	case "/api/v1/analytics/breakdown":
+	case "/api/v2/analytics/breakdown":
 		s.handleBreakdown(w, r)
-	case "/api/v1/analytics/slow":
-		s.handleSlow(w, r)
-	case "/api/v1/filter-options":
+	case "/api/v2/filter-options":
 		s.handleFilterOptions(w, r)
-	case "/api/v1/sessions":
+	case "/api/v2/sessions":
 		s.handleSessions(w, r)
-	case "/api/v1/import-runs":
+	case "/api/v2/import-runs":
 		s.handleImportRuns(w, r)
-	case "/api/v1/events":
+	case "/api/v2/events":
 		s.handleEvents(w, r)
 	default:
 		writeError(w, http.StatusNotFound, "not found")
@@ -98,7 +96,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":         "ok",
 		"version":        Version,
-		"database":       s.cfg.DBPath(),
+		"database":       redactPath(s.cfg.DBPath()),
 		"database_bytes": size,
 		"asset_mode":     s.assetMode,
 	})
@@ -111,12 +109,13 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"database":                s.cfg.DBPath(),
-		"schema_version":          stats["schema_version"],
-		"total_events":            stats["total_events"],
-		"total_import_runs":       stats["total_import_runs"],
-		"total_tokens":            stats["total_tokens"],
-		"total_recorded_cost_usd": stats["total_recorded_cost_usd"],
+		"database":          redactPath(s.cfg.DBPath()),
+		"schema_version":    stats["schema_version"],
+		"identity_version":  stats["identity_version"],
+		"total_events":      stats["total_events"],
+		"total_sessions":    stats["total_sessions"],
+		"total_import_runs": stats["total_import_runs"],
+		"total_tokens":      stats["total_tokens"],
 	})
 }
 
@@ -129,6 +128,10 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		"import": map[string]any{
 			"gracing_minutes": s.cfg.Import.GracingMinutes,
 		},
+		"reports": map[string]any{
+			"timezone":     s.cfg.Reports.Timezone,
+			"pricing_path": redactPath(s.cfg.Reports.PricingPath),
+		},
 		"agents": map[string]any{
 			"claude":    agentSnapshot(s.cfg.Agents.Claude),
 			"codex":     agentSnapshot(s.cfg.Agents.Codex),
@@ -136,12 +139,12 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			"gemini":    agentSnapshot(s.cfg.Agents.Gemini),
 			"workbuddy": agentSnapshot(s.cfg.Agents.WorkBuddy),
 		},
-		"privacy_note": "面板 API 只读，不返回 raw usage JSON。",
+		"privacy_note": "面板 API 只读，不返回对话正文、raw usage、设备信息或已记录金额。",
 	})
 }
 
 func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
-	filters, ok := parseFilters(w, r, s.cfg.Reports.Timezone)
+	filters, ok := parseFilters(w, r, s.cfg.Reports.Timezone, s.cfg.Reports.PricingPath)
 	if !ok {
 		return
 	}
@@ -154,21 +157,11 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleTimeseries(w http.ResponseWriter, r *http.Request) {
-	filters, ok := parseFilters(w, r, s.cfg.Reports.Timezone)
+	filters, ok := parseFilters(w, r, s.cfg.Reports.Timezone, s.cfg.Reports.PricingPath)
 	if !ok {
 		return
 	}
 	bucket := r.URL.Query().Get("bucket")
-	by := strings.TrimSpace(r.URL.Query().Get("by"))
-	if by != "" {
-		rows, err := analytics.BuildTimeseriesBreakdown(s.database.Conn(), bucket, by, filters)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, rows)
-		return
-	}
 	rows, err := analytics.BuildTimeseries(s.database.Conn(), bucket, filters)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -178,28 +171,11 @@ func (s *Server) handleTimeseries(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleBreakdown(w http.ResponseWriter, r *http.Request) {
-	filters, ok := parseFilters(w, r, s.cfg.Reports.Timezone)
+	filters, ok := parseFilters(w, r, s.cfg.Reports.Timezone, s.cfg.Reports.PricingPath)
 	if !ok {
 		return
 	}
 	rows, err := analytics.BuildBreakdown(s.database.Conn(), r.URL.Query().Get("by"), filters)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, rows)
-}
-
-func (s *Server) handleSlow(w http.ResponseWriter, r *http.Request) {
-	filters, ok := parseFilters(w, r, s.cfg.Reports.Timezone)
-	if !ok {
-		return
-	}
-	limit, ok := parseLimit(w, r, 50, 1, 500)
-	if !ok {
-		return
-	}
-	rows, err := analytics.BuildSlow(s.database.Conn(), r.URL.Query().Get("sort"), filters, limit)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -217,7 +193,7 @@ func (s *Server) handleFilterOptions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
-	filters, ok := parseFilters(w, r, s.cfg.Reports.Timezone)
+	filters, ok := parseFilters(w, r, s.cfg.Reports.Timezone, s.cfg.Reports.PricingPath)
 	if !ok {
 		return
 	}
@@ -225,7 +201,11 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	rows, err := analytics.BuildSessions(s.database.Conn(), filters, limit)
+	offset, ok := parseOffset(w, r)
+	if !ok {
+		return
+	}
+	rows, err := analytics.BuildSessions(s.database.Conn(), filters, limit, offset)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -247,7 +227,7 @@ func (s *Server) handleImportRuns(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
-	filters, ok := parseFilters(w, r, s.cfg.Reports.Timezone)
+	filters, ok := parseFilters(w, r, s.cfg.Reports.Timezone, s.cfg.Reports.PricingPath)
 	if !ok {
 		return
 	}
@@ -255,7 +235,11 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	rows, err := analytics.ListEvents(s.database.Conn(), filters, limit)
+	offset, ok := parseOffset(w, r)
+	if !ok {
+		return
+	}
+	rows, err := analytics.ListEvents(s.database.Conn(), filters, limit, offset)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -295,23 +279,55 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
-	if info, err := os.Stat(absCandidate); err == nil && !info.IsDir() {
-		http.ServeFile(w, r, absCandidate)
+	_, candidateExists := os.Lstat(absCandidate)
+	if resolved, ok := resolveContainedStaticFile(root, absCandidate); ok {
+		http.ServeFile(w, r, resolved)
 		return
 	}
-	http.ServeFile(w, r, filepath.Join(root, "index.html"))
+	if candidateExists == nil {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	if index, ok := resolveContainedStaticFile(root, filepath.Join(root, "index.html")); ok {
+		http.ServeFile(w, r, index)
+		return
+	}
+	writeError(w, http.StatusNotFound, "not found")
 }
 
-func parseFilters(w http.ResponseWriter, r *http.Request, timezone string) (analytics.Filters, bool) {
+func resolveContainedStaticFile(root, candidate string) (string, bool) {
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", false
+	}
+	resolvedCandidate, err := filepath.EvalSymlinks(candidate)
+	if err != nil {
+		return "", false
+	}
+	rel, err := filepath.Rel(resolvedRoot, resolvedCandidate)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return "", false
+	}
+	info, err := os.Stat(resolvedCandidate)
+	if err != nil || info.IsDir() {
+		return "", false
+	}
+	return resolvedCandidate, true
+}
+
+func parseFilters(w http.ResponseWriter, r *http.Request, timezone, pricingPath string) (analytics.Filters, bool) {
 	filters := analytics.Filters{
-		Since:    strings.TrimSpace(r.URL.Query().Get("since")),
-		Until:    strings.TrimSpace(r.URL.Query().Get("until")),
-		Channel:  strings.TrimSpace(r.URL.Query().Get("channel")),
-		Provider: strings.TrimSpace(r.URL.Query().Get("provider")),
-		Model:    strings.TrimSpace(r.URL.Query().Get("model")),
-		Session:  strings.TrimSpace(r.URL.Query().Get("session")),
-		Project:  strings.TrimSpace(r.URL.Query().Get("project")),
-		Timezone: timezone,
+		Since:         strings.TrimSpace(r.URL.Query().Get("since")),
+		Until:         strings.TrimSpace(r.URL.Query().Get("until")),
+		Channel:       strings.TrimSpace(r.URL.Query().Get("channel")),
+		SourceProduct: firstNonEmpty(strings.TrimSpace(r.URL.Query().Get("source_product")), strings.TrimSpace(r.URL.Query().Get("source"))),
+		Provider:      strings.TrimSpace(r.URL.Query().Get("provider")),
+		Model:         strings.TrimSpace(r.URL.Query().Get("model")),
+		Session:       strings.TrimSpace(r.URL.Query().Get("session")),
+		Project:       strings.TrimSpace(r.URL.Query().Get("project")),
+		Timezone:      timezone,
+		CostMode:      "estimated",
+		PricingPath:   pricingPath,
 	}
 	if filters.Since != "" && !validDate(filters.Since) {
 		writeError(w, http.StatusBadRequest, "since must use YYYY-MM-DD or RFC3339 datetime")
@@ -322,6 +338,19 @@ func parseFilters(w http.ResponseWriter, r *http.Request, timezone string) (anal
 		return filters, false
 	}
 	return filters, true
+}
+
+func parseOffset(w http.ResponseWriter, r *http.Request) (int, bool) {
+	raw := strings.TrimSpace(r.URL.Query().Get("offset"))
+	if raw == "" {
+		return 0, true
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 0 {
+		writeError(w, http.StatusBadRequest, "offset must be a non-negative integer")
+		return 0, false
+	}
+	return value, true
 }
 
 func parseLimit(w http.ResponseWriter, r *http.Request, defaultValue, minValue, maxValue int) (int, bool) {
@@ -354,7 +383,20 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {
-	writeJSON(w, status, map[string]string{"error": message})
+	writeJSON(w, status, map[string]string{"error": message, "code": httpErrorCode(status)})
+}
+
+func httpErrorCode(status int) string {
+	switch status {
+	case http.StatusBadRequest:
+		return "invalid_request"
+	case http.StatusMethodNotAllowed:
+		return "method_not_allowed"
+	case http.StatusNotFound:
+		return "not_found"
+	default:
+		return "internal_error"
+	}
 }
 
 func hasStaticPanel(staticDir string) bool {
@@ -371,6 +413,9 @@ func agentSnapshot(agent config.AgentConfig) map[string]any {
 }
 
 func redactPath(path string) string {
+	if strings.TrimSpace(path) == "" {
+		return ""
+	}
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		return path
@@ -384,4 +429,13 @@ func redactPath(path string) string {
 		return "~" + strings.TrimPrefix(cleanPath, cleanHome)
 	}
 	return path
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }

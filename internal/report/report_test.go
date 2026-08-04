@@ -1,8 +1,6 @@
 package report
 
 import (
-	"bytes"
-	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -10,270 +8,74 @@ import (
 	"testing"
 
 	"github.com/BlueSkyXN/AgentLedger/internal/db"
-	"github.com/BlueSkyXN/AgentLedger/internal/pricing"
+	"github.com/BlueSkyXN/AgentLedger/internal/model"
 )
 
-func reportTestDB(t *testing.T) *db.Database {
-	t.Helper()
-	database, err := db.Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
+func TestGenerateSupportsV3ReportsAndEstimatedDefault(t *testing.T) {
+	database, err := db.Open(filepath.Join(t.TempDir(), "report.db"))
 	if err != nil {
-		t.Fatalf("open db: %v", err)
+		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = database.Close() })
-	_, err = database.Conn().Exec(`INSERT INTO usage_events (
-		event_id, dedupe_key, dedupe_strategy,
-		channel, provider, model_raw, model_normalized, timestamp_ms, session_id, project_path, message_id,
-			input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, reasoning_tokens, total_tokens, request_count,
-		imported_at_ms, updated_at_ms
-	) VALUES
-			('claude-a', 'claude-a', 'message_id', 'claude', 'anthropic', 'claude-sonnet', 'claude-sonnet', 1, 's1', '/Users/test/Github/project-a', 'm1', 10, 5, 3, 7, 0, 25, 2, 1, 1),
-			('claude-b', 'claude-b', 'message_id', 'claude', 'anthropic', 'claude-sonnet', 'claude-sonnet', 2, 's1', '/Users/test/Github/project-b', 'm2', 20, 8, 4, 9, 0, 41, NULL, 1, 1)`)
+	defer database.Close()
+	event := &model.UsageEvent{
+		EventID: "e1", IdentityVersion: model.IdentityVersion, IdentityStrategy: "native_event", IdentityScope: "session",
+		ContentSHA256: "hash", ParserVersion: "test-v1", EventGranularity: "request",
+		Channel: "codex", SourceProduct: "codex-cli", Provider: "openai",
+		ModelRaw: "unknown", ModelNormalized: "unknown", ModelResolution: model.ModelResolutionUnknown, ModelIsFallback: true,
+		TimestampMs: 1_700_000_000_000, SessionKey: "session", SessionID: "session",
+		InputTokens: 2, TotalTokens: 2, ImportedAtMs: 1, UpdatedAtMs: 1,
+	}
+	if _, err := database.UpsertEvent(event); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, reportType := range []string{"daily", "weekly", "monthly", "models", "channels", "sources", "providers", "projects", "sessions"} {
+		t.Run(reportType, func(t *testing.T) {
+			output, err := captureReportOutput(func() error {
+				return Generate(database.Conn(), reportType, Filters{Timezone: "UTC", CostMode: "estimated"}, true)
+			})
+			if err != nil {
+				t.Fatalf("Generate(%s): %v", reportType, err)
+			}
+			if !strings.Contains(output, "total_tokens") {
+				t.Fatalf("Generate(%s) missing token output: %s", reportType, output)
+			}
+			if strings.Contains(output, "recorded_cost") || strings.Contains(output, "ttft") || strings.Contains(output, "output_tps") {
+				t.Fatalf("Generate(%s) leaked removed metric: %s", reportType, output)
+			}
+		})
+	}
+}
+
+func TestGenerateRejectsRemovedCostModesAndInvalidExplicitPricing(t *testing.T) {
+	database, err := db.Open(filepath.Join(t.TempDir(), "report.db"))
 	if err != nil {
-		t.Fatalf("insert events: %v", err)
+		t.Fatal(err)
 	}
-	return database
-}
-
-func TestGenerateGroupedJSONIncludesCacheTokens(t *testing.T) {
-	database := reportTestDB(t)
-	output := captureReportOutput(t, func() error {
-		return Generate(database.Conn(), "models", Filters{Channel: "claude"}, true)
-	})
-	var rows []ReportRow
-	if err := json.Unmarshal([]byte(output), &rows); err != nil {
-		t.Fatalf("json: %v\n%s", err, output)
+	defer database.Close()
+	if err := Generate(database.Conn(), "models", Filters{Timezone: "UTC", CostMode: "recorded"}, true); err == nil {
+		t.Fatal("recorded cost mode should be rejected")
 	}
-	if len(rows) != 1 {
-		t.Fatalf("expected 1 row, got %d", len(rows))
-	}
-	row := rows[0]
-	if row.TotalTokens != 66 || row.InputTokens != 30 || row.OutputTokens != 13 || row.CacheCreationTokens != 7 || row.CacheReadTokens != 16 {
-		t.Fatalf("unexpected token breakdown: %+v", row)
-	}
-	if strings.Contains(output, "known_request_count") || strings.Contains(output, "request_count_known_events") || strings.Contains(output, "request_count_unknown_events") {
-		t.Fatalf("report JSON still exposes request-count aggregates: %s", output)
+	missing := filepath.Join(t.TempDir(), "missing.json")
+	if err := Generate(database.Conn(), "models", Filters{Timezone: "UTC", CostMode: "estimated", PricingPath: missing, PricingExplicit: true}, true); err == nil {
+		t.Fatal("invalid explicit pricing profile should fail")
 	}
 }
 
-func TestGenerateGroupedTableShowsCacheColumns(t *testing.T) {
-	database := reportTestDB(t)
-	output := captureReportOutput(t, func() error {
-		return Generate(database.Conn(), "models", Filters{Channel: "claude"}, false)
-	})
-	for _, want := range []string{"Cache Create", "Cache Read", "Reasoning", "Recorded Cost(USD)", "claude-sonnet"} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("report output missing %q:\n%s", want, output)
-		}
-	}
-	if strings.Contains(output, "Requests") || strings.Contains(output, "Req Coverage") {
-		t.Fatalf("report table still exposes request-count aggregates:\n%s", output)
-	}
-}
-
-func TestGenerateGroupedEstimatedCostJSON(t *testing.T) {
-	database := reportTestDB(t)
-	pricingPath := writeReportPricingProfile(t)
-	output := captureReportOutput(t, func() error {
-		return Generate(database.Conn(), "models", Filters{Channel: "claude", CostMode: "estimated", PricingPath: pricingPath}, true)
-	})
-	var rows []ReportRow
-	if err := json.Unmarshal([]byte(output), &rows); err != nil {
-		t.Fatalf("json: %v\n%s", err, output)
-	}
-	if len(rows) != 1 {
-		t.Fatalf("expected 1 row, got %d", len(rows))
-	}
-	row := rows[0]
-	if row.EstimatedCostMicroUSD == nil || *row.EstimatedCostMicroUSD != 212 {
-		t.Fatalf("expected estimated cost 212 micro USD, got %+v", row)
-	}
-	if row.Pricing == nil || row.Pricing.PricedEvents != 2 || row.Pricing.TotalEvents != 2 || row.Pricing.CoverageRatio != 1 {
-		t.Fatalf("unexpected pricing coverage: %+v", row.Pricing)
-	}
-}
-
-func TestGenerateGroupedEstimatedCostTable(t *testing.T) {
-	database := reportTestDB(t)
-	pricingPath := writeReportPricingProfile(t)
-	output := captureReportOutput(t, func() error {
-		return Generate(database.Conn(), "models", Filters{Channel: "claude", CostMode: "both", PricingPath: pricingPath}, false)
-	})
-	for _, want := range []string{"Recorded Cost(USD)", "Estimated Cost(USD)", "Pricing Coverage", "100.0%"} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("report output missing %q:\n%s", want, output)
-		}
-	}
-}
-
-func TestGenerateTimeBreakdownJSON(t *testing.T) {
-	database := reportTestDB(t)
-	output := captureReportOutput(t, func() error {
-		return Generate(database.Conn(), "daily", Filters{By: "model"}, true)
-	})
-	var rows []TimeBreakdownRow
-	if err := json.Unmarshal([]byte(output), &rows); err != nil {
-		t.Fatalf("json: %v\n%s", err, output)
-	}
-	if len(rows) != 1 {
-		t.Fatalf("expected 1 row, got %d", len(rows))
-	}
-	row := rows[0]
-	if row.Bucket != "1970-01-01" || row.Label != "claude-sonnet" || row.TotalTokens != 66 || row.CacheReadTokens != 16 {
-		t.Fatalf("unexpected time breakdown: %+v", row)
-	}
-	if strings.Contains(output, "known_request_count") || strings.Contains(output, "request_count_known_events") || strings.Contains(output, "request_count_unknown_events") {
-		t.Fatalf("time breakdown JSON still exposes request-count aggregates: %s", output)
-	}
-}
-
-func TestGenerateProjectsReportAndFilter(t *testing.T) {
-	database := reportTestDB(t)
-	output := captureReportOutput(t, func() error {
-		return Generate(database.Conn(), "projects", Filters{Project: "project-a"}, true)
-	})
-	var rows []ReportRow
-	if err := json.Unmarshal([]byte(output), &rows); err != nil {
-		t.Fatalf("json: %v\n%s", err, output)
-	}
-	if len(rows) != 1 || rows[0].Label != "project-a" || rows[0].TotalTokens != 25 {
-		t.Fatalf("unexpected project report: %+v", rows)
-	}
-}
-
-func TestGenerateTimeBreakdownByProject(t *testing.T) {
-	database := reportTestDB(t)
-	output := captureReportOutput(t, func() error {
-		return Generate(database.Conn(), "daily", Filters{By: "project"}, true)
-	})
-	var rows []TimeBreakdownRow
-	if err := json.Unmarshal([]byte(output), &rows); err != nil {
-		t.Fatalf("json: %v\n%s", err, output)
-	}
-	if len(rows) != 2 || rows[0].Bucket != "1970-01-01" || rows[0].Label != "project-b" || rows[0].TotalTokens != 41 {
-		t.Fatalf("unexpected project time breakdown: %+v", rows)
-	}
-}
-
-func TestGenerateTimeBreakdownRejectsRawDimension(t *testing.T) {
-	database := reportTestDB(t)
-	if err := Generate(database.Conn(), "daily", Filters{By: "raw"}, true); err == nil {
-		t.Fatal("expected invalid time breakdown")
-	}
-}
-
-func TestGenerateRejectsInvalidDateFilters(t *testing.T) {
-	database := reportTestDB(t)
-	if err := Generate(database.Conn(), "daily", Filters{Since: "2026/05/01"}, true); err == nil || !strings.Contains(err.Error(), "since must use YYYY-MM-DD") {
-		t.Fatalf("expected invalid since error, got %v", err)
-	}
-	if err := Generate(database.Conn(), "daily", Filters{Until: "tomorrow"}, true); err == nil || !strings.Contains(err.Error(), "until must use YYYY-MM-DD") {
-		t.Fatalf("expected invalid until error, got %v", err)
-	}
-}
-
-func TestGenerateRejectsInvalidCostMode(t *testing.T) {
-	database := reportTestDB(t)
-	if err := Generate(database.Conn(), "models", Filters{CostMode: "blended"}, true); err == nil || !strings.Contains(err.Error(), "invalid cost mode") {
-		t.Fatalf("expected invalid cost mode error, got %v", err)
-	}
-}
-
-func TestAttachReportEstimatesOmitUnpricedCostButKeepCoverage(t *testing.T) {
-	missing := &pricing.CoverageSummary{TotalEvents: 1, Confidence: "missing"}
-	estimate := reportCost{Summary: missing}
-
-	row := ReportRow{}
-	attachReportEstimate(&row, estimate)
-	if row.Pricing != missing || row.EstimatedCostUSD != nil || row.EstimatedCostMicroUSD != nil {
-		t.Fatalf("report row should keep missing coverage without a zero cost: %+v", row)
-	}
-
-	timeRow := TimeBreakdownRow{}
-	attachTimeEstimate(&timeRow, estimate)
-	if timeRow.Pricing != missing || timeRow.EstimatedCostUSD != nil || timeRow.EstimatedCostMicroUSD != nil {
-		t.Fatalf("time row should keep missing coverage without a zero cost: %+v", timeRow)
-	}
-}
-
-func TestAttachReportEstimatesPreserveExplicitZeroPrice(t *testing.T) {
-	priced := &pricing.CoverageSummary{TotalEvents: 1, PricedEvents: 1, CoverageRatio: 1, Confidence: "exact"}
-	estimate := reportCost{Summary: priced}
-
-	row := ReportRow{}
-	attachReportEstimate(&row, estimate)
-	if row.EstimatedCostUSD == nil || *row.EstimatedCostUSD != 0 || row.EstimatedCostMicroUSD == nil || *row.EstimatedCostMicroUSD != 0 {
-		t.Fatalf("report row should expose an explicit zero price: %+v", row)
-	}
-
-	timeRow := TimeBreakdownRow{}
-	attachTimeEstimate(&timeRow, estimate)
-	if timeRow.EstimatedCostUSD == nil || *timeRow.EstimatedCostUSD != 0 || timeRow.EstimatedCostMicroUSD == nil || *timeRow.EstimatedCostMicroUSD != 0 {
-		t.Fatalf("time row should expose an explicit zero price: %+v", timeRow)
-	}
-}
-
-func TestAttachReportEstimatesExposePolicyZeroAmount(t *testing.T) {
-	policyZero := &pricing.CoverageSummary{TotalEvents: 1, PolicyZeroEvents: 1, Confidence: "missing"}
-	estimate := reportCost{Summary: policyZero}
-
-	row := ReportRow{}
-	attachReportEstimate(&row, estimate)
-	if row.EstimatedCostUSD == nil || *row.EstimatedCostUSD != 0 || row.EstimatedCostMicroUSD == nil || *row.EstimatedCostMicroUSD != 0 {
-		t.Fatalf("report row should expose the explicit policy-zero amount: %+v", row)
-	}
-
-	timeRow := TimeBreakdownRow{}
-	attachTimeEstimate(&timeRow, estimate)
-	if timeRow.EstimatedCostUSD == nil || *timeRow.EstimatedCostUSD != 0 || timeRow.EstimatedCostMicroUSD == nil || *timeRow.EstimatedCostMicroUSD != 0 {
-		t.Fatalf("time row should expose the explicit policy-zero amount: %+v", timeRow)
-	}
-}
-
-func writeReportPricingProfile(t *testing.T) string {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "pricing.json")
-	data := `{
-	  "schema_version": 1,
-	  "id": "report-test-pricing",
-	  "currency": "USD",
-	  "unit": "usd_per_1m_tokens",
-	  "defaults": {"reasoning_policy": "included_in_output", "cache_write_assumption": "treat_as_input", "confidence": "exact"},
-	  "rules": [
-	    {
-	      "id": "anthropic:claude-sonnet",
-	      "provider": "anthropic",
-	      "channel": "*",
-	      "model_patterns": ["claude-sonnet"],
-	      "priority": 10,
-	      "basis": "api_equivalent",
-	      "rates": {"input": 2, "cached_input": 0.5, "output": 10},
-	      "confidence": "exact"
-	    }
-	  ]
-	}`
-	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
-		t.Fatalf("write pricing profile: %v", err)
-	}
-	return path
-}
-
-func captureReportOutput(t *testing.T, run func() error) string {
-	t.Helper()
-	oldStdout := os.Stdout
+func captureReportOutput(run func() error) (string, error) {
 	reader, writer, err := os.Pipe()
 	if err != nil {
-		t.Fatalf("pipe: %v", err)
+		return "", err
 	}
+	previous := os.Stdout
 	os.Stdout = writer
 	runErr := run()
 	_ = writer.Close()
-	os.Stdout = oldStdout
+	os.Stdout = previous
+	data, readErr := io.ReadAll(reader)
+	_ = reader.Close()
 	if runErr != nil {
-		t.Fatalf("run: %v", runErr)
+		return string(data), runErr
 	}
-	var buf bytes.Buffer
-	if _, err := io.Copy(&buf, reader); err != nil {
-		t.Fatalf("read stdout: %v", err)
-	}
-	return buf.String()
+	return string(data), readErr
 }

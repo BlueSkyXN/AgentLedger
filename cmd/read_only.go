@@ -11,8 +11,8 @@ func openReadOnlyConfiguredDatabase() (*config.Config, *db.Database, error) {
 	return openConfiguredDatabase(db.OpenReadOnly)
 }
 
-func openReadOnlyV2ConfiguredDatabase() (*config.Config, *db.Database, error) {
-	return openConfiguredDatabase(db.OpenReadOnlyV2)
+func openReadOnlyV3ConfiguredDatabase() (*config.Config, *db.Database, error) {
+	return openConfiguredDatabase(db.OpenReadOnlyV3)
 }
 
 func openConfiguredDatabase(opener func(string) (*db.Database, error)) (*config.Config, *db.Database, error) {

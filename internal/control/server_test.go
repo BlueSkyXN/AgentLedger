@@ -2,251 +2,180 @@ package control
 
 import (
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
-	"time"
 
 	"github.com/BlueSkyXN/AgentLedger/internal/config"
 	"github.com/BlueSkyXN/AgentLedger/internal/db"
+	"github.com/BlueSkyXN/AgentLedger/internal/model"
 )
 
-func testServer(t *testing.T) *Server {
-	t.Helper()
-	database, err := db.Open(filepath.Join(t.TempDir(), "agent-ledger.db"))
+func TestAPIV2ContractAndV1Removal(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "control.db")
+	database, err := db.Open(path)
 	if err != nil {
-		t.Fatalf("open db: %v", err)
+		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = database.Close() })
-	cfg := config.Default()
-	cfg.Database.Path = filepath.Join(t.TempDir(), "agent-ledger.db")
-	cfg.Agents.Codex.Paths = []string{"~/private-codex"}
-	base := time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC).UnixMilli()
-	_, err = database.Conn().Exec(`INSERT INTO usage_events (
-		event_id, dedupe_key, dedupe_strategy, channel, provider, model_raw, model_normalized, model_resolution, timestamp_ms,
-		session_id, project_path, message_id, input_tokens, output_tokens, total_tokens, request_count, output_duration_ms, output_tps,
-		raw_usage_json, imported_at_ms, updated_at_ms
-	) VALUES ('fp1', 'fp1', 'message_id', 'codex', 'openai', 'gpt-5', 'gpt-5', 'direct_event', ?, 's1', '/Users/test/Github/project-a', 'm1', 100, 50, 150, 3, 2500, 20.0, '{"secret":"hidden"}', 1, 1)`, base)
-	if err != nil {
-		t.Fatalf("insert event: %v", err)
+	defer database.Close()
+	event := &model.UsageEvent{
+		EventID: "event", IdentityVersion: model.IdentityVersion, IdentityStrategy: "native_event", IdentityScope: "session",
+		ContentSHA256: "hash", ParserVersion: "test-v1", EventGranularity: "request",
+		Channel: "codex", SourceProduct: "codex-cli", Provider: "openai",
+		ModelRaw: "unknown", ModelNormalized: "unknown", ModelResolution: model.ModelResolutionUnknown, ModelIsFallback: true,
+		TimestampMs: 1_700_000_000_000, SessionKey: "session-key", SessionID: "native-session",
+		InputTokens: 3, TotalTokens: 3, ImportedAtMs: 1, UpdatedAtMs: 1,
 	}
-	return NewServer(cfg, database, Options{StaticDir: filepath.Join(t.TempDir(), "missing")})
-}
-
-func TestAPIHealthAndSummary(t *testing.T) {
-	server := testServer(t)
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/analytics/summary", nil)
-	server.Handler().ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status = %d body = %s", recorder.Code, recorder.Body.String())
+	if _, err := database.UpsertEvent(event); err != nil {
+		t.Fatal(err)
 	}
-	var payload map[string]any
-	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("json: %v", err)
-	}
-	if payload["total_events"].(float64) != 1 {
-		t.Fatalf("unexpected payload: %v", payload)
-	}
-	for _, field := range []string{"known_request_count", "request_count_known_events", "request_count_unknown_events"} {
-		if _, ok := payload[field]; ok {
-			t.Fatalf("summary still exposes %s: %v", field, payload)
-		}
-	}
-}
-
-func TestReadOnlyServerHandlesConcurrentAnalytics(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "agent-ledger.db")
-	writer, err := db.Open(path)
-	if err != nil {
-		t.Fatalf("open writer: %v", err)
-	}
-	base := time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC).UnixMilli()
-	_, err = writer.Conn().Exec(`INSERT INTO usage_events (
-		event_id, dedupe_key, dedupe_strategy, channel, provider, model_raw, model_normalized, model_resolution, timestamp_ms,
-		session_id, project_path, message_id, input_tokens, output_tokens, total_tokens, imported_at_ms, updated_at_ms
-	) VALUES ('fp1', 'fp1', 'message_id', 'codex', 'openai', 'gpt-5', 'gpt-5', 'direct_event', ?,
-		's1', '/Users/test/Github/project-a', 'm1', 100, 50, 150, 1, 1)`, base)
-	if err != nil {
-		_ = writer.Close()
-		t.Fatalf("insert event: %v", err)
-	}
-	if err := writer.Close(); err != nil {
-		t.Fatalf("close writer: %v", err)
-	}
-
-	reader, err := db.OpenReadOnlyV2(path)
-	if err != nil {
-		t.Fatalf("open read-only: %v", err)
-	}
-	t.Cleanup(func() { _ = reader.Close() })
 	cfg := config.Default()
 	cfg.Database.Path = path
-	server := httptest.NewServer(NewServer(cfg, reader, Options{StaticDir: filepath.Join(t.TempDir(), "missing")}).Handler())
-	t.Cleanup(server.Close)
+	cfg.Reports.Timezone = "UTC"
+	server := httptest.NewServer(NewServer(cfg, database, Options{StaticDir: filepath.Join(t.TempDir(), "missing")}).Handler())
+	defer server.Close()
 
-	routes := []string{
-		"/api/v1/status",
-		"/api/v1/analytics/summary",
-		"/api/v1/analytics/timeseries?bucket=daily",
-		"/api/v1/analytics/breakdown?by=project",
+	response, err := http.Get(server.URL + "/api/v1/health")
+	if err != nil {
+		t.Fatal(err)
 	}
-	type response struct {
-		route  string
-		status int
-		body   string
-		err    error
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusNotFound {
+		t.Fatalf("/api/v1 must be removed, got %d", response.StatusCode)
 	}
-	responses := make(chan response, len(routes))
-	client := &http.Client{Timeout: 5 * time.Second}
-	var group sync.WaitGroup
-	for _, route := range routes {
-		group.Add(1)
-		go func() {
-			defer group.Done()
-			result := response{route: route}
-			resp, err := client.Get(server.URL + route)
-			if err != nil {
-				result.err = err
-				responses <- result
-				return
-			}
-			defer resp.Body.Close()
-			result.status = resp.StatusCode
-			body, err := io.ReadAll(resp.Body)
-			result.body = string(body)
-			result.err = err
-			responses <- result
-		}()
-	}
-	group.Wait()
-	close(responses)
 
-	for result := range responses {
-		if result.err != nil {
-			t.Errorf("%s request: %v", result.route, result.err)
-			continue
+	for _, path := range []string{
+		"/api/v2/health", "/api/v2/status", "/api/v2/config",
+		"/api/v2/analytics/summary", "/api/v2/analytics/timeseries?bucket=daily",
+		"/api/v2/analytics/breakdown?by=source_product", "/api/v2/filter-options",
+		"/api/v2/sessions?limit=1&offset=0", "/api/v2/events?limit=1&offset=0", "/api/v2/import-runs",
+	} {
+		response, err := http.Get(server.URL + path)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
 		}
-		if result.status != http.StatusOK {
-			t.Errorf("%s status = %d body = %s", result.route, result.status, result.body)
-			continue
+		if response.StatusCode != http.StatusOK {
+			_ = response.Body.Close()
+			t.Fatalf("GET %s status=%d", path, response.StatusCode)
 		}
-		if strings.Contains(result.body, "no such function") {
-			t.Errorf("%s missing project label function: %s", result.route, result.body)
+		var payload any
+		if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+			_ = response.Body.Close()
+			t.Fatalf("GET %s invalid JSON: %v", path, err)
 		}
-		for _, field := range []string{"known_request_count", "request_count_known_events", "request_count_unknown_events"} {
-			if strings.Contains(result.body, field) {
-				t.Errorf("%s still exposes request-count aggregate %s: %s", result.route, field, result.body)
-			}
-		}
+		_ = response.Body.Close()
 	}
 }
 
-func TestAPIAcceptsRFC3339DateTimeFilters(t *testing.T) {
-	server := testServer(t)
+func TestSessionsAndEventsArePaginatedWithoutRemovedFields(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "control.db")
+	database, err := db.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	for index, id := range []string{"a", "b"} {
+		event := &model.UsageEvent{
+			EventID: id, IdentityVersion: model.IdentityVersion, IdentityStrategy: "native_event", IdentityScope: "session",
+			ContentSHA256: "hash-" + id, ParserVersion: "test-v1", EventGranularity: "request",
+			Channel: "codex", SourceProduct: "codex-cli", ModelNormalized: "unknown", ModelResolution: model.ModelResolutionUnknown, ModelIsFallback: true,
+			TimestampMs: 1_700_000_000_000 + int64(index), SessionKey: "session-" + id,
+			SessionID: "native-session-" + id, ProjectPath: "/private/project-" + id,
+			MessageID: "private-message-" + id, RequestID: "private-request-" + id,
+			InputTokens: 1, TotalTokens: 1, ImportedAtMs: 1, UpdatedAtMs: 1,
+		}
+		if _, err := database.UpsertEvent(event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg := config.Default()
+	cfg.Database.Path = path
+	cfg.Reports.Timezone = "UTC"
+	handler := NewServer(cfg, database, Options{}).Handler()
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v2/events?limit=1&offset=1", nil)
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/analytics/summary?since=2026-05-01T09:00:00Z&until=2026-05-01T11:00:00Z", nil)
-	server.Handler().ServeHTTP(recorder, request)
+	handler.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK {
-		t.Fatalf("status = %d body = %s", recorder.Code, recorder.Body.String())
+		t.Fatalf("events status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	var payload map[string]any
-	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("json: %v", err)
+	body := recorder.Body.String()
+	for _, required := range []string{`"items"`, `"limit":1`, `"offset":1`, `"total":2`, `"identity_strategy"`, `"session_key"`} {
+		if !strings.Contains(body, required) {
+			t.Errorf("events response missing %s: %s", required, body)
+		}
 	}
-	if payload["total_events"].(float64) != 1 {
-		t.Fatalf("unexpected payload: %v", payload)
+	for _, removed := range []string{
+		"request_count", "ttft", "output_tps", "recorded_cost", "total_duration",
+		"session_id", "project_path", "message_id", "request_id", "native-session", "/private/",
+	} {
+		if strings.Contains(body, removed) {
+			t.Errorf("events response contains removed field %q: %s", removed, body)
+		}
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/api/v2/sessions?limit=1&offset=0", nil)
+	recorder = httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"total":2`) || !strings.Contains(recorder.Body.String(), `"primary_model"`) {
+		t.Fatalf("sessions response status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
 
-func TestAPIValidation(t *testing.T) {
-	server := testServer(t)
-	cases := []string{
-		"/api/v1/analytics/timeseries?bucket=hourly",
-		"/api/v1/analytics/timeseries?by=raw",
-		"/api/v1/analytics/breakdown?by=raw",
-		"/api/v1/analytics/slow?sort=raw",
-		"/api/v1/events?limit=0",
-		"/api/v1/events?since=2026/05/01",
+func TestAPIIsReadOnlyAndValidatesPagination(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "control.db")
+	database, err := db.Open(path)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, path := range cases {
-		recorder := httptest.NewRecorder()
-		request := httptest.NewRequest(http.MethodGet, path, nil)
-		server.Handler().ServeHTTP(recorder, request)
-		if recorder.Code != http.StatusBadRequest {
-			t.Fatalf("%s status = %d body = %s", path, recorder.Code, recorder.Body.String())
-		}
-	}
-}
+	defer database.Close()
+	cfg := config.Default()
+	cfg.Database.Path = path
+	handler := NewServer(cfg, database, Options{}).Handler()
 
-func TestEventsConfigAndFilters(t *testing.T) {
-	server := testServer(t)
-	for _, path := range []string{"/api/v1/events", "/api/v1/config"} {
-		recorder := httptest.NewRecorder()
-		request := httptest.NewRequest(http.MethodGet, path, nil)
-		server.Handler().ServeHTTP(recorder, request)
-		body := recorder.Body.String()
-		if strings.Contains(body, "raw_usage_json") || strings.Contains(body, "secret") {
-			t.Fatalf("%s leaked private fields: %s", path, body)
-		}
-	}
+	request := httptest.NewRequest(http.MethodPost, "/api/v2/status", nil)
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/events", nil)
-	server.Handler().ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"model_resolution":"direct_event"`) || !strings.Contains(recorder.Body.String(), `"request_count":3`) {
-		t.Fatalf("events missing model resolution: status=%d body=%s", recorder.Code, recorder.Body.String())
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST status=%d", recorder.Code)
+	}
+	request = httptest.NewRequest(http.MethodGet, "/api/v2/events?offset=-1", nil)
+	recorder = httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "invalid_request") {
+		t.Fatalf("invalid offset status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestStaticHandlerRejectsSymlinkEscape(t *testing.T) {
+	database, err := db.Open(filepath.Join(t.TempDir(), "control.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	staticDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(staticDir, "index.html"), []byte("inside-index"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "secret.txt")
+	if err := os.WriteFile(outside, []byte("outside-secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(staticDir, "leak.txt")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
 	}
 
-	recorder = httptest.NewRecorder()
-	request = httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)
-	server.Handler().ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status failed: status=%d body=%s", recorder.Code, recorder.Body.String())
+	handler := NewServer(config.Default(), database, Options{StaticDir: staticDir}).Handler()
+	request := httptest.NewRequest(http.MethodGet, "/leak.txt", nil)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("symlink escape status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	for _, field := range []string{"known_request_count", "request_count_known_events", "request_count_unknown_events"} {
-		if strings.Contains(recorder.Body.String(), field) {
-			t.Fatalf("status still exposes %s: %s", field, recorder.Body.String())
-		}
-	}
-
-	recorder = httptest.NewRecorder()
-	request = httptest.NewRequest(http.MethodGet, "/api/v1/config", nil)
-	server.Handler().ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"workbuddy"`) || !strings.Contains(recorder.Body.String(), `~/.workbuddy/projects`) {
-		t.Fatalf("config missing WorkBuddy snapshot: status=%d body=%s", recorder.Code, recorder.Body.String())
-	}
-
-	recorder = httptest.NewRecorder()
-	request = httptest.NewRequest(http.MethodGet, "/api/v1/filter-options", nil)
-	server.Handler().ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("filter-options status = %d body = %s", recorder.Code, recorder.Body.String())
-	}
-	if !strings.Contains(recorder.Body.String(), "codex") || !strings.Contains(recorder.Body.String(), "project-a") {
-		t.Fatalf("filter options missing channel/project: %s", recorder.Body.String())
-	}
-
-	recorder = httptest.NewRecorder()
-	request = httptest.NewRequest(http.MethodGet, "/api/v1/analytics/timeseries?bucket=daily&by=project", nil)
-	server.Handler().ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("timeseries breakdown status = %d body = %s", recorder.Code, recorder.Body.String())
-	}
-	if !strings.Contains(recorder.Body.String(), `"bucket"`) || !strings.Contains(recorder.Body.String(), "project-a") {
-		t.Fatalf("timeseries breakdown missing bucket/project: %s", recorder.Body.String())
-	}
-
-	recorder = httptest.NewRecorder()
-	request = httptest.NewRequest(http.MethodGet, "/api/v1/analytics/summary?project=project-a", nil)
-	server.Handler().ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("project filter status = %d body = %s", recorder.Code, recorder.Body.String())
-	}
-	if !strings.Contains(recorder.Body.String(), `"total_events":1`) {
-		t.Fatalf("project filter missing event: %s", recorder.Body.String())
+	if strings.Contains(recorder.Body.String(), "outside-secret") {
+		t.Fatal("static handler exposed a file outside the static root")
 	}
 }
