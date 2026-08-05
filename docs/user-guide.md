@@ -1,92 +1,65 @@
 # User Guide
 
-AgentLedger v2 是本地 usage 统计分析器。典型使用流程是：初始化 v2 数据库，导入本机 agent 日志，按渠道 / 模型 / provider / 时间 / session / project 查看统计，并用只读 Web 面板做分析。
-
-## 初始化
+## 日常流程
 
 ```bash
-agent-ledger init
-```
-
-如果当前本地库是旧 schema，使用：
-
-```bash
-agent-ledger init --reset
-```
-
-`--reset` 会删除当前配置指向的数据库及 WAL/SHM 文件并重建空库。它不会迁移旧数据。
-
-## 导入
-
-```bash
+agent-ledger doctor
 agent-ledger import
-```
-
-导入会遍历配置中启用的 agent 路径，解析 usage 记录并 upsert 到 `usage_events`。重复事件按完整度保留更完整版本：有 timing、有 recorded cost、有 model、token 总量更高。
-
-## 常用报表
-
-```bash
+agent-ledger status
 agent-ledger report daily
-agent-ledger report weekly --channel codex
-agent-ledger report monthly --provider anthropic
-agent-ledger report models --json
-agent-ledger report channels
-agent-ledger report projects --channel claude
-agent-ledger report sessions --since 2026-05-01
-agent-ledger report slow --sort ttft_ms --limit 20
+agent-ledger report sessions
 ```
 
-统一过滤参数：
+`doctor` 先确认有效 config 和 source roots。不要在已有 import 仍运行时启动第二轮；import 静默并不代表卡死，可先检查进程与最新 `import_runs`。
+
+## 如何理解 import 结果
+
+- `added`：新的稳定 event ID。
+- `updated`：同 event 的兼容补充，例如 unknown/fallback 模型升级为直接证据。
+- `skipped`：content 完全相同，数据库零写入。
+- `rejected`：同 identity 下出现 token/Session/time/direct-model/accounting 冲突或记录本身无效。
+
+`completed_with_warnings` 不等于整个 import 失败；先读取 warning reason 和四类计数。拒绝记录不会覆盖 canonical row。
+
+## Session 页面/报表
+
+Session 行是筛选窗口内实时聚合，不是持久化表：
+
+- first/last date 是事件日期范围，不是工作时长；
+- primary model 按 total token 最大，平局按 model ID；
+- model count 是窗口内 distinct model；
+- estimated cost 使用当前 pricing profile，不是历史账单。
+
+## 多设备
+
+每台设备从本机原始日志生成 v3 `.aldb`：
 
 ```bash
---since YYYY-MM-DD
---until YYYY-MM-DD
---channel string
---provider string
---model string
---session string
---project string
---json
+agent-ledger export -o laptop.aldb
+agent-ledger merge laptop.aldb
 ```
 
-## 指标语义
+完全重叠事件 skip；允许补充的事实 update；任何冲突导致整次 merge rollback。AgentLedger 不保存“来自哪台设备”。
 
-- `channel`: Agent 来源，例如 `claude`、`codex`、`copilot`、`gemini`。
-- `provider`: 模型或日志 provider，例如 `anthropic`、`openai`、`google`。
-- `model_normalized`: 归一化模型名。
-- `project_path`: adapter 解析到的项目路径；报表/API 从它派生项目标签，可用于统计某个项目下的 usage，不代表客户端产品。
-- `total_tokens`: source 提供时使用 source 值；否则按 input/output/reasoning/cache 分项计算。
-- `ttft_ms`: `first_token_at_ms - request_started_at_ms`。
-- `output_duration_ms`: `completed_at_ms - first_token_at_ms`。
-- `total_duration_ms`: `completed_at_ms - request_started_at_ms`。
-- `output_tps`: `output_tokens / (output_duration_ms / 1000.0)`。
+## 筛选
 
-AgentLedger 不从文本长度、相邻 timestamp 或文件顺序推断 token / 耗时。日志没明确提供的 timing 字段保持 `NULL`。
+channel、source product、provider 是不同维度：
 
-## Web 面板
+- channel：Agent 类别，如 `codex`。
+- source product：日志形态，如 `copilot-otel` 或 `copilot-session-state`。
+- provider：模型/provider 证据，如 `openai`、`anthropic`。
+
+Session filter 接受稳定 `session_key` 或 native session ID；project filter 使用本机 path 派生的 basename label。
+
+## 成本
+
+默认 `--cost estimated`。未匹配模型显示 unpriced/null；unknown 的内置零值是 `policy_zero`，不是官方免费；profile unavailable 时 token 报表仍正常。
 
 ```bash
-agent-ledger serve
+agent-ledger report models --cost none
+agent-ledger report models --pricing ./my-pricing.json
 ```
 
-默认地址：
+## 重建与正式切换
 
-```text
-http://127.0.0.1:54217
-```
-
-面板提供 Overview、趋势、渠道 / provider、模型、project / session、慢请求、导入 / 设置等只读页面。
-
-## Export / merge
-
-```bash
-agent-ledger export --output usage.aldb
-agent-ledger merge usage.aldb
-```
-
-导出的 `.aldb` 是 SQLite 数据库文件。merge 只接受 schema v2 数据库，只合并未见过的 `usage_events`。
-
-## 隐私提示
-
-本地数据库、`.aldb` 文件和面板截图可能包含 session id、项目路径、模型名和 token 用量；未迁移旧库还可能包含 legacy 或 compact raw。公开传播前应按私有使用数据处理。
+v3 不迁移 v2。先在独立 `AGENT_LEDGER_DATA_DIR` 重建 candidate，做二次 import、差异报告、merge/rollback 实验。正式 DB 替换需单独确认，详见 [database-rebuild.md](database-rebuild.md)。

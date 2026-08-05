@@ -62,6 +62,12 @@ func (e *Estimator) Resolve(ev Event) Match {
 	modelAliases := pricingModelAliases(model)
 	for i := range e.profile.Rules {
 		rule := &e.profile.Rules[i]
+		if strings.TrimSpace(rule.Provider) != "" && !matchesAnyPattern([]string{rule.Provider}, strings.ToLower(strings.TrimSpace(ev.Provider))) {
+			continue
+		}
+		if strings.TrimSpace(rule.Channel) != "" && !matchesAnyPattern([]string{rule.Channel}, strings.ToLower(strings.TrimSpace(ev.Channel))) {
+			continue
+		}
 		if !matchesAnyPattern(rule.ModelPatterns, modelAliases...) {
 			continue
 		}

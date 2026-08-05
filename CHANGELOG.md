@@ -1,58 +1,36 @@
 # Changelog
 
-All notable changes to this project will be documented in this file.
-
-## [Unreleased]
+## Unreleased — v3
 
 ### Added
 
-- Read-only local HTTP API and React/Vite analytics dashboard.
-- GitHub Copilot and WorkBuddy usage adapters.
-- JSON pricing profiles and read-only estimated-cost reporting.
-- `compact-raw` maintenance command for removing historical raw usage evidence.
-- Explicit model-resolution, observability, and accounting fields across CLI reports, API responses, and the Web dashboard.
-- Local preview and database-rebuild runbooks covering full page/API validation, replay warning interpretation, consistent backups, atomic replacement, and rollback gates.
+- Schema v3 与 identity version 2。
+- 稳定 `session_key`、`event_id`、`content_sha256`、identity strategy/scope、parser version 和 event granularity。
+- `import_runs.events_rejected` 与 `completed_with_warnings` 冲突摘要。
+- 通用事务内 reconcile，供普通 import 和 `.aldb` merge 共用。
+- `report sources`、`report providers`、source-product filter、Session 专用聚合及 API 分页。
+- `/api/v2/*` 只读 API；summary 增加 distinct Session 数。
+- 基于 IANA timezone 的逐事件 SQLite bucket function，正确处理历史 DST。
+- 配置级 pricing profile、即时 estimated cost、coverage、`policy_zero` 和稳定 unavailable error code。
 
 ### Changed
 
-- Replaced the v1 multi-table ledger with the schema v2 `meta`, `import_runs`, and `usage_events` analytics model.
-- Made statistics-only persistence canonical: adapters may use source JSON transiently for parsing and fingerprinting, while new database writes keep `raw_usage_json` as `NULL`.
-- Made `status`, `report`, `serve`, and `verify` use strict read-only SQLite paths without implicit configuration or schema writes.
-- Changed Codex accounting to reconcile cumulative usage by session, preserve explicit model evidence, and classify missing model evidence as `unknown` instead of guessing a model.
-- Increased the Codex import and diagnostics JSONL scanner limit to 64 MiB for large single-line records.
-- Stopped aggregating or displaying global request-count totals and coverage in CLI reports, status/analytics API responses, and the Web dashboard; the nullable per-event source field remains available without a schema migration.
+- 多设备聚合只依赖 v3 `.aldb` 的稳定事件 identity，不保存 device。
+- exact duplicate 零写入；兼容补充只做 missing-fill 或 `unknown/fallback → direct`；冲突拒绝。
+- merge 只接受 schema v3 / identity v2，先全量 preflight，任一冲突整事务回滚。
+- 默认 redacted export 只清空路径和 import warning，不改变 identity/totals。
+- Web 以 Sessions 为主要分析页，并分开展示 channel、source product 和 provider。
+- pricing rule 现在正确匹配 provider/channel，并拒绝非法日期、负费率和不支持的费率。
 
-### Fixed
+### Removed
 
-- Hardened export, merge, redaction, source-identity reconciliation, and additive schema validation behavior.
-- Removed read-only API head-of-line blocking by allowing a bounded four-connection SQLite pool for concurrent panel aggregations; write paths remain single-connection.
-- Filtered Codex fork/subagent parent-prefix and rewritten-burst replay before fingerprinting, with conservative per-child quarantine, replay-local model/timing isolation (including fail-closed attribution when replay timestamps are missing or backward), explicit diagnostic units, size/mtime identity-consistent `doctor codex` policy comparison, and corrected current-ccusage last-or-delta compatibility accounting.
-- Preserved and strictly parsed explicit request counts, including zero-token request records, without inferring unknown counts from event or session totals.
-- Removed redundant Copilot JSON decoding and a vulnerable Web router dependency.
+- Schema v2 compatibility/migration 和 v2 `.aldb` merge。
+- `dedupe_key`、`source_agent`、`request_count`、所有 request timing/TTFT/TPS 字段、`recorded_cost_usd`、`raw_usage_json`。
+- `report slow`、`compact-raw`、recorded/both cost modes。
+- `/api/v1/*` 与 `/analytics/slow`。
+- `cleanup.*`、`import.single_thread`、`reports.currency`、`privacy.mode`/envelope alias。
+- 设备、source checkpoint、observation/conflict/merge ledger 和持久化 Session 表。
 
-### Known limitations
+## v2
 
-- There are no `cleanup`, `restore`, `pricing`, or `workspace` management commands.
-- Source-file tracking, parse-error replay, time-filtered or compressed export, currency conversion, and encrypted raw archives remain roadmap items.
-
-## [0.1.0] - 2026-05-23
-
-### Added
-
-- Initial AgentLedger Go CLI implementation.
-- SQLite database layer with WAL mode and schema version 1.
-- Source adapters for Claude Code, Codex, and Gemini CLI local usage logs.
-- Import pipeline with file discovery, parse-time filtering, and grace-period skipping for recently modified files.
-- Event fingerprinting with four deterministic strategies: `message_id`, `session_token`, `raw_hash`, and `fallback`.
-- Cross-device export and merge using portable `.aldb` SQLite files.
-- Reports for daily, weekly, monthly, models, channels, devices, and sessions.
-- CLI commands: `init`, `import`, `export`, `merge`, `report`, `status`, `doctor`, `verify`, `vacuum`, and Cobra-generated `completion`.
-- TOML configuration with default local paths for database, device id, and agent log sources.
-- Fingerprint unit tests and successful `go test ./...` / `go build ./...` validation.
-- Public documentation set under `docs/` covering quickstart, CLI, configuration, source adapters, data model, reports, operations, development, and roadmap.
-
-### Known Gaps
-
-- Cleanup/quarantine is present in the design and config shape but not implemented as a CLI command.
-- Cost fields exist in the schema, but model pricing estimation is not implemented yet.
-- Source file and raw record tracking tables exist in the schema, but the current import path writes normalized `usage_events` only.
+v2 建立了三表本地 usage analytics 基线以及 Claude、Codex、Copilot、Gemini、WorkBuddy adapter。v3 不迁移 v2 行；升级必须保留 exact backup，并从原始日志 clean rebuild。

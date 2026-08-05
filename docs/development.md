@@ -97,7 +97,7 @@ go run . serve
 - 不要猜测外部 agent 的日志格式；新增 adapter 前先保留真实样例或测试 fixture。
 - 新增 report 参数时必须做 allowlist 校验，避免把未验证用户输入拼入 SQL。
 - `merge` 涉及 SQLite `ATTACH DATABASE`，必须继续保留路径校验和 SQLite header 校验。
-- v2 schema 只保留 `meta`、`import_runs`、`usage_events`；不要重新引入 source/observation/conflict 表，除非先完成新的 schema 设计和回归测试。
+- v3 schema 只保留 `meta`、`import_runs`、`usage_events`；不要重新引入 device/source-checkpoint/observation/conflict/merge/session 表，除非先完成新的 schema 设计和回归测试。
 - 成本估算不要硬编码成不可追踪常量；应记录 pricing source/version，并明确价格更新时间。
 
 ## 发布前检查

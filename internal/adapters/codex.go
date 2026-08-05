@@ -186,7 +186,8 @@ func (a *CodexAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, erro
 		if replayMatcher.pending() && isCodexTaskComplete(obj) {
 			continue
 		}
-		if attachCodexTaskTiming(obj, defaultSessionID, lastUsageRecords) {
+		// task_complete may add a stable turn identity to the preceding usage.
+		if attachCodexTaskTurnIdentity(obj, defaultSessionID, lastUsageRecords) {
 			continue
 		}
 
@@ -224,6 +225,7 @@ func (a *CodexAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, erro
 				previousTotals[sessionID] = sourceUsage
 			}
 		}
+		usage, accountingPartial := usage.reconcileToSourceTotal()
 		rawInputTokens := usage.inputPtr()
 		storedUsage := usage.storageUsage()
 
@@ -261,6 +263,12 @@ func (a *CodexAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, erro
 		if storedUsage.isZero() {
 			continue
 		}
+		observability := "full"
+		if accountingPartial {
+			observability = "partial"
+			a.replayStats.accountingPartialEvents++
+			a.replayStats.accountingPartialTokens += storedUsage.totalTokens()
+		}
 
 		parsedModel := extractCodexModel(obj)
 		modelName := parsedModel
@@ -281,6 +289,20 @@ func (a *CodexAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, erro
 			modelIsFallback = true
 			modelResolution = model.ModelResolutionUnknown
 		}
+		nativeSessionID := extractCodexExplicitSessionID(obj)
+		nativeEventID := extractCodexNativeEventID(obj)
+		identitySubkey := firstNonEmpty(getString(obj, "segment_id"), getNestedString(obj, "payload", "segment_id"))
+		identityKind := "event"
+		if nativeEventID == "" {
+			if requestID := firstNonEmpty(getString(obj, "request_id"), getNestedString(obj, "payload", "request_id")); requestID != "" {
+				nativeEventID, identityKind = requestID, "request"
+			} else if messageID := firstNonEmpty(getString(obj, "id"), getString(obj, "message_id")); messageID != "" {
+				nativeEventID, identityKind = messageID, "message"
+			} else {
+				identityKind = "record"
+				identitySubkey = stableRecordIdentitySubkey(lineNum, identitySubkey)
+			}
+		}
 
 		rawJSON, _ := json.Marshal(obj)
 		rawHash := sha256Hex(rawJSON)
@@ -289,6 +311,13 @@ func (a *CodexAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, erro
 			Agent:                 "codex",
 			Provider:              "openai",
 			Model:                 modelName,
+			NativeSessionID:       nativeSessionID,
+			NativeEventID:         nativeEventID,
+			IdentityKind:          identityKind,
+			IdentityScope:         "session",
+			IdentitySubkey:        identitySubkey,
+			ParserVersion:         "codex-v1",
+			Granularity:           "request",
 			ModelResolution:       modelResolution,
 			TimestampMs:           extractCodexTimestamp(obj),
 			SessionID:             sessionID,
@@ -301,10 +330,11 @@ func (a *CodexAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, erro
 			TotalTokens:           totalTokens,
 			SourceTotalTokens:     sourceUsage.sourceTotalPtr(),
 			RawInputTokens:        rawInputTokens,
-			ObservabilityLevel:    "full",
+			ObservabilityLevel:    observability,
 			ModelIsFallback:       modelIsFallback,
 			TokenAccountingMethod: method,
 			AccountingProfile:     a.duplicatePolicy,
+			SourceProduct:         "codex-cli",
 			SessionPathID:         sessionPathID,
 			FingerprintJSON:       string(rawJSON),
 			SourceFile:            path,
@@ -449,7 +479,35 @@ func (current codexUsageSnapshot) telescopingDelta(previous codexUsageSnapshot) 
 }
 
 func (u codexUsageSnapshot) isZero() bool {
-	return u.Input == 0 && u.CachedInput == 0 && u.Output == 0 && u.Reasoning == 0
+	return u.Input == 0 && u.CachedInput == 0 && u.Output == 0 && u.Reasoning == 0 && (!u.HasTotal || u.Total == 0)
+}
+
+// reconcileToSourceTotal keeps the authoritative source total while bounding
+// component deltas when cumulative counters partially reset. Known component
+// deltas remain lower-bound detail; observability is marked partial whenever
+// they cannot exactly explain the source total.
+func (u codexUsageSnapshot) reconcileToSourceTotal() (codexUsageSnapshot, bool) {
+	if !u.HasTotal || u.Total < 0 {
+		return u, false
+	}
+	outputSpan := maxInt64(u.Output, u.Reasoning)
+	expected := u.Input + outputSpan
+	if expected == u.Total {
+		return u, false
+	}
+	if expected < u.Total {
+		return u, true
+	}
+	if outputSpan >= u.Total {
+		u.Input = 0
+		u.CachedInput = 0
+		u.Output = minInt64(u.Output, u.Total)
+		u.Reasoning = minInt64(u.Reasoning, u.Total)
+		return u, true
+	}
+	u.Input = minInt64(u.Input, u.Total-outputSpan)
+	u.CachedInput = minInt64(u.CachedInput, u.Input)
+	return u, true
 }
 
 func (u codexUsageSnapshot) storageUsage() codexUsageSnapshot {
@@ -552,6 +610,25 @@ func extractCodexExplicitSessionID(obj map[string]interface{}) string {
 	return ""
 }
 
+// extractCodexNativeEventID selects only source event identifiers. A source
+// file name or line number is deliberately not a candidate because relocation
+// must not change v3 identity.
+func extractCodexNativeEventID(obj map[string]interface{}) string {
+	for _, value := range []string{
+		getString(obj, "event_id"),
+		getString(obj, "eventId"),
+		getNestedString(obj, "payload", "event_id"),
+		getNestedString(obj, "payload", "eventId"),
+		getString(obj, "id"),
+		getNestedString(obj, "payload", "id"),
+	} {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 func extractCodexTimestamp(obj map[string]interface{}) int64 {
 	for _, key := range []string{"timestamp", "created_at", "createdAt"} {
 		if ts := parseTimestamp(obj[key]); ts > 0 {
@@ -570,7 +647,7 @@ func extractCodexTimestamp(obj map[string]interface{}) int64 {
 	return 0
 }
 
-func attachCodexTaskTiming(obj map[string]interface{}, fallbackSessionID string, lastUsageRecords map[string]*fingerprint.ParsedRecord) bool {
+func attachCodexTaskTurnIdentity(obj map[string]interface{}, fallbackSessionID string, lastUsageRecords map[string]*fingerprint.ParsedRecord) bool {
 	if !isCodexTaskComplete(obj) {
 		return false
 	}
@@ -584,30 +661,15 @@ func attachCodexTaskTiming(obj map[string]interface{}, fallbackSessionID string,
 		return true
 	}
 
-	durationMs := getInt64(payload, "duration_ms")
-	ttftMs := getInt64(payload, "time_to_first_token_ms")
-	completedAtMs := parseTimestamp(payload["completed_at"])
-	if completedAtMs == 0 {
-		completedAtMs = extractCodexTimestamp(obj)
-	}
-
-	if rec.TotalDurationMs == 0 && durationMs > 0 {
-		rec.TotalDurationMs = durationMs
-	}
-	if rec.TTFTMs == 0 && ttftMs > 0 {
-		rec.TTFTMs = ttftMs
-	}
-	if rec.CompletedAtMs == 0 && completedAtMs > 0 {
-		rec.CompletedAtMs = completedAtMs
-	}
-	if rec.RequestStartedAtMs == 0 && completedAtMs > 0 && durationMs > 0 {
-		rec.RequestStartedAtMs = completedAtMs - durationMs
-	}
-	if rec.FirstTokenAtMs == 0 && rec.RequestStartedAtMs > 0 && ttftMs > 0 {
-		rec.FirstTokenAtMs = rec.RequestStartedAtMs + ttftMs
-	}
+	// v3 records calendar usage only; task_complete contributes turn identity
+	// metadata at most.
 	if rec.TurnID == "" {
 		rec.TurnID = getString(payload, "turn_id")
+	}
+	if rec.TurnID != "" {
+		rec.NativeEventID = ""
+		rec.IdentityKind = "turn"
+		rec.IdentitySubkey = ""
 	}
 	return true
 }

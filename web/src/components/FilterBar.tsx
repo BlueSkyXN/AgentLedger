@@ -24,6 +24,7 @@ export function FilterBar() {
     activeSince,
     activeUntil,
     channel,
+    sourceProduct,
     provider,
     model,
     session,
@@ -32,6 +33,7 @@ export function FilterBar() {
     setCustomSince,
     setCustomUntil,
     setChannel,
+    setSourceProduct,
     setProvider,
     setModel,
     setSession,
@@ -40,21 +42,22 @@ export function FilterBar() {
   } = useFilterContext();
   const rangeText = activeSince || activeUntil
     ? `${formatDate(activeSince) || "最早"} 至 ${formatDate(activeUntil) || "现在"}`
-    : summary?.first_event_at || summary?.last_event_at
-      ? `${formatDate(summary?.first_event_at)} 至 ${formatDate(summary?.last_event_at)}`
+    : summary?.first_date || summary?.last_date
+      ? `${formatDate(summary?.first_date)} 至 ${formatDate(summary?.last_date)}`
       : "全部时间";
-  const detailedCount = [channel, provider, model, session, project].filter(Boolean).length;
+  const detailedCount = [channel, sourceProduct, provider, model, session, project].filter(Boolean).length;
   const [advancedOpen, setAdvancedOpen] = useState(detailedCount > 0 || range === "custom");
   const chips = useMemo(() => {
     const values: string[] = [];
     if (range !== "all") values.push(rangeText);
     if (channel) values.push(`Channel: ${channel}`);
+    if (sourceProduct) values.push(`来源: ${sourceProduct}`);
     if (provider) values.push(`Provider: ${provider}`);
     if (model) values.push(`Model: ${model}`);
     if (session) values.push(`Session: ${session}`);
     if (project) values.push(`Project: ${project}`);
     return values;
-  }, [channel, model, project, provider, range, rangeText, session]);
+  }, [channel, model, project, provider, range, rangeText, session, sourceProduct]);
 
   function chooseRange(value: TimeRange) {
     setRange(value);
@@ -73,7 +76,7 @@ export function FilterBar() {
         </div>
         <div className="filter-state">
           <strong>{rangeText}</strong>
-          <span>{chips.length > 0 ? chips.join(" · ") : "未限定 channel / provider / model / session / project"}</span>
+          <span>{chips.length > 0 ? chips.join(" · ") : "未限定 channel / 来源 / provider / model / session / project"}</span>
         </div>
         <button type="button" className="ghost-button" onClick={clearFilters}>重置</button>
         <button type="button" className="filter-toggle" onClick={() => setAdvancedOpen((open) => !open)}>
@@ -95,6 +98,13 @@ export function FilterBar() {
             <select value={channel} onChange={(event) => setChannel(event.target.value)}>
               <option value="">全部</option>
               {(options?.channels ?? []).map((value) => <option key={value} value={value}>{value}</option>)}
+            </select>
+          </label>
+          <label>
+            <span>来源</span>
+            <select value={sourceProduct} onChange={(event) => setSourceProduct(event.target.value)}>
+              <option value="">全部</option>
+              {(options?.source_products ?? []).map((value) => <option key={value} value={value}>{value}</option>)}
             </select>
           </label>
           <label>

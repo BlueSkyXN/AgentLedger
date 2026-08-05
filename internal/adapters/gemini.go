@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/BlueSkyXN/AgentLedger/internal/fingerprint"
+	"github.com/BlueSkyXN/AgentLedger/internal/model"
 )
 
 type GeminiAdapter struct{}
@@ -108,19 +109,106 @@ func parseGeminiObject(obj map[string]interface{}, path string, lineNum int) *fi
 
 	rawJSON, _ := json.Marshal(obj)
 	rawHash := sha256Hex(rawJSON)
-
-	return &fingerprint.ParsedRecord{
-		Agent:           "gemini",
-		Provider:        "google",
-		Model:           getString(obj, "model"),
-		TimestampMs:     parseTimestamp(obj["timestamp"]),
-		SessionID:       getString(obj, "session_id"),
-		InputTokens:     getInt64(usage, "promptTokenCount"),
-		OutputTokens:    getInt64(usage, "candidatesTokenCount"),
-		TotalTokens:     getInt64(usage, "totalTokenCount"),
-		FingerprintJSON: string(rawJSON),
-		SourceFile:      path,
-		LineNumber:      lineNum,
-		RawSHA256:       rawHash,
+	nativeSessionID := firstNonEmpty(
+		getString(obj, "session_id"),
+		getString(obj, "sessionId"),
+		getNestedString(obj, "metadata", "session_id"),
+		getNestedString(obj, "response", "session_id"),
+	)
+	nativeEventID, identityKind := geminiNativeIdentity(obj)
+	identitySubkey := firstNonEmpty(getString(obj, "segment_id"), getString(obj, "part_id"))
+	if nativeEventID == "" {
+		identityKind = "record"
+		identitySubkey = stableRecordIdentitySubkey(lineNum, identitySubkey)
 	}
+	sessionPathID := stableSessionPathID(path, ".gemini", "sessions", "projects")
+	modelName := getString(obj, "model")
+	if modelName == "" {
+		if response := getMap(obj, "response"); response != nil {
+			modelName = getString(response, "model")
+		}
+	}
+	timestampMs := parseTimestamp(obj["timestamp"])
+	if timestampMs == 0 {
+		if response := getMap(obj, "response"); response != nil {
+			timestampMs = parseTimestamp(response["timestamp"])
+		}
+	}
+	prompt, hasPrompt := firstInt64Field(usage, "promptTokenCount", "prompt_token_count")
+	output, _ := firstInt64Field(usage, "candidatesTokenCount", "candidates_token_count")
+	cacheRead, _ := firstInt64Field(usage, "cachedContentTokenCount", "cached_content_token_count")
+	reasoning, _ := firstInt64Field(usage, "thoughtsTokenCount", "thoughts_token_count")
+	toolInput, hasToolInput := firstInt64Field(usage, "toolUsePromptTokenCount", "tool_use_prompt_token_count")
+	total, hasTotal := firstInt64Field(usage, "totalTokenCount", "total_token_count")
+	rawInput := prompt + toolInput
+
+	record := &fingerprint.ParsedRecord{
+		Agent:                 "gemini",
+		Provider:              "google",
+		Model:                 modelName,
+		NativeSessionID:       nativeSessionID,
+		SessionPathID:         sessionPathID,
+		NativeEventID:         nativeEventID,
+		IdentityKind:          identityKind,
+		IdentityScope:         "session",
+		IdentitySubkey:        identitySubkey,
+		ParserVersion:         "gemini-v1",
+		Granularity:           "request",
+		TimestampMs:           timestampMs,
+		SessionID:             firstNonEmpty(nativeSessionID, sessionPathID),
+		InputTokens:           rawInput - cacheRead,
+		OutputTokens:          output,
+		CacheReadTokens:       cacheRead,
+		ReasoningTokens:       reasoning,
+		TotalTokens:           total,
+		SourceProduct:         "gemini-cli",
+		ObservabilityLevel:    "full",
+		TokenAccountingMethod: model.AccGeminiUsage,
+		AccountingProfile:     "gemini_usage_v1",
+		FingerprintJSON:       string(rawJSON),
+		SourceFile:            path,
+		LineNumber:            lineNum,
+		RawSHA256:             rawHash,
+	}
+	if hasTotal {
+		record.SourceTotalTokens = int64Ptr(total)
+	}
+	if hasPrompt || hasToolInput {
+		record.RawInputTokens = int64Ptr(rawInput)
+	}
+	return record
+}
+
+func geminiNativeIdentity(obj map[string]interface{}) (string, string) {
+	for _, value := range []string{
+		getString(obj, "event_id"),
+		getString(obj, "eventId"),
+		getString(obj, "id"),
+		getNestedString(obj, "response", "event_id"),
+		getNestedString(obj, "response", "eventId"),
+		getNestedString(obj, "response", "id"),
+	} {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value), "event"
+		}
+	}
+	for _, value := range []string{
+		getString(obj, "message_id"),
+		getString(obj, "messageId"),
+		getNestedString(obj, "response", "message_id"),
+	} {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value), "message"
+		}
+	}
+	for _, value := range []string{
+		getString(obj, "request_id"),
+		getString(obj, "requestId"),
+		getNestedString(obj, "response", "request_id"),
+	} {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value), "request"
+		}
+	}
+	return "", ""
 }

@@ -30,8 +30,6 @@ type CodexDiagnostics struct {
 
 	TaskCompleteEvents     int
 	TaskCompleteWithTurnID int
-	TaskCompleteWithTiming int
-	TaskCompleteWithTTFT   int
 
 	LedgerStats            CodexRecordStats
 	CCUsageCompatibleStats CodexRecordStats
@@ -39,17 +37,14 @@ type CodexDiagnostics struct {
 }
 
 type CodexRecordStats struct {
-	Events              int
-	TotalTokens         int64
-	InputTokens         int64
-	RawInputTokens      int64
-	OutputTokens        int64
-	CacheReadTokens     int64
-	ReasoningTokens     int64
-	TotalDurationEvents int
-	TTFTEvents          int
-	OutputTPSEvents     int
-	ModelCounts         map[string]int
+	Events          int
+	TotalTokens     int64
+	InputTokens     int64
+	RawInputTokens  int64
+	OutputTokens    int64
+	CacheReadTokens int64
+	ReasoningTokens int64
+	ModelCounts     map[string]int
 }
 
 type CodexModelCount struct {
@@ -364,12 +359,6 @@ func scanCodexDiagnosticFile(path string, diag *CodexDiagnostics) error {
 			if getString(payload, "turn_id") != "" {
 				diag.TaskCompleteWithTurnID++
 			}
-			if getInt64(payload, "duration_ms") > 0 || parseTimestamp(payload["completed_at"]) > 0 {
-				diag.TaskCompleteWithTiming++
-			}
-			if getInt64(payload, "time_to_first_token_ms") > 0 {
-				diag.TaskCompleteWithTTFT++
-			}
 		}
 
 		if entryType == "event_msg" && payloadType == "token_count" {
@@ -406,7 +395,10 @@ func addCodexRecordStats(stats *CodexRecordStats, records []*fingerprint.ParsedR
 		stats.ModelCounts = map[string]int{}
 	}
 	for _, rec := range records {
-		eventID, _ := fingerprint.Compute(rec)
+		_, eventID, _, _, err := fingerprint.ComputeIdentity(rec)
+		if err != nil {
+			continue
+		}
 		if seen[eventID] {
 			continue
 		}
@@ -420,22 +412,6 @@ func addCodexRecordStats(stats *CodexRecordStats, records []*fingerprint.ParsedR
 		stats.OutputTokens += rec.OutputTokens
 		stats.CacheReadTokens += rec.CacheReadTokens
 		stats.ReasoningTokens += rec.ReasoningTokens
-		if rec.TotalDurationMs > 0 {
-			stats.TotalDurationEvents++
-		}
-		if rec.TTFTMs > 0 {
-			stats.TTFTEvents++
-		}
-		outputDurationMs := rec.OutputDurationMs
-		if outputDurationMs == 0 && rec.FirstTokenAtMs > 0 && rec.CompletedAtMs > 0 {
-			outputDurationMs = saturatingSub(rec.CompletedAtMs, rec.FirstTokenAtMs)
-		}
-		if outputDurationMs == 0 && rec.TotalDurationMs > 0 && rec.TTFTMs > 0 {
-			outputDurationMs = saturatingSub(rec.TotalDurationMs, rec.TTFTMs)
-		}
-		if outputDurationMs > 0 && rec.OutputTokens > 0 {
-			stats.OutputTPSEvents++
-		}
 		modelName := rec.Model
 		if modelName == "" {
 			modelName = "unknown"
@@ -474,12 +450,4 @@ func (s CodexRecordStats) TopModels(limit int) []CodexModelCount {
 		return items[:limit]
 	}
 	return items
-}
-
-func (s CodexRecordStats) TimingCoverage() (totalDuration, ttft, tps float64) {
-	if s.Events == 0 {
-		return 0, 0, 0
-	}
-	events := float64(s.Events)
-	return float64(s.TotalDurationEvents) / events, float64(s.TTFTEvents) / events, float64(s.OutputTPSEvents) / events
 }

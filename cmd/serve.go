@@ -21,7 +21,7 @@ var serveCmd = &cobra.Command{
 			return err
 		}
 
-		cfg, database, err := openReadOnlyV2ConfiguredDatabase()
+		cfg, database, err := openReadOnlyV3ConfiguredDatabase()
 		if err != nil {
 			return err
 		}

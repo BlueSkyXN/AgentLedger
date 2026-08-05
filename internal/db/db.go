@@ -8,6 +8,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 
 	sqlite3 "github.com/mattn/go-sqlite3"
 )
@@ -25,7 +26,10 @@ type Database struct {
 func init() {
 	sql.Register(sqliteDriverName, &sqlite3.SQLiteDriver{
 		ConnectHook: func(conn *sqlite3.SQLiteConn) error {
-			return conn.RegisterFunc("agentledger_project_label", projectLabel, true)
+			if err := conn.RegisterFunc("agentledger_project_label", projectLabel, true); err != nil {
+				return err
+			}
+			return conn.RegisterFunc("agentledger_time_bucket", timeBucket, true)
 		},
 	})
 }
@@ -97,8 +101,8 @@ func OpenReadOnly(path string) (*Database, error) {
 	return db, nil
 }
 
-// OpenReadOnlyV2 opens an existing current-v2 database without creating or migrating it.
-func OpenReadOnlyV2(path string) (*Database, error) {
+// OpenReadOnlyV3 opens an existing current-v3 database without creating or migrating it.
+func OpenReadOnlyV3(path string) (*Database, error) {
 	db, err := OpenReadOnly(path)
 	if err != nil {
 		return nil, err
@@ -110,10 +114,10 @@ func OpenReadOnlyV2(path string) (*Database, error) {
 	return db, nil
 }
 
-// OpenReadWriteV2 opens an existing complete v2 database without creating,
+// OpenReadWriteV3 opens an existing complete v3 database without creating,
 // initializing, or migrating it. It is for narrowly-scoped maintenance that
 // must not trigger startup schema maintenance.
-func OpenReadWriteV2(path string) (*Database, error) {
+func OpenReadWriteV3(path string) (*Database, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -182,6 +186,29 @@ func projectLabel(projectPath any) string {
 		}
 	}
 	return normalized
+}
+
+// timeBucket calculates calendar buckets using the offset that applied to the
+// individual event. This is intentionally a Go SQLite function because SQLite's
+// built-in date modifiers cannot apply historical IANA timezone/DST rules.
+func timeBucket(timestampMs int64, timezone, bucket string) (string, error) {
+	location, err := time.LoadLocation(strings.TrimSpace(timezone))
+	if err != nil {
+		return "", fmt.Errorf("invalid reports timezone %q: %w", timezone, err)
+	}
+	local := time.UnixMilli(timestampMs).In(location)
+	switch bucket {
+	case "daily":
+		return local.Format("2006-01-02"), nil
+	case "weekly":
+		weekday := (int(local.Weekday()) + 6) % 7
+		monday := local.AddDate(0, 0, -weekday)
+		return monday.Format("2006-01-02"), nil
+	case "monthly":
+		return local.Format("2006-01"), nil
+	default:
+		return "", fmt.Errorf("unsupported time bucket %q", bucket)
+	}
 }
 
 func (d *Database) Close() error {

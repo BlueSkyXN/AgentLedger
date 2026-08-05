@@ -62,7 +62,6 @@ func runCodexDoctor(cfg *config.Config) error {
 		return err
 	}
 	configured := diag.ConfiguredStats()
-	totalCoverage, ttftCoverage, tpsCoverage := configured.TimingCoverage()
 
 	fmt.Println("AgentLedger Doctor - Codex")
 	fmt.Println("==========================")
@@ -80,14 +79,12 @@ func runCodexDoctor(cfg *config.Config) error {
 	fmt.Printf("  total-only:        %d\n", diag.TotalOnlyUsageEvents)
 	fmt.Printf("  all-zero usage:    %d\n", diag.AllZeroUsageEvents)
 	fmt.Printf("  task_complete:     %d\n", diag.TaskCompleteEvents)
-	fmt.Printf("  task timing:       %d\n", diag.TaskCompleteWithTiming)
-	fmt.Printf("  task TTFT:         %d\n", diag.TaskCompleteWithTTFT)
+	fmt.Printf("  task turn IDs:     %d\n", diag.TaskCompleteWithTurnID)
 
 	printCodexReplayDiagnostics(diag.ReplayDiagnostics)
 
 	fmt.Println("\nParsed usage, configured policy:")
 	printCodexRecordStats("configured", configured)
-	fmt.Printf("  timing coverage: total=%.2f%% ttft=%.2f%% tps=%.2f%%\n", totalCoverage*100, ttftCoverage*100, tpsCoverage*100)
 
 	fmt.Println("\nPolicy comparison:")
 	printCodexRecordStats("ledger", diag.LedgerStats)
@@ -109,7 +106,7 @@ func printCodexReplayDiagnostics(diagnostics []adapters.ImportDiagnostic) {
 }
 
 func printCodexRecordStats(label string, stats adapters.CodexRecordStats) {
-	fmt.Printf("  %s: events=%d total=%d input=%d raw_input=%d cache_read=%d output=%d reasoning=%d timing=%d ttft=%d tps=%d\n",
+	fmt.Printf("  %s: events=%d total=%d input=%d raw_input=%d cache_read=%d output=%d reasoning=%d\n",
 		label,
 		stats.Events,
 		stats.TotalTokens,
@@ -118,8 +115,5 @@ func printCodexRecordStats(label string, stats adapters.CodexRecordStats) {
 		stats.CacheReadTokens,
 		stats.OutputTokens,
 		stats.ReasoningTokens,
-		stats.TotalDurationEvents,
-		stats.TTFTEvents,
-		stats.OutputTPSEvents,
 	)
 }

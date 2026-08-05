@@ -3,6 +3,8 @@ package pricing
 import (
 	"fmt"
 	"strings"
+
+	"github.com/BlueSkyXN/AgentLedger/internal/model"
 )
 
 type Estimate struct {
@@ -45,13 +47,25 @@ func (e *Estimator) EstimateMatch(ev Event, match Match) (Estimate, error) {
 
 func estimateWithRule(ev Event, rule *Rule, profile *Profile) (int64, error) {
 	var total int64
+	pricedOutputTokens := ev.OutputTokens
+	switch ev.TokenAccountingMethod {
+	case model.AccCopilotOtelParts, model.AccCopilotSessionMetrics:
+		// Copilot reports reasoning as a separate bucket rather than including it
+		// in output_tokens; model pricing charges it at the output rate.
+		pricedOutputTokens += ev.ReasoningTokens
+	default:
+		switch reasoningPolicy(rule, profile) {
+		case "separate_as_output", "priced_as_output":
+			pricedOutputTokens += ev.ReasoningTokens
+		}
+	}
 	parts := []struct {
 		name   string
 		tokens int64
 		rate   *Rate
 	}{
 		{"input", ev.InputTokens, rule.Rates.Input},
-		{"output", ev.OutputTokens, rule.Rates.Output},
+		{"output", pricedOutputTokens, rule.Rates.Output},
 		{"cache_read", ev.CacheReadTokens, cacheReadRate(rule)},
 		{"cache_creation", ev.CacheCreationTokens, cacheCreationRate(rule, profile)},
 	}

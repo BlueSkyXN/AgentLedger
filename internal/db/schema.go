@@ -4,88 +4,38 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
+	"strconv"
 )
 
-const SchemaVersion = "2"
+const (
+	SchemaVersion   = "3"
+	IdentityVersion = "2"
+)
 
 var ErrIncompatibleSchema = errors.New("incompatible database schema")
-
-var v2CompatibilityColumns = []string{
-	"source_agent TEXT",
-	"source_product TEXT",
-	"observability_level TEXT",
-	"model_is_fallback INTEGER NOT NULL DEFAULT 0",
-	"model_resolution TEXT NOT NULL DEFAULT 'legacy_unclassified'",
-	"source_total_tokens INTEGER",
-	"raw_input_tokens INTEGER",
-	"token_accounting_method TEXT",
-	"accounting_profile TEXT",
-	"request_count INTEGER CHECK (request_count >= 0)",
-	"session_path_id TEXT",
-	"turn_id TEXT",
-}
 
 type requiredTableSchema struct {
 	name    string
 	columns []string
 }
 
-var v2RequiredTableSchemas = []requiredTableSchema{
-	{
-		name:    "meta",
-		columns: []string{"key", "value"},
-	},
-	{
-		name: "import_runs",
-		columns: []string{
-			"id",
-			"started_at_ms",
-			"finished_at_ms",
-			"status",
-			"files_scanned",
-			"events_added",
-			"events_updated",
-			"events_skipped",
-			"error",
-		},
-	},
-	{
-		name: "usage_events",
-		columns: append([]string{
-			"event_id",
-			"dedupe_key",
-			"dedupe_strategy",
-			"channel",
-			"provider",
-			"model_raw",
-			"model_normalized",
-			"timestamp_ms",
-			"session_id",
-			"project_path",
-			"message_id",
-			"request_id",
-			"source_file",
-			"line_number",
-			"raw_sha256",
-			"input_tokens",
-			"output_tokens",
-			"reasoning_tokens",
-			"cache_creation_tokens",
-			"cache_read_tokens",
-			"total_tokens",
-			"request_started_at_ms",
-			"first_token_at_ms",
-			"completed_at_ms",
-			"total_duration_ms",
-			"ttft_ms",
-			"output_duration_ms",
-			"output_tps",
-			"recorded_cost_usd",
-			"raw_usage_json",
-			"imported_at_ms",
-			"updated_at_ms",
-		}, v2CompatibilityColumnNames()...),
-	},
+var v3RequiredTableSchemas = []requiredTableSchema{
+	{name: "meta", columns: []string{"key", "value"}},
+	{name: "import_runs", columns: []string{
+		"id", "started_at_ms", "finished_at_ms", "status", "files_scanned",
+		"events_added", "events_updated", "events_skipped", "events_rejected", "error",
+	}},
+	{name: "usage_events", columns: []string{
+		"event_id", "identity_version", "identity_strategy", "identity_scope", "content_sha256",
+		"parser_version", "event_granularity", "channel", "source_product", "provider",
+		"model_raw", "model_normalized", "model_resolution", "model_is_fallback",
+		"timestamp_ms", "session_key", "session_id", "session_path_id", "turn_id", "project_path",
+		"message_id", "request_id", "source_file", "line_number", "raw_sha256",
+		"input_tokens", "output_tokens", "reasoning_tokens", "cache_creation_tokens", "cache_read_tokens",
+		"total_tokens", "source_total_tokens", "raw_input_tokens", "token_accounting_method",
+		"accounting_profile", "observability_level", "imported_at_ms", "updated_at_ms",
+	}},
 }
 
 const schemaSQLite = `
@@ -94,102 +44,108 @@ CREATE TABLE IF NOT EXISTS meta (
     value TEXT NOT NULL
 );
 
-INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', '2');
+INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', '3');
+INSERT OR REPLACE INTO meta (key, value) VALUES ('identity_version', '2');
 INSERT OR IGNORE INTO meta (key, value) VALUES ('created_at', datetime('now'));
 
 CREATE TABLE IF NOT EXISTS import_runs (
-    id             TEXT PRIMARY KEY,
-    started_at_ms  INTEGER NOT NULL,
-    finished_at_ms INTEGER,
-    status         TEXT NOT NULL DEFAULT 'running',
-    files_scanned  INTEGER NOT NULL DEFAULT 0,
-    events_added   INTEGER NOT NULL DEFAULT 0,
-    events_updated INTEGER NOT NULL DEFAULT 0,
-    events_skipped INTEGER NOT NULL DEFAULT 0,
-    error          TEXT
+    id              TEXT PRIMARY KEY,
+    started_at_ms   INTEGER NOT NULL,
+    finished_at_ms  INTEGER,
+    status          TEXT NOT NULL DEFAULT 'running',
+    files_scanned   INTEGER NOT NULL DEFAULT 0 CHECK (files_scanned >= 0),
+    events_added    INTEGER NOT NULL DEFAULT 0 CHECK (events_added >= 0),
+    events_updated  INTEGER NOT NULL DEFAULT 0 CHECK (events_updated >= 0),
+    events_skipped  INTEGER NOT NULL DEFAULT 0 CHECK (events_skipped >= 0),
+    events_rejected INTEGER NOT NULL DEFAULT 0 CHECK (events_rejected >= 0),
+    error           TEXT
 );
 
 CREATE TABLE IF NOT EXISTS usage_events (
-    event_id TEXT PRIMARY KEY,
-    dedupe_key TEXT NOT NULL,
-    dedupe_strategy TEXT NOT NULL,
+    event_id          TEXT PRIMARY KEY CHECK (length(trim(event_id)) > 0),
+    identity_version  INTEGER NOT NULL CHECK (identity_version = 2),
+    identity_strategy TEXT NOT NULL CHECK (length(trim(identity_strategy)) > 0),
+    identity_scope    TEXT NOT NULL CHECK (length(trim(identity_scope)) > 0),
+    content_sha256    TEXT NOT NULL CHECK (length(trim(content_sha256)) > 0),
+    parser_version    TEXT,
+    event_granularity TEXT NOT NULL CHECK (length(trim(event_granularity)) > 0),
 
-    channel TEXT NOT NULL,
-    provider TEXT,
-    model_raw TEXT,
-    model_normalized TEXT,
-    model_resolution TEXT NOT NULL DEFAULT 'legacy_unclassified',
+    channel           TEXT NOT NULL CHECK (length(trim(channel)) > 0),
+    source_product    TEXT NOT NULL CHECK (length(trim(source_product)) > 0),
+    provider          TEXT,
+    model_raw         TEXT,
+    model_normalized  TEXT NOT NULL DEFAULT 'unknown' CHECK (length(trim(model_normalized)) > 0),
+    model_resolution  TEXT,
+    model_is_fallback INTEGER NOT NULL DEFAULT 0 CHECK (model_is_fallback IN (0, 1)),
 
-    source_agent TEXT,
-    source_product TEXT,
-    observability_level TEXT,
-    model_is_fallback INTEGER NOT NULL DEFAULT 0,
-    source_total_tokens INTEGER,
-    raw_input_tokens INTEGER,
-    token_accounting_method TEXT,
-    accounting_profile TEXT,
-
-    timestamp_ms INTEGER NOT NULL,
-    session_id TEXT,
+    timestamp_ms   INTEGER NOT NULL CHECK (timestamp_ms > 0),
+    session_key    TEXT NOT NULL CHECK (length(trim(session_key)) > 0),
+    session_id     TEXT,
     session_path_id TEXT,
-    turn_id TEXT,
-    project_path TEXT,
-    message_id TEXT,
-    request_id TEXT,
+    turn_id        TEXT,
+    project_path   TEXT,
+    message_id     TEXT,
+    request_id     TEXT,
+
     source_file TEXT,
-    line_number INTEGER,
-    raw_sha256 TEXT,
+    line_number INTEGER CHECK (line_number IS NULL OR line_number >= 0),
+    raw_sha256  TEXT,
 
-    input_tokens INTEGER NOT NULL DEFAULT 0,
-    output_tokens INTEGER NOT NULL DEFAULT 0,
-    reasoning_tokens INTEGER NOT NULL DEFAULT 0,
-    cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
-	    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
-	    total_tokens INTEGER NOT NULL DEFAULT 0,
-	    request_count INTEGER CHECK (request_count >= 0),
-
-    request_started_at_ms INTEGER,
-    first_token_at_ms INTEGER,
-    completed_at_ms INTEGER,
-    total_duration_ms INTEGER,
-    ttft_ms INTEGER,
-    output_duration_ms INTEGER,
-    output_tps REAL,
-
-    recorded_cost_usd REAL,
-    raw_usage_json TEXT,
+    input_tokens          INTEGER NOT NULL DEFAULT 0 CHECK (input_tokens >= 0),
+    output_tokens         INTEGER NOT NULL DEFAULT 0 CHECK (output_tokens >= 0),
+    reasoning_tokens      INTEGER NOT NULL DEFAULT 0 CHECK (reasoning_tokens >= 0),
+    cache_creation_tokens INTEGER NOT NULL DEFAULT 0 CHECK (cache_creation_tokens >= 0),
+    cache_read_tokens     INTEGER NOT NULL DEFAULT 0 CHECK (cache_read_tokens >= 0),
+    total_tokens          INTEGER NOT NULL DEFAULT 0 CHECK (total_tokens >= 0),
+    source_total_tokens   INTEGER CHECK (source_total_tokens IS NULL OR source_total_tokens >= 0),
+    raw_input_tokens      INTEGER CHECK (raw_input_tokens IS NULL OR raw_input_tokens >= 0),
+    token_accounting_method TEXT,
+    accounting_profile     TEXT,
+    observability_level    TEXT,
 
     imported_at_ms INTEGER NOT NULL,
-    updated_at_ms INTEGER NOT NULL
+    updated_at_ms  INTEGER NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_usage_timestamp ON usage_events(timestamp_ms);
-CREATE INDEX IF NOT EXISTS idx_usage_channel ON usage_events(channel);
-CREATE INDEX IF NOT EXISTS idx_usage_provider ON usage_events(provider);
-CREATE INDEX IF NOT EXISTS idx_usage_model ON usage_events(model_normalized);
-CREATE INDEX IF NOT EXISTS idx_usage_session ON usage_events(session_id);
-CREATE INDEX IF NOT EXISTS idx_usage_output_tps ON usage_events(output_tps);
-CREATE INDEX IF NOT EXISTS idx_usage_total_duration ON usage_events(total_duration_ms);
+CREATE INDEX IF NOT EXISTS idx_usage_session ON usage_events(session_key);
 CREATE INDEX IF NOT EXISTS idx_usage_channel_time ON usage_events(channel, timestamp_ms);
+CREATE INDEX IF NOT EXISTS idx_usage_source_time ON usage_events(source_product, timestamp_ms);
 CREATE INDEX IF NOT EXISTS idx_usage_model_time ON usage_events(model_normalized, timestamp_ms);
-CREATE INDEX IF NOT EXISTS idx_usage_source_identity ON usage_events(source_file, line_number, raw_sha256, channel, imported_at_ms, event_id);
 `
 
 func (d *Database) initSchema() error {
-	version, exists, err := d.schemaVersion()
+	version, exists, err := d.metaValue("schema_version")
 	if err != nil {
 		return err
 	}
 	if exists && version != SchemaVersion {
-		return fmt.Errorf("%w: database schema version %s is not compatible with AgentLedger v2; run `agent-ledger init --reset` to rebuild the local database", ErrIncompatibleSchema, version)
+		return incompatibleVersionError(version)
 	}
-	if _, err = d.conn.Exec(schemaSQLite); err != nil {
+	if exists {
+		identity, _, identityErr := d.identityVersion()
+		if identityErr != nil {
+			return identityErr
+		}
+		if identity != IdentityVersion {
+			return fmt.Errorf("%w: identity version %s is not compatible with AgentLedger v3 identity version %s; rebuild from source logs", ErrIncompatibleSchema, identity, IdentityVersion)
+		}
+	}
+	if _, err := d.conn.Exec(schemaSQLite); err != nil {
 		return err
 	}
-	return d.ensureV2CompatibilityColumns()
+	return d.validateReadOnlySchema()
 }
 
 func (d *Database) schemaVersion() (string, bool, error) {
+	return d.metaValue("schema_version")
+}
+
+func (d *Database) identityVersion() (string, bool, error) {
+	return d.metaValue("identity_version")
+}
+
+func (d *Database) metaValue(key string) (string, bool, error) {
 	var tableName string
 	err := d.conn.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='meta'`).Scan(&tableName)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -199,29 +155,18 @@ func (d *Database) schemaVersion() (string, bool, error) {
 		return "", false, err
 	}
 
-	var version string
-	err = d.conn.QueryRow(`SELECT value FROM meta WHERE key='schema_version'`).Scan(&version)
+	var value string
+	err = d.conn.QueryRow(`SELECT value FROM meta WHERE key = ?`, key).Scan(&value)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", true, fmt.Errorf("%w: missing schema_version in meta table; run `agent-ledger init --reset` to rebuild the local database", ErrIncompatibleSchema)
+		return "", true, fmt.Errorf("%w: missing %s in meta table", ErrIncompatibleSchema, key)
 	}
 	if err != nil {
 		return "", true, err
 	}
-	return version, true, nil
+	return value, true, nil
 }
 
 func (d *Database) validateReadOnlySchema() error {
-	metaExists, err := d.tableExists("meta")
-	if err != nil {
-		return err
-	}
-	if !metaExists {
-		return fmt.Errorf("%w: database is not initialized; run `agent-ledger init` or `agent-ledger import` first", ErrIncompatibleSchema)
-	}
-	if err := d.validateRequiredColumns(v2RequiredTableSchemas[0]); err != nil {
-		return err
-	}
-
 	version, exists, err := d.schemaVersion()
 	if err != nil {
 		return err
@@ -230,22 +175,63 @@ func (d *Database) validateReadOnlySchema() error {
 		return fmt.Errorf("%w: database is not initialized; run `agent-ledger init` or `agent-ledger import` first", ErrIncompatibleSchema)
 	}
 	if version != SchemaVersion {
-		return fmt.Errorf("%w: database schema version %s is not compatible with AgentLedger v2; run `agent-ledger init --reset` to rebuild the local database", ErrIncompatibleSchema, version)
+		return incompatibleVersionError(version)
+	}
+	identity, _, err := d.identityVersion()
+	if err != nil {
+		return err
+	}
+	if identity != IdentityVersion {
+		return fmt.Errorf("%w: identity version %s is not compatible with AgentLedger v3 identity version %s; rebuild from source logs", ErrIncompatibleSchema, identity, IdentityVersion)
 	}
 
-	for _, table := range v2RequiredTableSchemas[1:] {
+	for _, table := range v3RequiredTableSchemas {
 		exists, err := d.tableExists(table.name)
 		if err != nil {
 			return err
 		}
 		if !exists {
-			return fmt.Errorf("%w: database is missing required table %s; run `agent-ledger init` or `agent-ledger import` to repair the v2 schema", ErrIncompatibleSchema, table.name)
+			return fmt.Errorf("%w: database is missing required table %s; rebuild the v3 database from source logs", ErrIncompatibleSchema, table.name)
 		}
 		if err := d.validateRequiredColumns(table); err != nil {
 			return err
 		}
 	}
-	return nil
+	return d.validateApplicationObjects()
+}
+
+func (d *Database) validateApplicationObjects() error {
+	allowedTables := make(map[string]struct{}, len(v3RequiredTableSchemas))
+	for _, table := range v3RequiredTableSchemas {
+		allowedTables[table.name] = struct{}{}
+	}
+	rows, err := d.conn.Query(`SELECT type, name FROM sqlite_master
+		WHERE name NOT LIKE 'sqlite_%' AND type IN ('table', 'view', 'trigger')
+		ORDER BY type, name`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var objectType, name string
+		if err := rows.Scan(&objectType, &name); err != nil {
+			return err
+		}
+		if objectType == "table" {
+			if _, ok := allowedTables[name]; ok {
+				continue
+			}
+		}
+		return fmt.Errorf("%w: database has unexpected %s %s; rebuild a valid v3 database", ErrIncompatibleSchema, objectType, name)
+	}
+	return rows.Err()
+}
+
+func incompatibleVersionError(version string) error {
+	if version == "2" {
+		return fmt.Errorf("%w: database schema version 2 is not accepted by AgentLedger v3; keep an exact backup and rebuild from source logs", ErrIncompatibleSchema)
+	}
+	return fmt.Errorf("%w: database schema version %s is not compatible with AgentLedger v%s", ErrIncompatibleSchema, strconv.Quote(version), SchemaVersion)
 }
 
 func (d *Database) tableExists(table string) (bool, error) {
@@ -261,131 +247,47 @@ func (d *Database) validateRequiredColumns(table requiredTableSchema) error {
 	if err != nil {
 		return err
 	}
+	expected := make(map[string]struct{}, len(table.columns))
 	for _, column := range table.columns {
-		if _, exists := columns[column]; exists {
-			continue
+		expected[column] = struct{}{}
+		if _, ok := columns[column]; !ok {
+			return fmt.Errorf("%w: database is missing required column %s.%s; rebuild a valid v3 database", ErrIncompatibleSchema, table.name, column)
 		}
-
-		if table.name == "usage_events" && isV2CompatibilityColumn(column) {
-			return fmt.Errorf("%w: database is missing additive v2 column %s.%s; run `agent-ledger init` or `agent-ledger import` to apply compatibility updates", ErrIncompatibleSchema, table.name, column)
+	}
+	var unexpected []string
+	for column := range columns {
+		if _, ok := expected[column]; !ok {
+			unexpected = append(unexpected, column)
 		}
-		return fmt.Errorf("%w: database is missing required column %s.%s; restore a valid v2 database or back it up and run `agent-ledger init --reset`", ErrIncompatibleSchema, table.name, column)
+	}
+	if len(unexpected) > 0 {
+		sort.Strings(unexpected)
+		return fmt.Errorf("%w: database has unexpected column %s.%s; rebuild a valid v3 database", ErrIncompatibleSchema, table.name, unexpected[0])
 	}
 	return nil
 }
 
-func v2CompatibilityColumnNames() []string {
-	names := make([]string, 0, len(v2CompatibilityColumns))
-	for _, columnDef := range v2CompatibilityColumns {
-		names = append(names, columnName(columnDef))
-	}
-	return names
-}
-
-func isV2CompatibilityColumn(name string) bool {
-	for _, columnDef := range v2CompatibilityColumns {
-		if columnName(columnDef) == name {
-			return true
-		}
-	}
-	return false
-}
-
-func (d *Database) ensureV2CompatibilityColumns() error {
-	tx, err := d.conn.Begin()
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback()
-		}
-	}()
-
-	for _, columnDef := range v2CompatibilityColumns {
-		name := columnName(columnDef)
-		exists, err := columnExists(tx, "usage_events", name)
-		if err != nil {
-			return err
-		}
-		if exists {
-			continue
-		}
-		if _, err = tx.Exec(fmt.Sprintf("ALTER TABLE usage_events ADD COLUMN %s", columnDef)); err != nil {
-			return err
-		}
-	}
-	if _, err = tx.Exec(`
-        UPDATE usage_events
-        SET
-			source_agent = CASE
-				WHEN COALESCE(NULLIF(source_agent, ''), '') = '' THEN channel
-				ELSE source_agent
-			END,
-			observability_level = CASE
-				WHEN COALESCE(NULLIF(observability_level, ''), '') = '' THEN 'unknown'
-				ELSE observability_level
-			END
-		WHERE COALESCE(NULLIF(source_agent, ''), '') = ''
-			OR COALESCE(NULLIF(observability_level, ''), '') = ''
-    `); err != nil {
-		return err
-	}
-	if _, err = tx.Exec(`CREATE INDEX IF NOT EXISTS idx_usage_source_agent_time ON usage_events(source_agent, timestamp_ms)`); err != nil {
-		return err
-	}
-	if _, err = tx.Exec(`CREATE INDEX IF NOT EXISTS idx_usage_session_path ON usage_events(session_path_id)`); err != nil {
-		return err
-	}
-	if err = tx.Commit(); err != nil {
-		return err
-	}
-	return nil
-}
-
-type sqlQueryer interface {
+type tableInfoQueryer interface {
 	Query(query string, args ...any) (*sql.Rows, error)
 }
 
-func columnExists(queryer sqlQueryer, table, column string) (bool, error) {
-	columns, err := tableColumns(queryer, table)
-	if err != nil {
-		return false, err
-	}
-	_, exists := columns[column]
-	return exists, nil
-}
-
-func tableColumns(queryer sqlQueryer, table string) (map[string]struct{}, error) {
-	rows, err := queryer.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+func tableColumns(queryer tableInfoQueryer, table string) (map[string]struct{}, error) {
+	rows, err := queryer.Query(`PRAGMA table_info(` + table + `)`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
+
 	columns := make(map[string]struct{})
 	for rows.Next() {
 		var cid int
-		var name string
-		var typ string
-		var notNull int
-		var defaultValue interface{}
-		var pk int
-		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+		var name, dataType string
+		var notNull, primaryKey int
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &dataType, &notNull, &defaultValue, &primaryKey); err != nil {
 			return nil, err
 		}
 		columns[name] = struct{}{}
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return columns, nil
-}
-
-func columnName(columnDef string) string {
-	for i, r := range columnDef {
-		if r == ' ' || r == '\t' || r == '\n' {
-			return columnDef[:i]
-		}
-	}
-	return columnDef
+	return columns, rows.Err()
 }

@@ -1,37 +1,22 @@
 # Configuration
 
-AgentLedger 使用 TOML 配置。配置文件不存在时，`config.Load()` 会写入默认配置。
+默认配置位于 `AGENT_LEDGER_DATA_DIR/config.toml`；未设置环境变量时，源码仓内运行通常使用 `<repo>/local/data/config.toml`。
 
-配置文件保存在数据目录下的 `config.toml`。数据目录选择顺序：
-
-1. 如果设置了 `AGENT_LEDGER_DATA_DIR`，使用该目录。
-2. 如果当前工作目录或可执行文件所在目录的上级能找到 `go.mod`，使用 `<repo-root>/local/data`。
-3. 否则使用 `~/.local/share/agent-ledger`。
-
-## 默认配置
-
-下面是默认配置的语义示例。实际生成的 `[database].path` 会基于数据目录解析；在源码仓库内运行时通常指向 `<repo-root>/local/data/agent-ledger.db`。
+## 完整 v3 结构
 
 ```toml
 [database]
-path = "local/data/agent-ledger.db"
+path = "/absolute/or/~/agent-ledger.db"
 
 [privacy]
-mode = "statistics"
 redact_paths_on_export = true
 
 [import]
 gracing_minutes = 15
-single_thread = false
-
-[cleanup]
-default_mode = "quarantine"
-older_than_days = 30
-purge_after_days = 90
 
 [reports]
-timezone = "Local"
-currency = "USD"
+timezone = "Asia/Shanghai"
+pricing_path = ""
 
 [agents.claude]
 enabled = true
@@ -49,55 +34,35 @@ paths = ["~/.gemini"]
 [agents.copilot]
 enabled = true
 paths = ["~/.copilot/otel", "~/.copilot/session-state"]
-```
 
-## 当前生效的键
-
-| Key | 当前用途 |
-|---|---|
-| `[database].path` | SQLite 数据库路径；支持 `~/` 展开。默认生成在数据目录下。 |
-| `[import].gracing_minutes` | `import` 对最近修改文件启用稳定性检查的时间窗口；近期文件只有 size / mtime 仍在变化时才跳过。 |
-| `[agents.*].enabled` | 是否启用对应 adapter。 |
-| `[agents.*].paths` | adapter 扫描的根路径列表；支持 `~/` 展开。 |
-| `[reports].timezone` | daily / weekly / monthly 报表分桶和 `--since` / `--until` 日期过滤使用的时区。支持 `Local`、`UTC`、固定偏移如 `+08:00`，以及 Go 可加载的 IANA 时区如 `Asia/Shanghai`。 |
-| `[privacy].mode` | canonical 值为 `statistics`：所有 adapter 只写结构化统计事实，`raw_usage_json` 保持 `NULL`。旧值 `envelope` 作为 deprecated compatibility alias 接受且行为相同；`import`、`merge`、`compact-raw` 在打开写连接前拒绝 `full`、`none`、空值或其它值。 |
-| `[privacy].redact_paths_on_export` | `export` 是否在导出副本中清空 `project_path`、`source_file` 和 `raw_usage_json`。默认开启。 |
-
-## 当前预留的键
-
-| Key | 当前状态 |
-|---|---|
-| `[import].single_thread` | 预留；当前 import 是顺序遍历。 |
-| `[cleanup].*` | 预留；当前 CLI 没有 `cleanup` 命令。 |
-| `[reports].currency` | 预留；当前没有 currency conversion。 |
-
-## 修改 agent 路径
-
-如果某个 agent 的日志不在默认目录：
-
-```toml
-[agents.codex]
+[agents.workbuddy]
 enabled = true
-paths = ["~/custom-codex-logs"]
+paths = ["~/.workbuddy/projects"]
 ```
 
-Codex 的 `duplicate_policy` 默认为 `ledger`，会用 `total_token_usage` 的 per-session 累计 delta 还原真实增量，自动跳过累计值不变的冗余 `token_count`。需要和当前 `ccusage codex` 在正常单 session JSONL 上的单次 usage 口径对账时，可在独立数据库或重建后设置 `ccusage_compatible`；该口径在累计推进时优先 `last_token_usage`，缺失 `last` 时使用逐字段饱和累计差值，累计未推进时忽略该行：
+## 字段
 
-```toml
-[agents.codex]
-enabled = true
-paths = ["~/.codex/sessions"]
-duplicate_policy = "ccusage_compatible"
+| Key | 行为 |
+|---|---|
+| `database.path` | 当前 v3 SQLite；支持 `~` 展开。 |
+| `privacy.redact_paths_on_export` | 默认 export 是否清空 project/source path 与 import warning。 |
+| `import.gracing_minutes` | 最近修改文件的稳定性边界；并非 checkpoint。 |
+| `reports.timezone` | Go 可加载的 IANA timezone、`UTC` 或 `Local`；用于逐事件日期分桶和日期 filter。 |
+| `reports.pricing_path` | 空值使用内置 profile；非空值是默认 profile。无效时 usage 仍返回，pricing unavailable。 |
+| `agents.*.enabled` | 是否扫描对应来源。 |
+| `agents.*.paths` | Adapter discovery roots。 |
+| `agents.codex.duplicate_policy` | `ledger` 或 `ccusage_compatible`；重建 candidate 时应与 v2 baseline 保持一致。 |
+
+CLI `--pricing` 优先于 `reports.pricing_path`，且显式文件无效会直接失败。
+
+## 已删除配置
+
+```text
+cleanup.*
+import.single_thread
+reports.currency
+privacy.mode
+privacy envelope compatibility alias
 ```
 
-如果暂时不导入某个 agent：
-
-```toml
-[agents.gemini]
-enabled = false
-paths = ["~/.gemini"]
-```
-
-## 路径和隐私
-
-配置里的路径是本机路径，不应写进公开 issue、PR 描述或截图。公开示例使用 `~` 或占位路径即可。
+旧 TOML 中未知键不会恢复相应功能。保存 v3 config 时不会再次写出这些键。

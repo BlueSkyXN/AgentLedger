@@ -154,7 +154,7 @@ func workBuddyRecordFromObject(obj map[string]interface{}, path string, lineNumb
 	}
 	requests, ok := strictWorkBuddyInt64(usage, "requests")
 	if !ok || requests != 1 {
-		return nil, "invalid_request_count"
+		return nil, "invalid_usage_multiplicity"
 	}
 
 	prompt, hasPrompt := strictWorkBuddyInt64(rawUsage, "prompt_tokens")
@@ -205,13 +205,18 @@ func workBuddyRecordFromObject(obj map[string]interface{}, path string, lineNumb
 		Agent:                 "workbuddy",
 		Provider:              workBuddyProvider(routeKind),
 		Model:                 modelRaw,
+		NativeSessionID:       sessionID,
+		NativeEventID:         id,
+		IdentityKind:          "request",
+		IdentityScope:         "session",
+		ParserVersion:         "workbuddy-v1",
+		Granularity:           "request",
 		ModelNormalized:       modelNormalized,
 		ModelResolution:       modelResolution,
 		ModelIsFallback:       modelIsFallback,
 		TimestampMs:           normalizeEpoch(timestamp),
 		SessionID:             sessionID,
 		ProjectPath:           projectPath,
-		DedupeID:              id,
 		MessageID:             getString(providerData, "messageId"),
 		RequestID:             id,
 		TurnID:                getString(providerData, "conversationRequestId"),

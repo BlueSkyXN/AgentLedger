@@ -17,14 +17,14 @@ AgentLedger 是本地优先的 AI Coding Agent usage analytics 工具：Go CLI �
 | Path | Responsibility | Local AGENTS.md | Read when |
 |---|---|---:|---|
 | `cmd/` | Cobra CLI command surface: `init`, `import`, `export`, `merge`, `report`, `serve`, maintenance commands | Yes | 修改命令、flag、stdout/stderr、退出语义、会读写数据库的 CLI 流程前 |
-| `internal/adapters/` | 本机 agent 日志 discovery、JSON/JSONL parser、token/timing normalization | Yes | 新增或修改 Claude/Codex/Copilot/Gemini adapter、usage envelope、dedupe 输入字段前 |
+| `internal/adapters/` | 本机 agent 日志 discovery、JSON/JSONL parser、Session/event identity 与 token/accounting normalization | Yes | 新增或修改 Claude/Codex/Copilot/Gemini/WorkBuddy adapter、usage envelope、identity 输入字段前 |
 | `internal/analytics/` | 只读 SQL 聚合，供 API 和 Web 面板使用 | No | 根规则已覆盖；改 filter、breakdown、sort、limit 时同步检查 `internal/control/` 和 `web/` |
 | `internal/config/` | TOML config、默认路径、`~` 展开、agent 配置 | No | 根规则已覆盖；改配置字段时检查 docs 和 API config snapshot 兼容性 |
-| `internal/control/` | 本机 HTTP server、只读 `/api/v1/*`、静态面板托管、路径脱敏 | Yes | 修改 API endpoint、filter parsing、static serving、config/status/health response 前 |
-| `internal/db/` | SQLite schema v2、连接参数、event upsert、merge/export/stat ops | Yes | 修改 schema、migration/compatibility、export redaction、merge、upsert 完整度规则前 |
+| `internal/control/` | 本机 HTTP server、只读 `/api/v2/*`、静态面板托管、路径脱敏 | Yes | 修改 API endpoint、filter parsing、static serving、config/status/health response 前 |
+| `internal/db/` | SQLite schema v3、连接参数、event reconcile、merge/export/stat ops | Yes | 修改 schema、identity gate、export redaction、merge、reconcile 规则前 |
 | `internal/fingerprint/` | 稳定 event fingerprint 与 raw JSON canonicalization | No | 根规则已覆盖；改 fingerprint 会影响去重和 merge，需同时检查 adapter/db 测试 |
 | `internal/model/` | 跨 package 共享 domain structs 和 token helper | No | 根规则已覆盖；字段变更会连带 adapter/db/report/API/Web 类型 |
-| `internal/report/` | CLI text/JSON reports 和 report SQL | No | 根规则已覆盖；改 report filters、`--by`、`slow --sort` 时使用 allowlist 并检查 CLI 输出 |
+| `internal/report/` | CLI text/JSON reports 和即时 estimated cost | No | 根规则已覆盖；改 report filters、breakdown 或 pricing 时使用 allowlist 并检查 CLI 输出 |
 | `web/` | React/Vite 只读分析面板，npm package 在该目录内 | Yes | 修改前端 API client/types、页面、筛选器、chart、build 配置或样式前 |
 | `docs/` | 面向用户的中文文档 | No | 文档跟随代码事实更新；不要把未实现功能写成已实现 |
 | `testdata/` | 测试 fixture 位置，目前没有 tracked 文件 | No | 添加 fixture 前确保不包含真实 session、路径、raw usage 或私有数据 |
@@ -68,11 +68,11 @@ Commands below are confirmed from `README.md`, `docs/development.md`, `go.mod`, 
 ## Global rules
 
 - Keep the repository local-first. Do not add network calls, telemetry, hosted services, remote sync, or external API dependencies unless the user explicitly asks and the privacy model is updated.
-- Treat local agent logs, SQLite databases, `.aldb` exports, `raw_usage_json`, session IDs, request IDs, message IDs, source file paths, project paths, screenshots, and panel exports as private user data.
+- Treat local agent logs, SQLite databases, `.aldb` exports, raw source usage, session IDs, request IDs, message IDs, source file paths, project paths, screenshots, and panel exports as private user data.
 - Do not copy real local logs, real database rows, raw usage envelopes, private paths, tokens, or credentials into commits, docs, test snapshots, PR text, screenshots, or public examples.
-- v2 schema is intentionally small: `meta`, `import_runs`, `usage_events`. Do not reintroduce v1 source/observation/conflict/device ledger tables without an explicit schema design and regression plan.
+- v3 schema is intentionally small: `meta`, `import_runs`, `usage_events`. Do not reintroduce source-checkpoint/observation/conflict/device/merge/session ledger tables without an explicit schema design and regression plan.
 - Token fields must come from explicit source usage envelopes or documented adapter-specific fallback. Do not infer token counts from text length, neighboring timestamps, file order, or UI display text.
-- Timing fields must stay `NULL` unless the source explicitly provides enough timing boundaries. Do not synthesize TTFT, total duration, or output TPS from unrelated timestamps.
+- v3 does not persist request timing, TTFT, TPS, request count, recorded cost, or raw usage envelopes. Do not recreate them through adapter metadata or derived queries.
 - SQL that uses user-controlled report/API dimensions, sort keys, or bucket names must use allowlists. Use query parameters for values; do not concatenate raw user input into SQL expressions.
 - `serve` is read-only in this release. Browser/API paths must not trigger `import`, `merge`, `vacuum`, `init --reset`, config writes, file writes, or source log mutation.
 - `serve` must remain loopback-only unless there is a clear product/security decision to add authentication and remote access.
@@ -91,7 +91,7 @@ Commands below are confirmed from `README.md`, `docs/development.md`, `go.mod`, 
 - Do not expose `serve` on `0.0.0.0`, LAN IPs, public tunnels, or reverse proxies as part of routine development.
 - Do not add browser-triggered import/merge/vacuum/config mutation endpoints without a product decision and security review.
 - Do not sum `source_total_tokens` for reports; it is a raw source diagnostic field, not the canonical event total.
-- Do not make `raw_usage_json`, `source_file`, `project_path`, or full `session_id` casually visible in public-facing examples.
+- Do not make raw source usage, `source_file`, `project_path`, or full `session_id` casually visible in public-facing examples.
 - Do not edit ignored `local/` materials unless the user specifically asks. They may contain real databases and private reports.
 - Do not hand-edit generated or build output such as `web/dist/`, `web/*.tsbuildinfo`, `internal/control/embed/dist/`, `bin/`, or coverage/profile files.
 - Do not convert the repo to a monorepo package manager layout; Go is rooted at repo root and npm is scoped to `web/`.

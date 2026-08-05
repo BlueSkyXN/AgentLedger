@@ -4,17 +4,17 @@
 
 ## Local invariants
 
-- The panel reads only from `/api/v1/*`; it must not access SQLite files or local agent logs directly.
+- The panel reads only from `/api/v2/*`; it must not access SQLite files or local agent logs directly.
 - Frontend types in `src/api/types.ts` must match `internal/control` JSON responses.
 - Vite dev proxy points `/api` to `http://127.0.0.1:54217`; production assets are served by the Go binary from `web/dist`.
-- Do not display `raw_usage_json`. Treat paths, sessions, model names, and token aggregates as private local usage data.
+- Do not display raw source usage. Treat paths, sessions, model names, and token aggregates as private local usage data.
 
 ## Local rules
 
 - `npm run lint` is TypeScript checking, not ESLint.
 - Keep `package-lock.json` under npm control. Do not hand-edit lockfile entries.
 - If adding dependencies, prefer existing React, React Query, ECharts, and utility code first.
-- UI filters should stay aligned with backend filters: `since`, `until`, `channel`, `provider`, `model`, `session`.
+- UI filters should stay aligned with backend filters: `since`, `until`, `channel`, `source`, `provider`, `model`, `session`, and `project`.
 
 ## Do not
 

@@ -6,30 +6,17 @@ export function formatCost(value: number | null | undefined): string {
   return value == null ? "-" : `$${value.toFixed(4)}`;
 }
 
+export function formatEstimatedCost(
+  value: number | null | undefined,
+  pricing: { status: string; priced_events: number; unpriced_events: number; policy_zero_events: number } | null | undefined,
+): string {
+  if (value == null || pricing?.status !== "available") return "不可用";
+  if (pricing.priced_events === 0 && pricing.unpriced_events > 0) return "不可用";
+  return formatCost(value);
+}
+
 export function formatPercent(value: number | null | undefined): string {
   return value == null ? "-" : `${(value * 100).toFixed(1)}%`;
-}
-
-export function formatConfidence(value: string | null | undefined): string {
-  if (!value) return "-";
-  const labels: Record<string, string> = {
-    exact: "精确",
-    estimated: "估算",
-    approximate: "近似",
-    partial: "部分",
-    missing: "缺价",
-  };
-  return labels[value] ?? value;
-}
-
-export function formatMs(value: number | null | undefined): string {
-  if (value == null) return "-";
-  if (value >= 1000) return `${(value / 1000).toFixed(2)}s`;
-  return `${Math.round(value)}ms`;
-}
-
-export function formatTPS(value: number | null | undefined): string {
-  return value == null ? "-" : `${value.toFixed(2)}/s`;
 }
 
 export function formatDate(value: string | null | undefined): string {

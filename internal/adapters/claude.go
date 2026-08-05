@@ -77,37 +77,52 @@ func (a *ClaudeAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, err
 		if sessionID == "" {
 			sessionID = extractClaudeSession(path)
 		}
+		nativeSessionID := strings.TrimSpace(candidate.sessionID)
+		sessionPathID := stableSessionPathID(path, "projects")
 		modelName := normalizeClaudeModel(candidate.model, getString(candidate.usage, "speed"))
 		totalTokens := claudeUsageTotal(candidate.usage)
 		if candidate.model == "<synthetic>" && totalTokens == 0 {
 			continue
 		}
 		messageID := candidate.messageID
-		dedupeRequestID := candidate.requestID
 		if messageID == "" {
 			messageID = candidate.uuid
-			dedupeRequestID = ""
 		}
-		dedupeID := claudeDedupeID(messageID, dedupeRequestID)
+		// Claude's durable native identity is message.id (uuid is its parser
+		// fallback) followed by requestId; uuid is not promoted to a separate
+		// event strategy because one message can be replayed across segments.
+		nativeEventID := strings.TrimSpace(messageID)
+		identityKind := "message"
+		if nativeEventID == "" && candidate.requestID != "" {
+			nativeEventID, identityKind = candidate.requestID, "request"
+		}
 
 		rec := &fingerprint.ParsedRecord{
 			Agent:                 "claude",
 			Provider:              "anthropic",
 			Model:                 modelName,
+			NativeSessionID:       nativeSessionID,
+			SessionPathID:         sessionPathID,
+			NativeEventID:         nativeEventID,
+			IdentityKind:          identityKind,
+			IdentityScope:         "session",
+			IdentitySubkey:        claudeDedupeID(messageID, candidate.requestID),
+			ParserVersion:         "claude-v1",
+			Granularity:           "request",
 			TimestampMs:           parseTimestamp(candidate.timestamp),
 			SessionID:             sessionID,
 			ProjectPath:           firstNonEmpty(getString(obj, "cwd"), extractClaudeProject(path)),
-			DedupeID:              dedupeID,
 			MessageID:             messageID,
 			RequestID:             candidate.requestID,
 			InputTokens:           getInt64(candidate.usage, "input_tokens"),
 			OutputTokens:          getInt64(candidate.usage, "output_tokens"),
 			CacheCreationTokens:   getInt64(candidate.usage, "cache_creation_input_tokens"),
 			CacheReadTokens:       getInt64(candidate.usage, "cache_read_input_tokens"),
-			CostUSD:               candidate.costUSD,
 			IsSidechain:           candidate.isSidechain,
 			UsageSpeed:            getString(candidate.usage, "speed"),
+			SourceProduct:         "claude-code",
 			TokenAccountingMethod: model.AccClaudeUsageSum,
+			AccountingProfile:     "claude_usage_v1",
 			// TotalTokens left as 0 — import.go computes the full sum (incl. cache) consistently with other adapters
 			FingerprintJSON: string(rawJSON),
 			SourceFile:      path,
