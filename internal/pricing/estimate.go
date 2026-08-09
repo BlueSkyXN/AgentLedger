@@ -9,6 +9,7 @@ import (
 
 type Estimate struct {
 	CostMicroUSD  int64
+	PricedTokens  int64
 	RuleID        string
 	Basis         string
 	Confidence    string
@@ -26,17 +27,25 @@ func (e *Estimator) EstimateMatch(ev Event, match Match) (Estimate, error) {
 	if match.Rule == nil {
 		return Estimate{Confidence: "missing", Resolution: match.Resolution, MissingReason: match.MissingReason}, nil
 	}
-	cost, err := estimateWithRule(ev, match.Rule, e.profile)
+	cost, pricedTokens, err := estimateWithRule(ev, match.Rule, e.profile)
 	if err != nil {
 		return Estimate{}, err
 	}
 	estimate := Estimate{
 		CostMicroUSD: cost,
+		PricedTokens: pricedTokens,
 		RuleID:       match.RuleID,
 		Basis:        match.Basis,
 		Confidence:   match.Confidence,
-		Priced:       true,
+		Priced:       pricedTokens > 0 || eventTokens(ev) == 0,
 		Resolution:   match.Resolution,
+	}
+	if !estimate.Priced {
+		estimate.Resolution = ResolutionMissingPricingRate
+		estimate.MissingReason = ResolutionMissingPricingRate
+	}
+	if pricedTokens < eventTokens(ev) {
+		estimate.Confidence = combineConfidence(estimate.Confidence, "partial")
 	}
 	if match.Resolution == ResolutionPolicyZero {
 		estimate.Priced = false
@@ -45,20 +54,10 @@ func (e *Estimator) EstimateMatch(ev Event, match Match) (Estimate, error) {
 	return estimate, nil
 }
 
-func estimateWithRule(ev Event, rule *Rule, profile *Profile) (int64, error) {
+func estimateWithRule(ev Event, rule *Rule, profile *Profile) (int64, int64, error) {
 	var total int64
-	pricedOutputTokens := ev.OutputTokens
-	switch ev.TokenAccountingMethod {
-	case model.AccCopilotOtelParts, model.AccCopilotSessionMetrics:
-		// Copilot reports reasoning as a separate bucket rather than including it
-		// in output_tokens; model pricing charges it at the output rate.
-		pricedOutputTokens += ev.ReasoningTokens
-	default:
-		switch reasoningPolicy(rule, profile) {
-		case "separate_as_output", "priced_as_output":
-			pricedOutputTokens += ev.ReasoningTokens
-		}
-	}
+	var pricedTokens int64
+	pricedOutputTokens := outputTokensForPricing(ev, rule, profile)
 	parts := []struct {
 		name   string
 		tokens int64
@@ -72,11 +71,51 @@ func estimateWithRule(ev Event, rule *Rule, profile *Profile) (int64, error) {
 	for _, part := range parts {
 		value, err := part.rate.MicroUSD(part.tokens)
 		if err != nil {
-			return 0, fmt.Errorf("%s cost: %w", part.name, err)
+			return 0, 0, fmt.Errorf("%s cost: %w", part.name, err)
 		}
 		total += value
+		if part.rate != nil && part.rate.raw != "" {
+			pricedTokens += part.tokens
+		}
 	}
-	return total, nil
+	if eventTotal := eventTokens(ev); pricedTokens > eventTotal {
+		pricedTokens = eventTotal
+	} else if pricedTokens == 0 && eventTotal > 0 && allTokenRatesExplicitZero(rule, profile) {
+		pricedTokens = eventTotal
+	}
+	return total, pricedTokens, nil
+}
+
+func outputTokensForPricing(ev Event, rule *Rule, profile *Profile) int64 {
+	switch ev.TokenAccountingMethod {
+	case model.AccCodexLastTokenUsage, model.AccCodexTotalDelta, model.AccCodexHeadlessUsage:
+		if ev.ReasoningTokens > ev.OutputTokens {
+			return ev.ReasoningTokens
+		}
+		return ev.OutputTokens
+	case model.AccCopilotOtelParts, model.AccCopilotOtelTotalFallback, model.AccCopilotSessionMetrics:
+		// Copilot reports reasoning as a separate bucket rather than including it
+		// in output_tokens; model pricing charges it at the output rate.
+		return ev.OutputTokens + ev.ReasoningTokens
+	case model.AccWorkBuddyRawUsage:
+		// WorkBuddy completion_tokens already includes reasoning_tokens.
+		return ev.OutputTokens
+	default:
+		switch reasoningPolicy(rule, profile) {
+		case "separate_as_output", "priced_as_output":
+			return ev.OutputTokens + ev.ReasoningTokens
+		}
+		return ev.OutputTokens
+	}
+}
+
+func allTokenRatesExplicitZero(rule *Rule, profile *Profile) bool {
+	for _, rate := range []*Rate{rule.Rates.Input, rule.Rates.Output, cacheReadRate(rule), cacheCreationRate(rule, profile)} {
+		if rate == nil || rate.raw == "" || rate.Float64() != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func cacheReadRate(rule *Rule) *Rate {

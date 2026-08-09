@@ -81,6 +81,43 @@ func TestCoverageSeparatesPolicyZeroFromMissingPricingAndOfficialFree(t *testing
 	}
 }
 
+func TestCoverageUsesOnlyPricedBucketsForPartialEvent(t *testing.T) {
+	profile, err := LoadDefaultProfile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	estimator, err := NewEstimator(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := Event{
+		Provider:              "openai",
+		Channel:               "codex",
+		Model:                 "gpt-5.6-sol",
+		ObservabilityLevel:    "partial",
+		TokenAccountingMethod: model.AccCodexTotalDelta,
+		InputTokens:           40,
+		OutputTokens:          20,
+		TotalTokens:           100,
+	}
+	estimate, err := estimator.Estimate(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var aggregate AggregateCost
+	aggregate.Add(event, estimate)
+	summary := aggregate.Summary(profile)
+	if summary == nil {
+		t.Fatal("expected coverage summary")
+	}
+	if summary.PricedTokens != 60 || summary.TotalTokens != 100 || summary.TokenCoverageRatio != 0.6 {
+		t.Fatalf("partial token coverage = %+v", summary)
+	}
+	if summary.Confidence != "partial" {
+		t.Fatalf("partial confidence = %q", summary.Confidence)
+	}
+}
+
 func TestDefaultProfilePricesUserSuppliedModels(t *testing.T) {
 	profile, err := LoadDefaultProfile()
 	if err != nil {
@@ -521,22 +558,77 @@ func TestEstimateUsesTokenBucketsNotTotalTokens(t *testing.T) {
 	}
 }
 
-func TestCopilotSeparateReasoningUsesOutputRate(t *testing.T) {
+func TestOutputPricingFollowsAccountingMethod(t *testing.T) {
 	profile := testProfile(t)
 	estimator, err := NewEstimator(profile)
 	if err != nil {
 		t.Fatal(err)
 	}
-	estimate, err := estimator.Estimate(Event{
-		Provider: "openai", Channel: "codex", Model: "gpt-test",
-		OutputTokens: 2, ReasoningTokens: 3, TokenAccountingMethod: model.AccCopilotOtelParts,
-	})
+	for _, test := range []struct {
+		name      string
+		method    string
+		output    int64
+		reasoning int64
+		total     int64
+		wantCost  int64
+	}{
+		{name: "Codex reasoning below output", method: model.AccCodexTotalDelta, output: 5, reasoning: 3, total: 5, wantCost: 50},
+		{name: "Codex reasoning equals output", method: model.AccCodexTotalDelta, output: 3, reasoning: 3, total: 3, wantCost: 30},
+		{name: "Codex reasoning above output", method: model.AccCodexTotalDelta, output: 2, reasoning: 3, total: 3, wantCost: 30},
+		{name: "Copilot reasoning is separate", method: model.AccCopilotOtelParts, output: 2, reasoning: 3, total: 5, wantCost: 50},
+		{name: "WorkBuddy reasoning is included", method: model.AccWorkBuddyRawUsage, output: 5, reasoning: 3, total: 5, wantCost: 50},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			event := Event{
+				Provider: "openai", Channel: "codex", Model: "gpt-test",
+				OutputTokens: test.output, ReasoningTokens: test.reasoning,
+				TotalTokens: test.total, TokenAccountingMethod: test.method,
+			}
+			estimate, err := estimator.Estimate(event)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if estimate.CostMicroUSD != test.wantCost || estimate.PricedTokens != test.total {
+				t.Fatalf("estimate=%+v want cost=%d priced tokens=%d", estimate, test.wantCost, test.total)
+			}
+			var aggregate AggregateCost
+			aggregate.Add(event, estimate)
+			summary := aggregate.Summary(profile)
+			if summary == nil || summary.TokenCoverageRatio != 1 {
+				t.Fatalf("coverage=%+v want token ratio 1", summary)
+			}
+		})
+	}
+}
+
+func TestMatchedRuleWithoutUsedBucketRateIsUnpriced(t *testing.T) {
+	profile, err := DecodeProfile([]byte(`{
+	  "schema_version": 1,
+	  "id": "input-only",
+	  "currency": "USD",
+	  "unit": "usd_per_1m_tokens",
+	  "rules": [{"id":"input-only","model_patterns":["gpt-test"],"rates":{"input":2}}]
+	}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Output rate is 10 micro USD/token in testProfile: (2 + 3) * 10.
-	if estimate.CostMicroUSD != 50 {
-		t.Fatalf("reasoning cost=%d want=50", estimate.CostMicroUSD)
+	estimator, err := NewEstimator(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := Event{Model: "gpt-test", OutputTokens: 5, TotalTokens: 5}
+	estimate, err := estimator.Estimate(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if estimate.Priced || estimate.PricedTokens != 0 || estimate.MissingReason != ResolutionMissingPricingRate {
+		t.Fatalf("used bucket without a rate must be unpriced: %+v", estimate)
+	}
+	var aggregate AggregateCost
+	aggregate.Add(event, estimate)
+	summary := aggregate.Summary(profile)
+	if summary == nil || summary.PricedEvents != 0 || len(summary.MissingModels) != 1 || summary.MissingModels[0].Reason != ResolutionMissingPricingRate {
+		t.Fatalf("unexpected coverage: %+v", summary)
 	}
 }
 

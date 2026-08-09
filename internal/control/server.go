@@ -416,17 +416,23 @@ func redactPath(path string) string {
 	if strings.TrimSpace(path) == "" {
 		return ""
 	}
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return path
-	}
-	cleanHome := filepath.Clean(home)
 	cleanPath := filepath.Clean(config.ExpandHome(path))
-	if cleanPath == cleanHome {
-		return "~"
+	home, err := os.UserHomeDir()
+	if err == nil && home != "" {
+		cleanHome := filepath.Clean(home)
+		if cleanPath == cleanHome {
+			return "~"
+		}
+		if strings.HasPrefix(cleanPath, cleanHome+string(filepath.Separator)) {
+			return "~" + strings.TrimPrefix(cleanPath, cleanHome)
+		}
 	}
-	if strings.HasPrefix(cleanPath, cleanHome+string(filepath.Separator)) {
-		return "~" + strings.TrimPrefix(cleanPath, cleanHome)
+	if filepath.IsAbs(cleanPath) {
+		base := filepath.Base(cleanPath)
+		if base == "." || base == string(filepath.Separator) {
+			return "<external>"
+		}
+		return "<external>/" + base
 	}
 	return path
 }

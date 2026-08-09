@@ -37,7 +37,7 @@ parser_version = codex-v1
 event_granularity = request
 ```
 
-Session 优先原生 session ID，回退到 `sessions`/`archived_sessions` root-relative path。事件优先明确 event/message/request ID；都缺失时使用 `session_record(line + subkey)`。紧随 usage 的 `task_complete.turn_id` 会把该事件 identity 升级为 `session_turn`，不保存 timing。
+Session 优先原生 session ID，回退到 `sessions`/`archived_sessions` root-relative path。事件优先明确 event/message/request ID；都缺失时使用 `session_record(line + subkey)`。后到的 `task_complete.turn_id` 只补关联 metadata，不重写已经可导入的 usage event identity，也不保存 timing。
 
 `ledger` 对累计 `total_token_usage` 做 per-session reset-aware delta；`ccusage_compatible` 优先 `last_token_usage`，缺失时用累计 delta。source total 是权威 `total_tokens`；缓存 input 从 raw input 分离，reasoning 可能包含在 output 中。当累计 counter 局部回退导致已知分项不能完整解释 source total 时，保留 source total、把分项限制在 total 内并标记 `observability_level=partial`，不会把分项缺口伪造成某个 token bucket。该情况按 `codex_accounting_partial` diagnostic 汇总。replay matcher 继续 fail-closed。
 
@@ -89,4 +89,4 @@ identity = root id + native session
 
 ## Parser contract 测试
 
-每个 adapter 使用 synthetic fixture 覆盖：identity precedence、稳定 Session、同 native ID 下 model/token/path 变化不改变 event ID、subkey 拆分、非法 timestamp/token、accounting 守恒和二次 import 幂等。fixture 不包含真实 Session、路径或客户数据。
+每个 adapter 使用 synthetic fixture 覆盖：identity precedence、稳定 Session、同 native ID 下 model/token/path 变化不改变 event ID、subkey 拆分、非法 timestamp/token、accounting 守恒、二次 import 幂等，以及 append-only 文件分阶段补 metadata 时不产生第二个 event。fixture 不包含真实 Session、路径或客户数据。

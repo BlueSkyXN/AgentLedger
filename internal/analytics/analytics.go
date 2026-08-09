@@ -109,7 +109,6 @@ type Event struct {
 
 type Session struct {
 	SessionKey          string       `json:"session_key"`
-	SessionID           *string      `json:"session_id"`
 	Channel             string       `json:"channel"`
 	SourceProduct       string       `json:"source_product"`
 	FirstDate           string       `json:"first_date"`
@@ -289,7 +288,7 @@ func BuildSessions(conn *sql.DB, filters Filters, limit, offset int) (*Paginated
                ROW_NUMBER() OVER (PARTITION BY session_key ORDER BY model_tokens DESC, model_normalized ASC) AS model_rank
         FROM model_totals
     )
-    SELECT f.session_key, NULLIF(MIN(COALESCE(f.session_id, '')), ''), MIN(f.channel), MIN(f.source_product),
+    SELECT f.session_key, MIN(f.channel), MIN(f.source_product),
            agentledger_time_bucket(MIN(f.timestamp_ms), ?, 'daily'),
            agentledger_time_bucket(MAX(f.timestamp_ms), ?, 'daily'),
            COUNT(*), rm.model_normalized, COUNT(DISTINCT f.model_normalized),
@@ -310,16 +309,14 @@ func BuildSessions(conn *sql.DB, filters Filters, limit, offset int) (*Paginated
 	items := make([]Session, 0)
 	for rows.Next() {
 		var item Session
-		var sessionID sql.NullString
 		if err := rows.Scan(
-			&item.SessionKey, &sessionID, &item.Channel, &item.SourceProduct,
+			&item.SessionKey, &item.Channel, &item.SourceProduct,
 			&item.FirstDate, &item.LastDate, &item.EventCount, &item.PrimaryModel, &item.ModelCount,
 			&item.InputTokens, &item.OutputTokens, &item.ReasoningTokens,
 			&item.CacheCreationTokens, &item.CacheReadTokens, &item.TotalTokens,
 		); err != nil {
 			return nil, err
 		}
-		item.SessionID = nullableString(sessionID)
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
@@ -643,8 +640,16 @@ func estimateCostsWithPrefix(conn *sql.DB, filters Filters, labelExpr string, pr
 		return results
 	}
 	for label, aggregate := range aggregates {
-		cost := pricing.MicroUSDToUSD(aggregate.EstimatedCostMicroUSD)
-		results[label] = estimateResult{cost: &cost, pricing: pricingInfo(profile, aggregate.Summary(profile))}
+		coverage := aggregate.Summary(profile)
+		var cost *float64
+		if coverage != nil {
+			unpricedEvents := coverage.TotalEvents - coverage.PricedEvents - coverage.PolicyZeroEvents
+			if coverage.PricedEvents > 0 || unpricedEvents == 0 {
+				value := pricing.MicroUSDToUSD(aggregate.EstimatedCostMicroUSD)
+				cost = &value
+			}
+		}
+		results[label] = estimateResult{cost: cost, pricing: pricingInfo(profile, coverage)}
 	}
 	if len(aggregates) == 0 {
 		zero := 0.0

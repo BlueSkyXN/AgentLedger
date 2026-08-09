@@ -350,7 +350,7 @@ func TestCodexModelStateFollowsDeclarationsBySessionAndTime(t *testing.T) {
 	}
 }
 
-func TestCodexTaskCompleteOnlyAttachesTurnIdentity(t *testing.T) {
+func TestCodexTaskCompleteOnlyAttachesTurnMetadata(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "codex.jsonl")
 	data := strings.Join([]string{
 		`{"type":"event_msg","timestamp":"2026-01-01T00:00:10Z","session_id":"A","payload":{"type":"token_count","model":"gpt-5-codex","info":{"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":40,"reasoning_output_tokens":5,"total_tokens":145}}}}`,
@@ -371,8 +371,8 @@ func TestCodexTaskCompleteOnlyAttachesTurnIdentity(t *testing.T) {
 	if rec.TurnID != "turn-a" {
 		t.Fatalf("expected turn id turn-a, got %q", rec.TurnID)
 	}
-	if _, _, strategy, _, err := fingerprint.ComputeIdentity(rec); err != nil || strategy != fingerprint.StrategySessionTurn {
-		t.Fatalf("task_complete must upgrade identity to session_turn: strategy=%s err=%v", strategy, err)
+	if _, _, strategy, _, err := fingerprint.ComputeIdentity(rec); err != nil || strategy != fingerprint.StrategySessionRecord {
+		t.Fatalf("task_complete must preserve the usage identity: strategy=%s err=%v", strategy, err)
 	}
 }
 

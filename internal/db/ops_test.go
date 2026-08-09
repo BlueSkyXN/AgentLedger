@@ -1,10 +1,13 @@
 package db
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/BlueSkyXN/AgentLedger/internal/model"
@@ -50,7 +53,7 @@ func TestReconcileDuplicateSupplementAndConflict(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.ModelNormalized != "gpt-test" || stored.Provider != "openai" || stored.ContentSHA256 != "content-2" {
+	if stored.ModelNormalized != "gpt-test" || stored.Provider != "openai" || stored.ContentSHA256 != mustContentSHA256(t, stored) {
 		t.Fatalf("supplement not persisted: %+v", stored)
 	}
 
@@ -89,10 +92,58 @@ func TestDirectModelConflictIsRejected(t *testing.T) {
 	}
 }
 
+func TestReconcileRecomputesCanonicalContentHash(t *testing.T) {
+	sourceTotal := int64(15)
+	existing := testEvent("canonical", "", 10)
+	existing.SourceTotalTokens = &sourceTotal
+	existing.ContentSHA256 = mustContentSHA256(t, existing)
+
+	incoming := *existing
+	incoming.SourceTotalTokens = nil
+	incoming.Provider = "openai"
+	incoming.ModelRaw = "gpt-test"
+	incoming.ModelNormalized = "gpt-test"
+	incoming.ModelResolution = model.ModelResolutionDirectEvent
+	incoming.ModelIsFallback = false
+	incoming.ContentSHA256 = mustContentSHA256(t, &incoming)
+
+	canonical, status, err := reconcile(existing, &incoming)
+	if err != nil || status != ReconcileUpdated {
+		t.Fatalf("reconcile status=%q err=%v", status, err)
+	}
+	wantHash := mustContentSHA256(t, canonical)
+	if canonical.ContentSHA256 != wantHash {
+		t.Fatalf("canonical content hash=%q want=%q", canonical.ContentSHA256, wantHash)
+	}
+
+	complete := *canonical
+	complete.ContentSHA256 = wantHash
+	_, status, err = reconcile(canonical, &complete)
+	if err != nil || status != ReconcileSkipped {
+		t.Fatalf("complete observation status=%q err=%v", status, err)
+	}
+}
+
+func TestReconcileFillsMetadataWhenContentMatches(t *testing.T) {
+	existing := testEvent("metadata", "same-content", 10)
+	incoming := *existing
+	incoming.ProjectPath = "/private/project"
+	incoming.SourceFile = "/private/source.jsonl"
+
+	canonical, status, err := reconcile(existing, &incoming)
+	if err != nil || status != ReconcileUpdated {
+		t.Fatalf("reconcile status=%q err=%v", status, err)
+	}
+	if canonical.ProjectPath != incoming.ProjectPath || canonical.SourceFile != incoming.SourceFile {
+		t.Fatalf("metadata was not restored: %+v", canonical)
+	}
+}
+
 func TestMergePreflightRollbackAndIdempotency(t *testing.T) {
 	destination := openTestDatabase(t)
 	defer destination.Close()
 	base := testEvent("shared", "shared-content", 5)
+	base.ContentSHA256 = mustContentSHA256(t, base)
 	if _, err := destination.UpsertEvent(base); err != nil {
 		t.Fatal(err)
 	}
@@ -106,6 +157,7 @@ func TestMergePreflightRollbackAndIdempotency(t *testing.T) {
 		t.Fatal(err)
 	}
 	unique := testEvent("unique", "unique-content", 7)
+	unique.ContentSHA256 = mustContentSHA256(t, unique)
 	if _, err := incoming.UpsertEvent(unique); err != nil {
 		t.Fatal(err)
 	}
@@ -126,12 +178,13 @@ func TestMergePreflightRollbackAndIdempotency(t *testing.T) {
 		t.Fatal(err)
 	}
 	conflict := *base
-	conflict.ContentSHA256 = "conflicting-content"
 	conflict.TotalTokens++
+	conflict.ContentSHA256 = mustContentSHA256(t, &conflict)
 	if _, err := conflictDB.UpsertEvent(&conflict); err != nil {
 		t.Fatal(err)
 	}
 	another := testEvent("must-not-insert", "new-content", 9)
+	another.ContentSHA256 = mustContentSHA256(t, another)
 	if _, err := conflictDB.UpsertEvent(another); err != nil {
 		t.Fatal(err)
 	}
@@ -198,6 +251,84 @@ func TestMergeRejectsNonV3IncomingDatabases(t *testing.T) {
 	}
 }
 
+func TestMergeRejectsTamperedContentAndMalformedIdentity(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		column   string
+		value    string
+		wantCode string
+	}{
+		{name: "content hash", column: "content_sha256", value: "forged-content", wantCode: "invalid_content_hash"},
+		{name: "event id", column: "event_id", value: "forged-event", wantCode: "invalid_identity"},
+		{name: "session key", column: "session_key", value: "forged-session", wantCode: "invalid_identity"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			destination := openTestDatabase(t)
+			defer destination.Close()
+			incomingPath := filepath.Join(t.TempDir(), "incoming.aldb")
+			incoming, err := Open(incomingPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			event := testEvent("tampered", "", 10)
+			event.ContentSHA256 = mustContentSHA256(t, event)
+			if _, err := incoming.UpsertEvent(event); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := incoming.Conn().Exec(`UPDATE usage_events SET `+test.column+`=?`, test.value); err != nil {
+				t.Fatal(err)
+			}
+			if err := incoming.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			result, err := destination.MergeFrom(incomingPath)
+			var mergeConflict *MergeConflictError
+			if !errors.As(err, &mergeConflict) || result.Rejected != 1 || len(result.Conflicts) != 1 || result.Conflicts[0].Code != test.wantCode {
+				t.Fatalf("merge result=%+v err=%v", result, err)
+			}
+		})
+	}
+}
+
+func TestMergeRejectsInvalidDestinationBeforeWriting(t *testing.T) {
+	destination := openTestDatabase(t)
+	defer destination.Close()
+	existing := testEvent("existing", "", 10)
+	existing.ContentSHA256 = mustContentSHA256(t, existing)
+	if _, err := destination.UpsertEvent(existing); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := destination.Conn().Exec(`UPDATE usage_events SET content_sha256='forged-content' WHERE event_id=?`, existing.EventID); err != nil {
+		t.Fatal(err)
+	}
+
+	incomingPath := filepath.Join(t.TempDir(), "incoming.aldb")
+	incoming, err := Open(incomingPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newEvent := testEvent("new", "", 5)
+	newEvent.ContentSHA256 = mustContentSHA256(t, newEvent)
+	if _, err := incoming.UpsertEvent(newEvent); err != nil {
+		t.Fatal(err)
+	}
+	if err := incoming.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := destination.MergeFrom(incomingPath); err == nil || !strings.Contains(err.Error(), "destination database contains an invalid event") {
+		t.Fatalf("expected invalid destination rejection, got %v", err)
+	}
+	var count int64
+	if err := destination.Conn().QueryRow(`SELECT COUNT(*) FROM usage_events WHERE event_id=?`, newEvent.EventID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatal("merge wrote incoming event before destination validation completed")
+	}
+}
+
 func TestValidateAccountingProfiles(t *testing.T) {
 	event := testEvent("accounting", "hash", 10)
 	event.TokenAccountingMethod = model.AccWorkBuddyRawUsage
@@ -247,12 +378,26 @@ func TestValidateAccountingProfiles(t *testing.T) {
 
 func testEvent(id, content string, total int64) *model.UsageEvent {
 	return &model.UsageEvent{
-		EventID: id, IdentityVersion: model.IdentityVersion,
+		EventID: hashTestValue("event:" + id), IdentityVersion: model.IdentityVersion,
 		IdentityStrategy: "native_event", IdentityScope: "session",
 		ContentSHA256: content, ParserVersion: "test-v1", EventGranularity: "request",
 		Channel: "codex", SourceProduct: "codex-cli", Provider: "",
 		ModelNormalized: "unknown", ModelResolution: model.ModelResolutionUnknown, ModelIsFallback: true,
-		TimestampMs: 1_700_000_000_000, SessionKey: "session-key", SessionID: "native-session",
+		TimestampMs: 1_700_000_000_000, SessionKey: hashTestValue("session-key"), SessionID: "native-session",
 		InputTokens: total, TotalTokens: total, ImportedAtMs: 100, UpdatedAtMs: 100,
 	}
+}
+
+func mustContentSHA256(t *testing.T, event *model.UsageEvent) string {
+	t.Helper()
+	value, err := contentSHA256ForEvent(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return value
+}
+
+func hashTestValue(value string) string {
+	digest := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(digest[:])
 }

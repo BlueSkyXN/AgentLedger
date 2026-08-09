@@ -139,7 +139,7 @@ func ComputeIdentity(rec *ParsedRecord) (sessionKey, eventID string, strategy St
 	}
 	sessionKey = hashIdentityTuple("session:v1", sourceProduct, sessionSeed)
 
-	contentSHA256, err = contentHash(rec)
+	contentSHA256, err = ComputeContentSHA256(rec)
 	if err != nil {
 		return "", "", "", "", &IdentityError{Code: "invalid_content"}
 	}
@@ -243,7 +243,9 @@ func normalizeStableSessionPath(raw string) (string, error) {
 	return cleaned, nil
 }
 
-func contentHash(rec *ParsedRecord) (string, error) {
+// ComputeContentSHA256 hashes the structured usage facts that are persisted in
+// usage_events. Callers can use it to verify that a stored row is self-consistent.
+func ComputeContentSHA256(rec *ParsedRecord) (string, error) {
 	modelName := strings.TrimSpace(rec.Model)
 	modelNormalized := strings.TrimSpace(rec.ModelNormalized)
 	// Keep the values as integers and use explicit null markers for optional

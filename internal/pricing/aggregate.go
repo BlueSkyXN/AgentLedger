@@ -61,7 +61,7 @@ func (c *Coverage) Add(ev Event, estimate Estimate) {
 	c.TotalTokens += tokens
 	if estimate.Priced {
 		c.PricedEvents++
-		c.PricedTokens += tokens
+		c.PricedTokens += estimate.PricedTokens
 		c.confidence = combineConfidence(c.confidence, estimate.Confidence)
 		return
 	}

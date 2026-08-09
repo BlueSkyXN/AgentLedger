@@ -1,7 +1,8 @@
-import { useImportRuns, useStatus } from "@/hooks/queries";
+import { useConfig, useImportRuns, useStatus } from "@/hooks/queries";
 import { formatDate, formatInt } from "@/utils/format";
 
 export function ImportsPage() {
+  const { data: config } = useConfig();
   const { data: runs } = useImportRuns(50);
   const { data: status } = useStatus();
   return (
@@ -16,7 +17,7 @@ export function ImportsPage() {
           <table>
             <thead><tr><th>运行 ID</th><th>状态</th><th>文件</th><th>新增</th><th>更新</th><th>跳过</th><th>拒绝</th><th>开始</th><th>结束</th><th>错误</th></tr></thead>
             <tbody>
-              {(runs ?? []).map((run) => <tr key={run.id}><td className="mono">{run.id}</td><td>{run.status}</td><td>{formatInt(run.files_scanned)}</td><td>{formatInt(run.events_added)}</td><td>{formatInt(run.events_updated)}</td><td>{formatInt(run.events_skipped)}</td><td>{formatInt(run.events_rejected)}</td><td>{formatDate(run.started_at)}</td><td>{formatDate(run.finished_at)}</td><td>{run.error ?? "-"}</td></tr>)}
+              {(runs ?? []).map((run) => <tr key={run.id}><td className="mono">{run.id}</td><td>{run.status}</td><td>{formatInt(run.files_scanned)}</td><td>{formatInt(run.events_added)}</td><td>{formatInt(run.events_updated)}</td><td>{formatInt(run.events_skipped)}</td><td>{formatInt(run.events_rejected)}</td><td>{formatDate(run.started_at, config?.reports.timezone)}</td><td>{formatDate(run.finished_at, config?.reports.timezone)}</td><td>{run.error ?? "-"}</td></tr>)}
               {(runs ?? []).length === 0 && <tr><td colSpan={10} className="empty-cell">暂无导入记录</td></tr>}
             </tbody>
           </table>
