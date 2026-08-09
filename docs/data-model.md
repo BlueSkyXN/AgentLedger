@@ -133,12 +133,14 @@ raw_usage_json
 | 条件 | 结果 |
 |---|---|
 | event ID 不存在 | insert |
-| content hash 相同 | skip，零写入 |
+| content hash 相同且无缺失 metadata | skip，零写入 |
+| content hash 相同且仅补本机 locator metadata | update |
 | 同 timestamp/session/token，仅补 missing 元数据 | update |
 | fallback/unknown 模型升级为直接证据，token 相同 | update |
 | 两条直接模型证据冲突 | reject |
 | timestamp、session、token bucket/total 冲突 | reject |
 | 已知 accounting method/profile 冲突 | reject |
+| merge 输入的 event/session hash 格式或 content hash 不自洽 | reject |
 
 拒绝不新增行、不覆盖原行。merge 的任一拒绝会回滚整次 merge。
 

@@ -3,6 +3,7 @@ package cmd
 import (
 	"database/sql"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -124,7 +125,14 @@ func openExportSource(path string) (*sql.DB, error) {
 		return nil, fmt.Errorf("failed to close validated source database: %w", err)
 	}
 
-	conn, err := sql.Open("sqlite3", fmt.Sprintf("file:%s?mode=ro&_busy_timeout=5000", path))
+	dsn, err := db.SQLiteFileURI(path, url.Values{
+		"mode":          {"ro"},
+		"_busy_timeout": {"5000"},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve database path: %w", err)
+	}
+	conn, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}

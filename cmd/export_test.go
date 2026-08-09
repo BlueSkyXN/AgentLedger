@@ -11,7 +11,7 @@ import (
 )
 
 func TestExportRedactionPreservesIdentityAndTotals(t *testing.T) {
-	sourcePath := filepath.Join(t.TempDir(), "source.db")
+	sourcePath := filepath.Join(t.TempDir(), "source #?账本.db")
 	source, err := db.Open(sourcePath)
 	if err != nil {
 		t.Fatal(err)
@@ -34,7 +34,7 @@ func TestExportRedactionPreservesIdentityAndTotals(t *testing.T) {
 	}
 	_ = source.Close()
 
-	exportPath := filepath.Join(t.TempDir(), "export.aldb")
+	exportPath := filepath.Join(t.TempDir(), "export #?账本.aldb")
 	if _, err := exportDatabase(sourcePath, exportPath, true); err != nil {
 		t.Fatal(err)
 	}

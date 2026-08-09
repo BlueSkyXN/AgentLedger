@@ -1,7 +1,9 @@
 package db
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -310,10 +312,6 @@ func reconcile(existing, incoming *model.UsageEvent) (*model.UsageEvent, string,
 	if existingModelRank == 2 && incomingModelRank == 2 && !strings.EqualFold(existing.ModelNormalized, incoming.ModelNormalized) {
 		return nil, ReconcileRejected, reject("direct_model_conflict")
 	}
-	if existing.ContentSHA256 == incoming.ContentSHA256 {
-		return existing, ReconcileSkipped, nil
-	}
-
 	canonical := *existing
 	contentChanged := false
 	metadataChanged := false
@@ -349,6 +347,9 @@ func reconcile(existing, incoming *model.UsageEvent) (*model.UsageEvent, string,
 	}
 
 	if !contentChanged && !metadataChanged {
+		if existing.ContentSHA256 == incoming.ContentSHA256 {
+			return existing, ReconcileSkipped, nil
+		}
 		// A weaker model observation cannot downgrade stronger direct evidence.
 		if incomingModelRank < existingModelRank {
 			return existing, ReconcileSkipped, nil
@@ -357,9 +358,11 @@ func reconcile(existing, incoming *model.UsageEvent) (*model.UsageEvent, string,
 	}
 	canonical.ImportedAtMs = existing.ImportedAtMs
 	canonical.UpdatedAtMs = max64(incoming.UpdatedAtMs, time.Now().UnixMilli())
-	if contentChanged {
-		canonical.ContentSHA256 = incoming.ContentSHA256
+	contentSHA256, hashErr := contentSHA256ForEvent(&canonical)
+	if hashErr != nil {
+		return nil, ReconcileRejected, reject("invalid_content_hash")
 	}
+	canonical.ContentSHA256 = contentSHA256
 	return &canonical, ReconcileUpdated, nil
 }
 
@@ -626,6 +629,9 @@ func (d *Database) MergeFrom(incomingPath string) (result MergeResult, err error
 	}
 	virtual := make(map[string]*model.UsageEvent, len(existingEvents)+len(incomingEvents))
 	for _, event := range existingEvents {
+		if validationErr := validateStoredEvent(event); validationErr != nil {
+			return result, fmt.Errorf("destination database contains an invalid event: %w", validationErr)
+		}
 		virtual[event.EventID] = event
 	}
 	actions := make([]mergeAction, 0, len(incomingEvents))
@@ -633,6 +639,15 @@ func (d *Database) MergeFrom(incomingPath string) (result MergeResult, err error
 	for _, sourceEvent := range incomingEvents {
 		incoming := normalizedEvent(sourceEvent)
 		if validationErr := ValidateEvent(incoming); validationErr != nil {
+			var rejected *RejectError
+			if errors.As(validationErr, &rejected) {
+				conflictCounts[rejected.Code]++
+			} else {
+				conflictCounts["invalid_event"]++
+			}
+			continue
+		}
+		if validationErr := validateStoredEvent(incoming); validationErr != nil {
 			var rejected *RejectError
 			if errors.As(validationErr, &rejected) {
 				conflictCounts[rejected.Code]++
@@ -681,6 +696,25 @@ func (d *Database) MergeFrom(incomingPath string) (result MergeResult, err error
 		return result, err
 	}
 	return result, nil
+}
+
+func validateStoredEvent(event *model.UsageEvent) error {
+	if !isCanonicalSHA256(event.EventID) || !isCanonicalSHA256(event.SessionKey) {
+		return reject("invalid_identity")
+	}
+	expected, err := contentSHA256ForEvent(event)
+	if err != nil || expected != event.ContentSHA256 {
+		return reject("invalid_content_hash")
+	}
+	return nil
+}
+
+func isCanonicalSHA256(value string) bool {
+	if len(value) != sha256.Size*2 || value != strings.ToLower(value) {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
 }
 
 func sortedConflicts(counts map[string]int) []MergeConflict {

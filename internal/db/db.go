@@ -40,7 +40,15 @@ func Open(path string) (*Database, error) {
 		return nil, fmt.Errorf("failed to create database directory: %w", err)
 	}
 
-	dsn := fmt.Sprintf("file:%s?_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=5000&_foreign_keys=ON", path)
+	dsn, err := SQLiteFileURI(path, url.Values{
+		"_journal_mode": {"WAL"},
+		"_synchronous":  {"NORMAL"},
+		"_busy_timeout": {"5000"},
+		"_foreign_keys": {"ON"},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve database path: %w", err)
+	}
 	conn, err := sql.Open(sqliteDriverName, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
@@ -70,19 +78,17 @@ func OpenReadOnly(path string) (*Database, error) {
 		return nil, fmt.Errorf("failed to open database: path is a directory")
 	}
 
-	absPath, err := filepath.Abs(path)
+	dsn, err := SQLiteFileURI(path, url.Values{
+		"mode":          {"ro"},
+		"_query_only":   {"on"},
+		"_busy_timeout": {"5000"},
+		"_foreign_keys": {"on"},
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve database path: %w", err)
 	}
-	uri := &url.URL{Scheme: "file", Path: absPath}
-	query := url.Values{}
-	query.Set("mode", "ro")
-	query.Set("_query_only", "on")
-	query.Set("_busy_timeout", "5000")
-	query.Set("_foreign_keys", "on")
-	uri.RawQuery = query.Encode()
 
-	conn, err := sql.Open(sqliteDriverName, uri.String())
+	conn, err := sql.Open(sqliteDriverName, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
@@ -129,18 +135,16 @@ func OpenReadWriteV3(path string) (*Database, error) {
 		return nil, fmt.Errorf("failed to open database: path is a directory")
 	}
 
-	absPath, err := filepath.Abs(path)
+	dsn, err := SQLiteFileURI(path, url.Values{
+		"mode":          {"rw"},
+		"_busy_timeout": {"5000"},
+		"_foreign_keys": {"on"},
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve database path: %w", err)
 	}
-	uri := &url.URL{Scheme: "file", Path: absPath}
-	query := url.Values{}
-	query.Set("mode", "rw")
-	query.Set("_busy_timeout", "5000")
-	query.Set("_foreign_keys", "on")
-	uri.RawQuery = query.Encode()
 
-	conn, err := sql.Open(sqliteDriverName, uri.String())
+	conn, err := sql.Open(sqliteDriverName, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
@@ -186,6 +190,33 @@ func projectLabel(projectPath any) string {
 		}
 	}
 	return normalized
+}
+
+func sqliteURIPath(absPath string, pathSeparator uint8) string {
+	if pathSeparator == '\\' {
+		normalized := strings.ReplaceAll(absPath, "\\", "/")
+		if len(normalized) >= 2 && normalized[1] == ':' && ((normalized[0] >= 'A' && normalized[0] <= 'Z') || (normalized[0] >= 'a' && normalized[0] <= 'z')) {
+			return "/" + normalized
+		}
+		return normalized
+	}
+	return absPath
+}
+
+// SQLiteFileURI constructs an absolute SQLite file URI and escapes path
+// characters independently from SQLite query parameters.
+func SQLiteFileURI(filePath string, query url.Values) (string, error) {
+	absPath, err := filepath.Abs(filePath)
+	if err != nil {
+		return "", err
+	}
+	return sqliteFileURI(absPath, os.PathSeparator, query), nil
+}
+
+func sqliteFileURI(absPath string, pathSeparator uint8, query url.Values) string {
+	uri := &url.URL{Scheme: "file", Path: sqliteURIPath(absPath, pathSeparator)}
+	uri.RawQuery = query.Encode()
+	return uri.String()
 }
 
 // timeBucket calculates calendar buckets using the offset that applied to the
