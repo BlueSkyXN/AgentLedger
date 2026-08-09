@@ -186,7 +186,8 @@ func (a *CodexAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, erro
 		if replayMatcher.pending() && isCodexTaskComplete(obj) {
 			continue
 		}
-		// task_complete may add a stable turn identity to the preceding usage.
+		// task_complete may add turn metadata to the preceding usage without
+		// changing the stable event identity selected from the usage record.
 		if attachCodexTaskTurnIdentity(obj, defaultSessionID, lastUsageRecords) {
 			continue
 		}
@@ -665,11 +666,6 @@ func attachCodexTaskTurnIdentity(obj map[string]interface{}, fallbackSessionID s
 	// metadata at most.
 	if rec.TurnID == "" {
 		rec.TurnID = getString(payload, "turn_id")
-	}
-	if rec.TurnID != "" {
-		rec.NativeEventID = ""
-		rec.IdentityKind = "turn"
-		rec.IdentitySubkey = ""
 	}
 	return true
 }

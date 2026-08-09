@@ -1,14 +1,69 @@
 package cmd
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/BlueSkyXN/AgentLedger/internal/adapters"
 	"github.com/BlueSkyXN/AgentLedger/internal/db"
 	"github.com/BlueSkyXN/AgentLedger/internal/fingerprint"
 	"github.com/BlueSkyXN/AgentLedger/internal/model"
 )
+
+func TestCodexStagedTaskCompleteReimportKeepsOneEvent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "codex.jsonl")
+	usage := `{"type":"event_msg","timestamp":"2026-01-01T00:00:10Z","session_id":"A","payload":{"type":"token_count","model":"gpt-5-codex","info":{"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":40,"reasoning_output_tokens":5,"total_tokens":145}}}}`
+	if err := os.WriteFile(path, []byte(usage+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	database, err := db.Open(filepath.Join(t.TempDir(), "import.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	records, err := adapters.NewCodexAdapter().ParseFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	added, updated, skipped, rejected, warnings := importParsedRecords(database, "codex", records)
+	if added != 1 || updated != 0 || skipped != 0 || rejected != 0 || len(warnings) != 0 {
+		t.Fatalf("first import counts=%d/%d/%d/%d warnings=%v", added, updated, skipped, rejected, warnings)
+	}
+
+	taskComplete := `{"type":"event_msg","timestamp":"2026-01-01T00:00:12Z","session_id":"A","payload":{"type":"task_complete","turn_id":"turn-a"}}`
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteString(taskComplete + "\n"); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	records, err = adapters.NewCodexAdapter().ParseFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	added, updated, skipped, rejected, warnings = importParsedRecords(database, "codex", records)
+	if added != 0 || updated != 1 || skipped != 0 || rejected != 0 || len(warnings) != 0 {
+		t.Fatalf("staged reimport counts=%d/%d/%d/%d warnings=%v", added, updated, skipped, rejected, warnings)
+	}
+	var count int
+	var turnID string
+	if err := database.Conn().QueryRow(`SELECT COUNT(*), COALESCE(MAX(turn_id), '') FROM usage_events`).Scan(&count, &turnID); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 || turnID != "turn-a" {
+		t.Fatalf("staged reimport stored count=%d turn_id=%q", count, turnID)
+	}
+}
 
 func TestImportReconcileCountsAndStableIdentity(t *testing.T) {
 	database, err := db.Open(filepath.Join(t.TempDir(), "import.db"))

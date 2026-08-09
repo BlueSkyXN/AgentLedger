@@ -92,7 +92,7 @@ func TestClaudeAdapterFallbacksToUUIDWhenMessageIDMissing(t *testing.T) {
 	}
 }
 
-func TestClaudeAdapterSkipsSyntheticZeroAndUnsupportedNull(t *testing.T) {
+func TestClaudeAdapterSkipsSyntheticZeroAndTreatsNullSpeedAsAbsent(t *testing.T) {
 	path := writeClaudeUsageFile(t,
 		`{"type":"assistant","uuid":"synthetic","timestamp":"2026-01-02T03:04:05Z","message":{"id":"msg-synthetic","model":"<synthetic>","usage":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}`,
 		`{"type":"assistant","uuid":"null-speed","timestamp":"2026-01-02T03:04:06Z","message":{"id":"msg-null","model":"claude-sonnet","usage":{"input_tokens":10,"output_tokens":5,"speed":null}}}`,
@@ -102,8 +102,28 @@ func TestClaudeAdapterSkipsSyntheticZeroAndUnsupportedNull(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if len(records) != 0 {
-		t.Fatalf("expected unsupported/synthetic records to be skipped, got %d", len(records))
+	if len(records) != 1 {
+		t.Fatalf("expected only synthetic usage to be skipped, got %d", len(records))
+	}
+	if records[0].MessageID != "msg-null" || records[0].Model != "claude-sonnet" || records[0].UsageSpeed != "" {
+		t.Fatalf("null speed must be treated as absent: %#v", records[0])
+	}
+}
+
+func TestClaudeAdapterKeepsUsageWithOptionalNullFields(t *testing.T) {
+	path := writeClaudeUsageFile(t,
+		`{"type":"assistant","uuid":"optional-null","timestamp":"2026-01-02T03:04:05Z","cwd":null,"costUSD":null,"sessionId":null,"message":{"id":"msg-null-optional","model":"claude-sonnet","usage":{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":null,"cache_read_input_tokens":null}}}`,
+	)
+
+	records, err := NewClaudeAdapter().ParseFile(path)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected optional null fields to preserve usage, got %d records", len(records))
+	}
+	if records[0].InputTokens != 10 || records[0].OutputTokens != 5 {
+		t.Fatalf("unexpected usage: %#v", records[0])
 	}
 }
 

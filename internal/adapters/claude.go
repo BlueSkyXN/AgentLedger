@@ -2,7 +2,6 @@ package adapters
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -57,10 +56,6 @@ func (a *ClaudeAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, err
 		if len(line) == 0 {
 			continue
 		}
-		if hasClaudeUnsupportedNullField(line) {
-			continue
-		}
-
 		var obj map[string]interface{}
 		if err := json.Unmarshal(line, &obj); err != nil {
 			continue
@@ -295,27 +290,6 @@ func addClaudeDedupeIndex(indexes map[string][]int, key string, index int) {
 		}
 	}
 	indexes[key] = append(indexes[key], index)
-}
-
-func hasClaudeUnsupportedNullField(line []byte) bool {
-	for _, field := range []string{
-		"id",
-		"cwd",
-		"model",
-		"speed",
-		"costUSD",
-		"version",
-		"sessionId",
-		"requestId",
-		"isApiErrorMessage",
-		"cache_read_input_tokens",
-		"cache_creation_input_tokens",
-	} {
-		if bytes.Contains(line, []byte(`"`+field+`":null`)) {
-			return true
-		}
-	}
-	return false
 }
 
 func normalizeClaudeDiscoverPaths(paths []string) []string {
