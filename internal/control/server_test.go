@@ -123,6 +123,53 @@ func TestSessionsAndEventsArePaginatedWithoutRemovedFields(t *testing.T) {
 	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"total":2`) || !strings.Contains(recorder.Body.String(), `"primary_model"`) {
 		t.Fatalf("sessions response status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
+	for _, private := range []string{`"session_id"`, "native-session", "/private/"} {
+		if strings.Contains(recorder.Body.String(), private) {
+			t.Errorf("sessions response contains private value %q: %s", private, recorder.Body.String())
+		}
+	}
+}
+
+func TestRedactPathHidesExternalAbsolutePath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	external := filepath.Join(string(filepath.Separator), "Volumes", "private", "agent-ledger.db")
+	if got, want := redactPath(external), "<external>/agent-ledger.db"; got != want {
+		t.Fatalf("redactPath(%q)=%q want=%q", external, got, want)
+	}
+}
+
+func TestAPISnapshotsRedactExternalAbsolutePaths(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	external := t.TempDir()
+	databasePath := filepath.Join(external, "control.db")
+	database, err := db.Open(databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	cfg := config.Default()
+	cfg.Database.Path = databasePath
+	cfg.Reports.PricingPath = filepath.Join(external, "pricing.json")
+	cfg.Agents.Codex.Paths = []string{filepath.Join(external, "sessions")}
+	handler := NewServer(cfg, database, Options{}).Handler()
+
+	for _, endpoint := range []string{"/api/v2/health", "/api/v2/status", "/api/v2/config"} {
+		request := httptest.NewRequest(http.MethodGet, endpoint, nil)
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("%s status=%d body=%s", endpoint, recorder.Code, recorder.Body.String())
+		}
+		body := recorder.Body.String()
+		if strings.Contains(body, external) {
+			t.Fatalf("%s exposed external path: %s", endpoint, body)
+		}
+		if !strings.Contains(body, `\u003cexternal\u003e`) {
+			t.Fatalf("%s did not return a redacted external path: %s", endpoint, body)
+		}
+	}
 }
 
 func TestAPIIsReadOnlyAndValidatesPagination(t *testing.T) {

@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 
 import { useFilterContext, type TimeRange } from "@/hooks/filters";
-import { useFilterOptions, useSummary } from "@/hooks/queries";
+import { useConfig, useFilterOptions, useSummary } from "@/hooks/queries";
 import { formatDate } from "@/utils/format";
 
 const ranges: Array<{ value: TimeRange; label: string }> = [
@@ -15,6 +15,7 @@ const ranges: Array<{ value: TimeRange; label: string }> = [
 ];
 
 export function FilterBar() {
+  const { data: config } = useConfig();
   const { data: options } = useFilterOptions();
   const { data: summary } = useSummary();
   const {
@@ -40,10 +41,11 @@ export function FilterBar() {
     setProject,
     clearFilters,
   } = useFilterContext();
+  const reportTimezone = config?.reports.timezone;
   const rangeText = activeSince || activeUntil
-    ? `${formatDate(activeSince) || "最早"} 至 ${formatDate(activeUntil) || "现在"}`
+    ? `${formatDate(activeSince, reportTimezone) || "最早"} 至 ${formatDate(activeUntil, reportTimezone) || "现在"}`
     : summary?.first_date || summary?.last_date
-      ? `${formatDate(summary?.first_date)} 至 ${formatDate(summary?.last_date)}`
+      ? `${formatDate(summary?.first_date, reportTimezone)} 至 ${formatDate(summary?.last_date, reportTimezone)}`
       : "全部时间";
   const detailedCount = [channel, sourceProduct, provider, model, session, project].filter(Boolean).length;
   const [advancedOpen, setAdvancedOpen] = useState(detailedCount > 0 || range === "custom");

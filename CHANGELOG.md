@@ -22,6 +22,13 @@
 - Web 以 Sessions 为主要分析页，并分开展示 channel、source product 和 provider。
 - pricing rule 现在正确匹配 provider/channel，并拒绝非法日期、负费率和不支持的费率。
 
+### Fixed
+
+- Codex append-only 日志后补 `task_complete` 不再改写既有 event identity；Claude optional/null 字段不再让合法 usage 静默丢失。
+- reconcile 从最终 canonical row 重算 `content_sha256`，相同 content 可补回 locator metadata；merge 会拒绝 malformed identity hash 或 content hash 不自洽的 v3 行。
+- 全部缺价的聚合金额保持 `null`，partial event 的 token coverage 只统计实际进入价格 bucket 的分项；Codex/Copilot/WorkBuddy 的 reasoning token 按各自 accounting contract 计价。
+- 只读 API 不再返回 native Session ID 或 HOME 外完整目录；Web 区分日历日期与按 report timezone 格式化的 timestamp；writer、read-only 和 export 统一使用会转义保留字符的 SQLite file URI。
+
 ### Removed
 
 - Schema v2 compatibility/migration 和 v2 `.aldb` merge。

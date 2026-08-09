@@ -37,6 +37,7 @@ const (
 	ResolutionPolicyZero         = "policy_zero"
 	ResolutionMissingModel       = "missing_model"
 	ResolutionMissingPricingRule = "missing_pricing_rule"
+	ResolutionMissingPricingRate = "missing_pricing_rate"
 )
 
 type Estimator struct {

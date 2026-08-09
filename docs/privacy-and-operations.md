@@ -18,6 +18,8 @@ AgentLedger 不主动联网、不上传 telemetry、不修改源 Session 日志�
 
 `source_file`、`line_number`、`raw_sha256` 仅用于本机诊断，不参与稳定 identity。
 
+只读 API 的 Session 列表只返回哈希化的 `session_key`，不返回原生 `session_id`。HOME 内路径显示为 `~`，HOME 外绝对路径只保留 `<external>/basename`，不返回完整目录。
+
 ## Export
 
 默认 `redact_paths_on_export=true`：export 副本清空 `project_path`、`source_file` 和 import warning，再执行 `VACUUM`。Identity 与 token facts 不变，因此 redacted export 可重复 merge。

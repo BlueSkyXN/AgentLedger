@@ -109,7 +109,6 @@ export type EventItem = {
 
 export type SessionItem = {
   session_key: string;
-  session_id: string | null;
   first_date: string | null;
   last_date: string | null;
   channel: string;

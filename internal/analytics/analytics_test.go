@@ -1,6 +1,7 @@
 package analytics
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -30,6 +31,73 @@ func TestSummaryFiltersAndUnavailablePricing(t *testing.T) {
 	}
 	if summary.EstimatedCostUSD != nil || summary.Pricing == nil || summary.Pricing.Status != "unavailable" || summary.Pricing.ErrorCode != "pricing_profile_invalid" {
 		t.Fatalf("invalid configured pricing should not fail usage query: %+v", summary)
+	}
+}
+
+func TestUnpricedOnlyAggregateHasNoEstimatedAmount(t *testing.T) {
+	database := analyticsTestDatabase(t)
+	defer database.Close()
+	insertAnalyticsEvent(t, database, "unpriced", "session", "codex", "codex-cli", "custom", "definitely-unpriced-model", 10, atUTC(2026, 3, 7, 12, 0), "")
+
+	rows, err := BuildBreakdown(database.Conn(), "model", Filters{Timezone: "UTC", CostMode: "estimated"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("unexpected rows: %+v", rows)
+	}
+	if rows[0].EstimatedCostUSD != nil {
+		t.Fatalf("unpriced-only amount must be null, got %v", *rows[0].EstimatedCostUSD)
+	}
+	if rows[0].Pricing == nil || rows[0].Pricing.PricedEvents != 0 || rows[0].Pricing.UnpricedEvents != 1 {
+		t.Fatalf("unexpected pricing coverage: %+v", rows[0].Pricing)
+	}
+}
+
+func TestMatchedRuleWithoutUsedBucketRateHasNoEstimatedAmount(t *testing.T) {
+	database := analyticsTestDatabase(t)
+	defer database.Close()
+	insertAnalyticsEvent(t, database, "rate-gap", "session", "codex", "codex-cli", "openai", "input-only-model", 10, atUTC(2026, 3, 7, 12, 0), "")
+	if _, err := database.Conn().Exec(`UPDATE usage_events SET input_tokens=0, output_tokens=10 WHERE event_id='rate-gap'`); err != nil {
+		t.Fatal(err)
+	}
+	profilePath := filepath.Join(t.TempDir(), "input-only.json")
+	if err := os.WriteFile(profilePath, []byte(`{
+	  "schema_version": 1,
+	  "id": "input-only",
+	  "currency": "USD",
+	  "unit": "usd_per_1m_tokens",
+	  "rules": [{"id":"input-only","model_patterns":["input-only-model"],"rates":{"input":2}}]
+	}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := BuildBreakdown(database.Conn(), "model", Filters{Timezone: "UTC", CostMode: "estimated", PricingPath: profilePath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].EstimatedCostUSD != nil {
+		t.Fatalf("all used buckets without rates must be null: %+v", rows)
+	}
+	if rows[0].Pricing == nil || rows[0].Pricing.PricedEvents != 0 || rows[0].Pricing.UnpricedEvents != 1 || rows[0].Pricing.PricedTokens != 0 {
+		t.Fatalf("unexpected pricing coverage: %+v", rows[0].Pricing)
+	}
+}
+
+func TestPolicyZeroOnlyAggregateKeepsExplicitZeroAmount(t *testing.T) {
+	database := analyticsTestDatabase(t)
+	defer database.Close()
+	insertAnalyticsEvent(t, database, "unknown", "session", "codex", "codex-cli", "openai", "unknown", 10, atUTC(2026, 3, 7, 12, 0), "")
+
+	rows, err := BuildBreakdown(database.Conn(), "model", Filters{Timezone: "UTC", CostMode: "estimated"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].EstimatedCostUSD == nil || *rows[0].EstimatedCostUSD != 0 {
+		t.Fatalf("policy-zero amount must be explicit zero: %+v", rows)
+	}
+	if rows[0].Pricing == nil || rows[0].Pricing.PolicyZeroEvents != 1 || rows[0].Pricing.UnpricedEvents != 0 {
+		t.Fatalf("unexpected pricing coverage: %+v", rows[0].Pricing)
 	}
 }
 
