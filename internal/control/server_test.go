@@ -153,6 +153,7 @@ func TestAPISnapshotsRedactExternalAbsolutePaths(t *testing.T) {
 	cfg.Database.Path = databasePath
 	cfg.Reports.PricingPath = filepath.Join(external, "pricing.json")
 	cfg.Agents.Codex.Paths = []string{filepath.Join(external, "sessions")}
+	cfg.Agents.TraeWorkCN.Paths = []string{filepath.Join(external, "TRAE SOLO CN.app")}
 	handler := NewServer(cfg, database, Options{}).Handler()
 
 	for _, endpoint := range []string{"/api/v2/health", "/api/v2/status", "/api/v2/config"} {
@@ -169,6 +170,43 @@ func TestAPISnapshotsRedactExternalAbsolutePaths(t *testing.T) {
 		if !strings.Contains(body, `\u003cexternal\u003e`) {
 			t.Fatalf("%s did not return a redacted external path: %s", endpoint, body)
 		}
+	}
+}
+
+func TestConfigSnapshotIncludesDisabledTraeWorkCNWithRedactedPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	database, err := db.Open(filepath.Join(t.TempDir(), "control.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	cfg := config.Default()
+	cfg.Agents.TraeWorkCN.Enabled = false
+	cfg.Agents.TraeWorkCN.Paths = []string{filepath.Join(home, "private", "TRAE SOLO CN.app")}
+	handler := NewServer(cfg, database, Options{}).Handler()
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v2/config", nil)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("config status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var payload struct {
+		Agents map[string]struct {
+			Enabled bool     `json:"enabled"`
+			Paths   []string `json:"paths"`
+		} `json:"agents"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode config snapshot: %v", err)
+	}
+	snapshot, ok := payload.Agents["trae-work-cn"]
+	if !ok || snapshot.Enabled || len(snapshot.Paths) != 1 || snapshot.Paths[0] != "~/private/TRAE SOLO CN.app" {
+		t.Fatalf("unexpected TRAE Work CN config snapshot: %#v", snapshot)
+	}
+	if strings.Contains(recorder.Body.String(), home) {
+		t.Fatalf("config snapshot exposed HOME path: %s", recorder.Body.String())
 	}
 }
 

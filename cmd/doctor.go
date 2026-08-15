@@ -22,6 +22,9 @@ var doctorCmd = &cobra.Command{
 		if len(args) == 1 && strings.EqualFold(args[0], "codex") {
 			return runCodexDoctor(cfg)
 		}
+		if len(args) == 1 && strings.EqualFold(args[0], "trae-work-cn") {
+			return runTraeWorkCNDoctor(cfg)
+		}
 
 		fmt.Println("AgentLedger Doctor")
 		fmt.Println("==================")
@@ -34,11 +37,12 @@ var doctorCmd = &cobra.Command{
 		fmt.Println("\nConfigured agents:")
 
 		agentConfigs := map[string]*config.AgentConfig{
-			"claude":    &cfg.Agents.Claude,
-			"codex":     &cfg.Agents.Codex,
-			"copilot":   &cfg.Agents.Copilot,
-			"gemini":    &cfg.Agents.Gemini,
-			"workbuddy": &cfg.Agents.WorkBuddy,
+			"claude":       &cfg.Agents.Claude,
+			"codex":        &cfg.Agents.Codex,
+			"copilot":      &cfg.Agents.Copilot,
+			"gemini":       &cfg.Agents.Gemini,
+			"workbuddy":    &cfg.Agents.WorkBuddy,
+			"trae-work-cn": &cfg.Agents.TraeWorkCN,
 		}
 
 		allAdapters := adapters.AllAdapters()
@@ -48,12 +52,41 @@ var doctorCmd = &cobra.Command{
 				fmt.Printf("  %s - disabled\n", adapter.Name())
 				continue
 			}
+			if prober, ok := adapter.(adapters.DirectSourceProber); ok {
+				probe, probeErr := prober.Probe(agentCfg.Paths)
+				switch {
+				case probeErr != nil:
+					fmt.Printf("  %s - direct scan unavailable\n", adapter.Name())
+				case !probe.Supported:
+					fmt.Printf("  %s - direct scan unsupported on this platform\n", adapter.Name())
+				default:
+					fmt.Printf("  %s - %d running source(s) found\n", adapter.Name(), probe.RunningSources)
+				}
+				continue
+			}
 			files, _ := adapter.Discover(agentCfg.Paths)
 			fmt.Printf("  %s - %d files found\n", adapter.Name(), len(files))
 		}
 
 		return nil
 	},
+}
+
+func runTraeWorkCNDoctor(cfg *config.Config) error {
+	adapter := adapters.NewTraeWorkCNAdapter()
+	probe, err := adapter.Probe(cfg.Agents.TraeWorkCN.Paths)
+	if err != nil {
+		return fmt.Errorf("TRAE Work CN direct scanner probe failed: %w", err)
+	}
+
+	fmt.Println("AgentLedger Doctor - TRAE Work CN")
+	fmt.Println("=================================")
+	fmt.Printf("Configured:        %v\n", cfg.Agents.TraeWorkCN.Enabled)
+	fmt.Println("Source mode:       direct runtime scan")
+	fmt.Printf("Platform support:  %v\n", probe.Supported)
+	fmt.Printf("Running processes: %d\n", probe.RunningSources)
+	fmt.Println("Data query:        not run by doctor")
+	return nil
 }
 
 func runCodexDoctor(cfg *config.Config) error {

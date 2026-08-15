@@ -374,6 +374,34 @@ func TestValidateAccountingProfiles(t *testing.T) {
 	if err := ValidateEvent(codexPartial); !IsRejectError(err) {
 		t.Fatalf("full Codex delta must conserve total, got %v", err)
 	}
+
+	traePartial := testEvent("trae-partial", "trae-partial-hash", 20)
+	traePartial.Channel = "trae-work-cn"
+	traePartial.SourceProduct = "trae-work-cn"
+	traePartial.TokenAccountingMethod = model.AccTraeWorkCNMessageUsage
+	traePartial.InputTokens = 10
+	traePartial.OutputTokens = 5
+	traePartial.ObservabilityLevel = "partial"
+	if err := ValidateEvent(traePartial); err != nil {
+		t.Fatalf("partial TRAE Work CN usage may preserve an authoritative total above known buckets: %v", err)
+	}
+	traePartial.OutputTokens = 11
+	if err := ValidateEvent(traePartial); !IsRejectError(err) {
+		t.Fatalf("TRAE Work CN known buckets must not exceed the source total, got %v", err)
+	}
+	traePartial.TotalTokens = int64(^uint64(0) >> 1)
+	traePartial.InputTokens = traePartial.TotalTokens
+	traePartial.OutputTokens = 1
+	if err := ValidateEvent(traePartial); !IsRejectError(err) {
+		t.Fatalf("TRAE Work CN known bucket overflow must be rejected, got %v", err)
+	}
+	traePartial.TotalTokens = 20
+	traePartial.InputTokens = 10
+	traePartial.OutputTokens = 5
+	traePartial.CacheReadTokens = 1
+	if err := ValidateEvent(traePartial); !IsRejectError(err) {
+		t.Fatalf("TRAE Work CN cache details must not enter canonical buckets before inclusion semantics are known, got %v", err)
+	}
 }
 
 func testEvent(id, content string, total int64) *model.UsageEvent {

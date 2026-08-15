@@ -225,6 +225,18 @@ func validateAccountingProfile(event *model.UsageEvent) error {
 			return reject("accounting_reasoning_exceeds_output")
 		}
 		expected = event.InputTokens + event.OutputTokens + event.CacheCreationTokens + event.CacheReadTokens
+	case model.AccTraeWorkCNMessageUsage:
+		if event.ReasoningTokens != 0 || event.CacheCreationTokens != 0 || event.CacheReadTokens != 0 {
+			return reject("accounting_unsupported_bucket")
+		}
+		if event.InputTokens > event.TotalTokens || event.OutputTokens > event.TotalTokens-event.InputTokens {
+			return reject("accounting_total_mismatch")
+		}
+		expected = event.InputTokens + event.OutputTokens
+		if expected < event.TotalTokens && event.ObservabilityLevel != "partial" {
+			return reject("accounting_total_mismatch")
+		}
+		strict = false
 	default:
 		strict = false
 	}

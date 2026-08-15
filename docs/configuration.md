@@ -38,6 +38,11 @@ paths = ["~/.copilot/otel", "~/.copilot/session-state"]
 [agents.workbuddy]
 enabled = true
 paths = ["~/.workbuddy/projects"]
+
+[agents.trae-work-cn]
+enabled = false
+experimental = true
+paths = []
 ```
 
 ## 字段
@@ -50,8 +55,10 @@ paths = ["~/.workbuddy/projects"]
 | `reports.timezone` | Go 可加载的 IANA timezone、`UTC` 或 `Local`；用于逐事件日期分桶和日期 filter。 |
 | `reports.pricing_path` | 空值使用内置 profile；非空值是默认 profile。无效时 usage 仍返回，pricing unavailable。 |
 | `agents.*.enabled` | 是否扫描对应来源。 |
-| `agents.*.paths` | Adapter discovery roots。 |
+| `agents.*.paths` | Adapter discovery roots；TRAE Work CN 中是可选 `.app` bundle allowlist。 |
 | `agents.codex.duplicate_policy` | `ledger` 或 `ccusage_compatible`；重建 candidate 时应与 v2 baseline 保持一致。 |
+
+`agents.trae-work-cn` 默认关闭并标记为 experimental，目前只支持 macOS。`paths = []` 会从当前进程表自动发现 `TRAE SOLO CN.app`；如需限制目标，可填写一个或多个 `.app` bundle path。该 adapter 直接查询已经运行的应用，不读取 JSONL snapshot；导入前 TRAE Work CN 必须已启动。`doctor trae-work-cn` 只检查平台与进程，不附加 debugger 或读取 Session。
 
 CLI `--pricing` 优先于 `reports.pricing_path`，且显式文件无效会直接失败。
 

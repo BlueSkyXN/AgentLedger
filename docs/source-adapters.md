@@ -87,6 +87,51 @@ identity = root id + native session
 
 `rawUsage.prompt_tokens` 拆成非缓存 input、cache read、cache creation；completion 包含 reasoning，`total_tokens` 使用来源总量并由 `workbuddy_raw_usage_v1` 验证。`auto` 是路由状态，保存 `model_normalized=unknown`、fallback/policy-zero；credit、正文、URL、key 和完整 providerData 不落库。
 
+## TRAE Work CN
+
+```text
+channel = trae-work-cn
+source_product = trae-work-cn
+parser_version = trae-work-cn-v1
+event_granularity = message
+identity = native chat_session_id + message_id
+token_accounting_method = trae_work_cn_message_usage
+accounting_profile = trae_work_cn_message_usage_v1
+```
+
+当前 adapter 是 opt-in、macOS-only 的 experimental direct runtime collector。`import` 自己发现已经运行的 `TRAE SOLO CN.app` 主进程，向 Electron main 发送 Node inspector 信号，再调用应用自带的 `ahaDebugger.startRemoteDebugging` 打开一个临时 loopback renderer CDP 端口。随后，它在 renderer 中使用现有 `IICubeAiChatConnectionService` 调用本地 `lite/list_chat_sessions` 与 `lite/get_messages`。这条链路依赖 TRAE 自带的 Electron/Node/CDP runtime contract，但不要求安装或执行外部 `node`、TRAE CLI 或 exporter；AgentLedger 不调用远程 TRAE API，也不读取/破解 SQLCipher `database.db`。TRAE 未运行、平台不支持、9229 被其它进程占用或 runtime contract 不匹配时，adapter fail closed。
+
+这条链路已对 TRAE SOLO CN `0.1.50` 的本机 contract 验证，但不是厂商承诺的稳定外部 API。每轮采集设置 timeout、数量和 payload 上限；CDP/WebSocket endpoint 必须是预期端口上的数字 loopback IP。无论成功失败，collector 都调用 `ahaDebugger.stopRemoteDebugging`，关闭自己打开的 Node inspector，并检查临时端口已关闭。若用户原本已为同一 main process 打开 9229，AgentLedger 会复用但不会替用户关闭；若 9229 属于其它进程，则拒绝附加。
+
+隐私边界位于 renderer 内。原始 `get_messages` response 不跨越 CDP；表达式只返回以下 allowlist：
+
+```text
+chat_session_id
+message_id
+created_at
+session.mode
+message.agent_type
+message.model_smart_selection_meta.config_name
+token_usage.prompt_tokens
+token_usage.completion_tokens
+token_usage.total_tokens
+token_usage.cache_creation_input_tokens
+token_usage.cache_read_input_tokens
+token_usage.reasoning_tokens
+token_usage.prompt_tokens_total
+token_usage.completion_tokens_total
+token_usage.last_turn_total_tokens
+token_usage.max_tokens
+```
+
+`content`、`query`、title、user/account、project/worktree、credential、URL、原始 response 和其它 message 字段不会返回给 Go collector，也不会写库、warning 或 fingerprint。运行时投影再由 Go 的 `DisallowUnknownFields` schema 复验。测试 fixture 只能使用 synthetic identity/token；真实 Session/message ID 和 runtime response 不得进入 commit、PR、日志或公开文档。
+
+只有 assistant message 上显式且可解析的 `token_usage` 才形成 event。`chat_session_id`、`message_id`、`created_at` 和 `total_tokens` 必须存在；timestamp 和 token 必须是安全整数，token 非负且 total 大于 0，`prompt_tokens + completion_tokens` 不得超过 `total_tokens`。缺少 usage 的 assistant message 只计入 `trae_work_cn_unmetered_assistant_messages` 聚合诊断，不按文本估算，也不把正常 import 标成 warning；identity、timestamp 或 usage 非法时才产生脱敏 warning。
+
+`total_tokens` 是 canonical 权威总量，同时写入 source total。`prompt_tokens` 和 `completion_tokens` 保存为当前可确认的 input/output 分项；cache、reasoning、累计 total、last-turn total 和 `max_tokens` 只进入脱敏 fingerprint envelope，不进入 canonical bucket。原因是当前 contract 尚未证明 cache 是否已包含在 prompt、reasoning 是否已包含在 completion，以及带 `_total` 的字段是否为逐消息值。事件固定标记 `observability_level=partial`。`model_smart_selection_meta.config_name` 在 TRAE 自身 telemetry/parser 中被作为本轮实际 model 使用；只有通过长度与字符 allowlist 后才作为 direct event model，缺失或异常仍回退 `unknown`。由于 bucket 包含关系尚未完全证明，任何匹配到价格规则的金额仍是 provisional estimate，不是账单或严格下界。
+
+默认配置 `enabled = false`、`experimental = true`、`paths = []`。空 paths 自动发现运行进程；非空 paths 只作为允许连接的 `.app` bundle allowlist，不是日志或 snapshot 目录。`doctor trae-work-cn` 只做平台与进程探测，真正的 runtime query 只发生在显式启用后的 `import`。
+
 ## Parser contract 测试
 
 每个 adapter 使用 synthetic fixture 覆盖：identity precedence、稳定 Session、同 native ID 下 model/token/path 变化不改变 event ID、subkey 拆分、非法 timestamp/token、accounting 守恒、二次 import 幂等，以及 append-only 文件分阶段补 metadata 时不产生第二个 event。fixture 不包含真实 Session、路径或客户数据。

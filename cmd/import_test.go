@@ -138,6 +138,35 @@ func TestTotalForAccountingProfileUsesOverlapRules(t *testing.T) {
 	if got := totalForAccountingProfile(workbuddy); got != 12 {
 		t.Fatalf("workbuddy total=%d", got)
 	}
+	traeWorkCN := &model.UsageEvent{InputTokens: 2, OutputTokens: 5, TokenAccountingMethod: model.AccTraeWorkCNMessageUsage}
+	if got := totalForAccountingProfile(traeWorkCN); got != 7 {
+		t.Fatalf("TRAE Work CN known token total=%d", got)
+	}
+}
+
+func TestDirectAdapterImportIsIdempotentWithoutIntermediateFiles(t *testing.T) {
+	database, err := db.Open(filepath.Join(t.TempDir(), "import.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	adapter := &fakeDirectImportAdapter{records: []*fingerprint.ParsedRecord{{
+		Agent: "trae-work-cn", SourceProduct: "trae-work-cn", Provider: "unknown",
+		Model: "unknown", ModelNormalized: "unknown", ModelResolution: model.ModelResolutionUnknown, ModelIsFallback: true,
+		TimestampMs: 1_780_000_000_000, NativeSessionID: "runtime-session", SessionID: "runtime-session",
+		NativeEventID: "runtime-message", MessageID: "runtime-message", IdentityKind: "message", IdentityScope: "session",
+		ParserVersion: "trae-work-cn-v1", Granularity: "message", InputTokens: 100, OutputTokens: 40, TotalTokens: 140,
+		ObservabilityLevel: "partial", TokenAccountingMethod: model.AccTraeWorkCNMessageUsage, AccountingProfile: "trae_work_cn_message_usage_v1",
+	}}}
+	first := importDirectAdapter(database, adapter, adapter, nil)
+	if first.files != 1 || first.added != 1 || first.updated != 0 || first.skipped != 0 || first.rejected != 0 || len(first.warnings) != 0 {
+		t.Fatalf("unexpected first direct import: %#v", first)
+	}
+	second := importDirectAdapter(database, adapter, adapter, nil)
+	if second.files != 1 || second.added != 0 || second.updated != 0 || second.skipped != 1 || second.rejected != 0 || len(second.warnings) != 0 {
+		t.Fatalf("unexpected second direct import: %#v", second)
+	}
 }
 
 func TestImportWarningsAreRedactedBeforePersistence(t *testing.T) {
@@ -151,4 +180,20 @@ func TestImportWarningsAreRedactedBeforePersistence(t *testing.T) {
 
 func separatorForTest() string {
 	return string(filepath.Separator)
+}
+
+type fakeDirectImportAdapter struct {
+	records []*fingerprint.ParsedRecord
+}
+
+func (f *fakeDirectImportAdapter) Name() string { return "trae-work-cn" }
+
+func (f *fakeDirectImportAdapter) Discover([]string) ([]string, error) { return nil, nil }
+
+func (f *fakeDirectImportAdapter) ParseFile(string) ([]*fingerprint.ParsedRecord, error) {
+	return nil, nil
+}
+
+func (f *fakeDirectImportAdapter) Collect([]string) ([]*fingerprint.ParsedRecord, []string, error) {
+	return f.records, nil, nil
 }

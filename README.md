@@ -1,6 +1,6 @@
 # AgentLedger
 
-AgentLedger v3 是本地优先的 AI Coding Agent Session usage 统计器。它从 Claude Code、Codex、GitHub Copilot、Gemini CLI 和 WorkBuddy 的本机日志中提取日期、Session、通道、来源形态、provider、模型、project 与 token 分项，写入 SQLite，并通过 CLI、只读 HTTP API 和 React 面板查询。
+AgentLedger v3 是本地优先的 AI Coding Agent Session usage 统计器。它从 Claude Code、Codex、GitHub Copilot、Gemini CLI 和 WorkBuddy 的本机日志，以及运行中的 TRAE Work CN 本机进程中提取日期、Session、通道、来源形态、provider、模型、project 与 token 分项，写入 SQLite，并通过 CLI、只读 HTTP API 和 React 面板查询。
 
 ## 产品边界
 
@@ -118,9 +118,16 @@ pricing_path = ""
 enabled = true
 paths = ["~/.codex/sessions"]
 duplicate_policy = "ledger"
+
+[agents.trae-work-cn]
+enabled = false
+experimental = true
+paths = []
 ```
 
 `reports.timezone` 使用 IANA timezone 对每条历史事件分桶，DST 日期不会按“当前 offset”回算。
+
+TRAE Work CN adapter 默认关闭，目前只在 macOS 上提供 experimental direct scan。启用后，`import` 会发现已经运行的 TRAE Work CN，临时打开 loopback-only Node/CDP 调试端口，通过 renderer 已有的本地 `IICubeAiChatConnectionService` 查询 `list_chat_sessions/get_messages`，并在 renderer 内只投影 message identity、时间、受限 model 标识和显式 `token_usage`。它不启动或重启 TRAE，不解密 SQLCipher 数据库，不调用远程 TRAE API，也不要求安装或执行外部 `node`、TRAE CLI 或 exporter；结束时关闭临时端口。`paths = []` 表示自动发现，也可填写允许连接的 `.app` bundle path。运行时 contract 与 token 口径见 [Source Adapters](docs/source-adapters.md#trae-work-cn)。
 
 ## API v2
 
