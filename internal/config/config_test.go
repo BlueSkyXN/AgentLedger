@@ -22,6 +22,12 @@ func TestDefaultContainsOnlyV3ConfigurationSurface(t *testing.T) {
 	if cfg.DBPath() != filepath.Join(DataDir(), "agent-ledger.db") {
 		t.Fatalf("unexpected DB path %q", cfg.DBPath())
 	}
+	if cfg.Agents.TraeWorkCN.Enabled {
+		t.Fatal("TRAE Work CN snapshot import must be opt-in until a local exporter is configured")
+	}
+	if len(cfg.Agents.TraeWorkCN.Paths) != 1 || cfg.Agents.TraeWorkCN.Paths[0] != "~/.local/share/agent-ledger/sources/trae-work-cn" {
+		t.Fatalf("unexpected TRAE Work CN snapshot path: %#v", cfg.Agents.TraeWorkCN.Paths)
+	}
 }
 
 func TestSavedConfigOmitsRemovedV2Keys(t *testing.T) {
@@ -42,7 +48,7 @@ func TestSavedConfigOmitsRemovedV2Keys(t *testing.T) {
 			t.Errorf("saved v3 config contains removed key %q:\n%s", removed, text)
 		}
 	}
-	for _, required := range []string{"redact_paths_on_export", "gracing_minutes", "timezone", "pricing_path"} {
+	for _, required := range []string{"redact_paths_on_export", "gracing_minutes", "timezone", "pricing_path", "[agents.trae-work-cn]"} {
 		if !strings.Contains(text, required) {
 			t.Errorf("saved v3 config missing %q", required)
 		}
@@ -57,5 +63,23 @@ func TestLoadReadOnlyDoesNotCreateConfig(t *testing.T) {
 	}
 	if _, err := os.Stat(ConfigPath()); !os.IsNotExist(err) {
 		t.Fatalf("LoadReadOnly created config: %v", err)
+	}
+}
+
+func TestTraeWorkCNConfigRoundTrip(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENT_LEDGER_DATA_DIR", dataDir)
+	cfg := Default()
+	cfg.Agents.TraeWorkCN.Enabled = true
+	cfg.Agents.TraeWorkCN.Paths = []string{"~/synthetic-trae-work-cn-snapshots"}
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadReadOnly()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !loaded.Agents.TraeWorkCN.Enabled || len(loaded.Agents.TraeWorkCN.Paths) != 1 || loaded.Agents.TraeWorkCN.Paths[0] != "~/synthetic-trae-work-cn-snapshots" {
+		t.Fatalf("unexpected TRAE Work CN config after roundtrip: %#v", loaded.Agents.TraeWorkCN)
 	}
 }

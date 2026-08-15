@@ -31,7 +31,7 @@ cost 不落库。每次查询用当前 profile 和事件的 provider、channel�
 - `policy_zero`：内置 unknown policy 的零值，单独标记，不等同于官方免费。
 - `unavailable`：配置 profile 无效或估算失败；usage/tokens 仍返回。
 
-`token_coverage_ratio` 只计算实际进入价格 bucket 的 tokens。规则虽匹配但事件使用的全部非零 bucket 都没有对应 rate 时，仍按 unpriced/null 处理。对于 `observability_level=partial` 且 source total 大于已知分项的事件，金额和 coverage 都只代表已知下界，confidence 为 `partial`；不会把无法归入价格 bucket 的 tokens 计成已计价。Codex output 侧按 `max(output, reasoning)`，Copilot 的独立 reasoning 计入 output rate，WorkBuddy completion 已包含 reasoning，不重复计价。
+`token_coverage_ratio` 只计算实际进入价格 bucket 的 tokens。规则虽匹配但事件使用的全部非零 bucket 都没有对应 rate 时，仍按 unpriced/null 处理。对于 `observability_level=partial` 且 source total 大于已知分项的事件，金额和 coverage 只覆盖已经映射的 bucket，confidence 为 `partial`；不会把无法归入价格 bucket 的 tokens 计成已计价。只有 bucket 包含关系已被来源契约证明时，这种 partial 金额才可解释为严格下界。TRAE Work CN 当前尚未证明 prompt/cache 与 completion/reasoning 的包含关系，因此其 estimated cost 只是 provisional estimate，不能当作账单或严格下界。Codex output 侧按 `max(output, reasoning)`，Copilot 的独立 reasoning 计入 output rate，WorkBuddy completion 已包含 reasoning，不重复计价。
 
 显式 `--pricing` 无效时 CLI 失败；配置 `reports.pricing_path` 无效时查询成功但 `pricing.error_code=pricing_profile_invalid`。
 

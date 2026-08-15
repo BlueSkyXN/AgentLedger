@@ -60,5 +60,6 @@ func AllAdapters() []Adapter {
 		NewGeminiAdapter(),
 		NewCopilotAdapter(),
 		NewWorkBuddyAdapter(),
+		NewTraeWorkCNAdapter(),
 	}
 }

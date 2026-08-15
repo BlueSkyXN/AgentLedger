@@ -38,6 +38,10 @@ paths = ["~/.copilot/otel", "~/.copilot/session-state"]
 [agents.workbuddy]
 enabled = true
 paths = ["~/.workbuddy/projects"]
+
+[agents.trae-work-cn]
+enabled = false
+paths = ["~/.local/share/agent-ledger/sources/trae-work-cn"]
 ```
 
 ## 字段
@@ -52,6 +56,8 @@ paths = ["~/.workbuddy/projects"]
 | `agents.*.enabled` | 是否扫描对应来源。 |
 | `agents.*.paths` | Adapter discovery roots。 |
 | `agents.codex.duplicate_policy` | `ledger` 或 `ccusage_compatible`；重建 candidate 时应与 v2 baseline 保持一致。 |
+
+`agents.trae-work-cn` 默认关闭。它的默认 path 是 AgentLedger 约定的本机脱敏 snapshot 目录，不是 TRAE Work CN 的原生日志或数据库目录。只有本地 sanitizer/exporter 已按 `agentledger.trae-work-cn.usage.v1` 生成 JSONL 后才应启用；当前版本不包含自动 exporter。
 
 CLI `--pricing` 优先于 `reports.pricing_path`，且显式文件无效会直接失败。
 

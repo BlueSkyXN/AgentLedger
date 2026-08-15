@@ -87,6 +87,52 @@ identity = root id + native session
 
 `rawUsage.prompt_tokens` 拆成非缓存 input、cache read、cache creation；completion 包含 reasoning，`total_tokens` 使用来源总量并由 `workbuddy_raw_usage_v1` 验证。`auto` 是路由状态，保存 `model_normalized=unknown`、fallback/policy-zero；credit、正文、URL、key 和完整 providerData 不落库。
 
+## TRAE Work CN
+
+```text
+channel = trae-work-cn
+source_product = trae-work-cn
+parser_version = trae-work-cn-v1
+event_granularity = message
+identity = native session_id + message_id
+token_accounting_method = trae_work_cn_message_usage
+accounting_profile = trae_work_cn_message_usage_v1
+```
+
+当前 adapter 是 opt-in 的脱敏 snapshot importer，不直接读取 TRAE Work CN 的 SQLCipher 数据库，也不连接应用进程内 IPC、启动应用或调用远程 API。默认目录 `~/.local/share/agent-ledger/sources/trae-work-cn` 只是 AgentLedger 的输入约定；当前版本不包含自动 snapshot exporter。
+
+每个 JSONL object 使用固定 schema：
+
+```json
+{
+  "schema": "agentledger.trae-work-cn.usage.v1",
+  "session_id": "synthetic-session",
+  "message_id": "synthetic-message",
+  "timestamp_ms": 1780000000000,
+  "model": "claude-sonnet-4",
+  "mode": "work",
+  "agent_type": "solo_work_lite",
+  "token_usage": {
+    "prompt_tokens": 100,
+    "completion_tokens": 40,
+    "total_tokens": 160,
+    "cache_creation_input_tokens": 10,
+    "cache_read_input_tokens": 10,
+    "reasoning_tokens": 5,
+    "prompt_tokens_total": 1000,
+    "completion_tokens_total": 400,
+    "last_turn_total_tokens": 160,
+    "max_tokens": 200000
+  }
+}
+```
+
+`schema`、`session_id`、`message_id`、`timestamp_ms`、`token_usage.total_tokens` 必填；timestamp 和所有 token 必须是整数，token 非负且 total 大于 0。已知 `prompt_tokens + completion_tokens` 不得超过 `total_tokens`。`mode` 可省略或为 `work|code|design`，`agent_type` 可省略或使用 `solo_*` 安全标识。
+
+`total_tokens` 是 canonical 权威总量，同时写入 source total。`prompt_tokens` 和 `completion_tokens` 只保存为当前可确认的 input/output 分项；cache、reasoning、累计 total、last-turn total 和 `max_tokens` 仅做格式校验并保留在解析期脱敏 envelope，不进入 canonical token bucket。原因是当前证据尚不能证明 cache 是否已包含在 prompt、reasoning 是否已包含在 completion，以及带 `_total` 的字段是否为逐消息值。事件固定标记 `observability_level=partial`，不会把分项缺口伪造到某个 bucket；`model` 缺失或为 `auto` 时按 `unknown` fallback/policy-zero 处理。
+
+Parser 使用严格字段 allowlist。object 或 `token_usage` 出现 `content`、`query`、`user_info`、URL、credential 或任何其它未知字段时，整行 fail-closed 并只产生不含原值的聚合 warning。Snapshot 本身仍包含私有 Session/message identity 和 token facts，不能提交为 fixture、粘贴到 PR 或公开分享。
+
 ## Parser contract 测试
 
 每个 adapter 使用 synthetic fixture 覆盖：identity precedence、稳定 Session、同 native ID 下 model/token/path 变化不改变 event ID、subkey 拆分、非法 timestamp/token、accounting 守恒、二次 import 幂等，以及 append-only 文件分阶段补 metadata 时不产生第二个 event。fixture 不包含真实 Session、路径或客户数据。

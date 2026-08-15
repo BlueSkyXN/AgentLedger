@@ -133,11 +133,12 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			"pricing_path": redactPath(s.cfg.Reports.PricingPath),
 		},
 		"agents": map[string]any{
-			"claude":    agentSnapshot(s.cfg.Agents.Claude),
-			"codex":     agentSnapshot(s.cfg.Agents.Codex),
-			"copilot":   agentSnapshot(s.cfg.Agents.Copilot),
-			"gemini":    agentSnapshot(s.cfg.Agents.Gemini),
-			"workbuddy": agentSnapshot(s.cfg.Agents.WorkBuddy),
+			"claude":       agentSnapshot(s.cfg.Agents.Claude),
+			"codex":        agentSnapshot(s.cfg.Agents.Codex),
+			"copilot":      agentSnapshot(s.cfg.Agents.Copilot),
+			"gemini":       agentSnapshot(s.cfg.Agents.Gemini),
+			"workbuddy":    agentSnapshot(s.cfg.Agents.WorkBuddy),
+			"trae-work-cn": agentSnapshot(s.cfg.Agents.TraeWorkCN),
 		},
 		"privacy_note": "面板 API 只读，不返回对话正文、raw usage、设备信息或已记录金额。",
 	})

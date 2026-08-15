@@ -5,7 +5,7 @@ AgentLedger v3 是本地 Session usage 统计器，不是审计账本、远程�
 1. [Quickstart](quickstart.md)：构建、初始化、导入、报表和面板。
 2. [User Guide](user-guide.md)：日常使用路径和结果解释。
 3. [Configuration](configuration.md)：当前有效配置字段。
-4. [Source Adapters](source-adapters.md)：五个来源的 usage、Session、identity 与 accounting 口径。
+4. [Source Adapters](source-adapters.md)：五个本机日志来源与 TRAE Work CN 脱敏 snapshot 的 usage、Session、identity 与 accounting 口径。
 5. [Data Model](data-model.md)：schema v3 三表、identity v2 与 reconcile。
 6. [Architecture](architecture.md)：模块边界和数据流。
 7. [CLI Reference](cli-reference.md)：全部命令、flags 和退出语义。

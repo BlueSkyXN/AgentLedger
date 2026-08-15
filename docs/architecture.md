@@ -8,8 +8,9 @@ AgentLedger v3 将本机 AI Coding Agent Session 日志转换为可重复导入�
 
 ```text
 Claude/Codex/Copilot/Gemini/WorkBuddy logs
-                 │
-                 ▼
+      + TRAE Work CN sanitized snapshots
+                         │
+                         ▼
     Adapter discovery + parser + accounting
                  │ ParsedRecord
                  ▼
@@ -27,7 +28,7 @@ Claude/Codex/Copilot/Gemini/WorkBuddy logs
 
 ## 模块边界
 
-- `internal/adapters`：发现和解析本机日志，选择每个产品的权威 usage 粒度。
+- `internal/adapters`：发现和解析本机日志或显式脱敏 snapshot，选择每个产品的权威 usage 粒度。
 - `internal/fingerprint`：生成稳定 Session/event identity 和结构化 content hash。
 - `internal/model`：跨 package 的 `UsageEvent`。
 - `internal/db`：schema v3、校验、reconcile、merge、统计与 IANA time bucket SQLite function。

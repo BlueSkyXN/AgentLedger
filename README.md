@@ -1,6 +1,6 @@
 # AgentLedger
 
-AgentLedger v3 是本地优先的 AI Coding Agent Session usage 统计器。它从 Claude Code、Codex、GitHub Copilot、Gemini CLI 和 WorkBuddy 的本机日志中提取日期、Session、通道、来源形态、provider、模型、project 与 token 分项，写入 SQLite，并通过 CLI、只读 HTTP API 和 React 面板查询。
+AgentLedger v3 是本地优先的 AI Coding Agent Session usage 统计器。它从 Claude Code、Codex、GitHub Copilot、Gemini CLI 和 WorkBuddy 的本机日志，以及显式脱敏的 TRAE Work CN usage snapshot 中提取日期、Session、通道、来源形态、provider、模型、project 与 token 分项，写入 SQLite，并通过 CLI、只读 HTTP API 和 React 面板查询。
 
 ## 产品边界
 
@@ -118,9 +118,15 @@ pricing_path = ""
 enabled = true
 paths = ["~/.codex/sessions"]
 duplicate_policy = "ledger"
+
+[agents.trae-work-cn]
+enabled = false
+paths = ["~/.local/share/agent-ledger/sources/trae-work-cn"]
 ```
 
 `reports.timezone` 使用 IANA timezone 对每条历史事件分桶，DST 日期不会按“当前 offset”回算。
+
+TRAE Work CN adapter 默认关闭，只读取 `agentledger.trae-work-cn.usage.v1` 脱敏 JSONL snapshot。它不会启动 TRAE、解密其本机数据库、调用远程 TRAE API 或把应用内原始响应当作日志导入；当前也不包含自动 snapshot exporter。格式和 token 口径见 [Source Adapters](docs/source-adapters.md#trae-work-cn)。
 
 ## API v2
 

@@ -23,7 +23,7 @@ const recentFileStabilityDelay = 100 * time.Millisecond
 
 var importCmd = &cobra.Command{
 	Use:   "import",
-	Short: "Import usage data from local agent logs",
+	Short: "Import usage data from local logs and sanitized snapshots",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.Load()
 		if err != nil {
@@ -55,11 +55,12 @@ var importCmd = &cobra.Command{
 
 		allAdapters := adapters.AllAdapters()
 		agentConfigs := map[string]*config.AgentConfig{
-			"claude":    &cfg.Agents.Claude,
-			"codex":     &cfg.Agents.Codex,
-			"gemini":    &cfg.Agents.Gemini,
-			"copilot":   &cfg.Agents.Copilot,
-			"workbuddy": &cfg.Agents.WorkBuddy,
+			"claude":       &cfg.Agents.Claude,
+			"codex":        &cfg.Agents.Codex,
+			"gemini":       &cfg.Agents.Gemini,
+			"copilot":      &cfg.Agents.Copilot,
+			"workbuddy":    &cfg.Agents.WorkBuddy,
+			"trae-work-cn": &cfg.Agents.TraeWorkCN,
 		}
 
 		for _, adapter := range allAdapters {
@@ -507,6 +508,8 @@ func sourceProductForAgent(agent string) string {
 		return "gemini-cli"
 	case "workbuddy":
 		return "workbuddy"
+	case "trae-work-cn":
+		return "trae-work-cn"
 	default:
 		return agent
 	}
@@ -516,6 +519,8 @@ func defaultObservability(agent string) string {
 	switch agent {
 	case "claude", "codex", "copilot", "workbuddy":
 		return "full"
+	case "trae-work-cn":
+		return "partial"
 	default:
 		return "unknown"
 	}
@@ -564,6 +569,8 @@ func totalForAccountingProfile(event *model.UsageEvent) int64 {
 		return event.InputTokens + event.CacheCreationTokens + event.CacheReadTokens + maxInt64(event.OutputTokens, event.ReasoningTokens)
 	case model.AccWorkBuddyRawUsage:
 		return event.InputTokens + event.OutputTokens + event.CacheCreationTokens + event.CacheReadTokens
+	case model.AccTraeWorkCNMessageUsage:
+		return event.InputTokens + event.OutputTokens
 	default:
 		return event.InputTokens + event.OutputTokens + event.ReasoningTokens + event.CacheCreationTokens + event.CacheReadTokens
 	}

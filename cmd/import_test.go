@@ -138,6 +138,45 @@ func TestTotalForAccountingProfileUsesOverlapRules(t *testing.T) {
 	if got := totalForAccountingProfile(workbuddy); got != 12 {
 		t.Fatalf("workbuddy total=%d", got)
 	}
+	traeWorkCN := &model.UsageEvent{InputTokens: 2, OutputTokens: 5, TokenAccountingMethod: model.AccTraeWorkCNMessageUsage}
+	if got := totalForAccountingProfile(traeWorkCN); got != 7 {
+		t.Fatalf("TRAE Work CN known token total=%d", got)
+	}
+}
+
+func TestTraeWorkCNSnapshotReimportIsIdempotent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "trae-work-cn.jsonl")
+	snapshot := `{"schema":"agentledger.trae-work-cn.usage.v1","session_id":"synthetic-session","message_id":"synthetic-message","timestamp_ms":1780000000000,"model":"claude-sonnet-4","mode":"work","agent_type":"solo_work_lite","token_usage":{"prompt_tokens":100,"completion_tokens":40,"total_tokens":160,"cache_read_input_tokens":10,"reasoning_tokens":5}}`
+	if err := os.WriteFile(path, []byte(snapshot), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	records, err := adapters.NewTraeWorkCNAdapter().ParseFile(path)
+	if err != nil || len(records) != 1 {
+		t.Fatalf("parse snapshot records=%d err=%v", len(records), err)
+	}
+
+	database, err := db.Open(filepath.Join(t.TempDir(), "import.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	added, updated, skipped, rejected, warnings := importParsedRecords(database, "trae-work-cn", records)
+	if added != 1 || updated != 0 || skipped != 0 || rejected != 0 || len(warnings) != 0 {
+		t.Fatalf("first import counts=%d/%d/%d/%d warnings=%v", added, updated, skipped, rejected, warnings)
+	}
+	added, updated, skipped, rejected, warnings = importParsedRecords(database, "trae-work-cn", records)
+	if added != 0 || updated != 0 || skipped != 1 || rejected != 0 || len(warnings) != 0 {
+		t.Fatalf("repeat import counts=%d/%d/%d/%d warnings=%v", added, updated, skipped, rejected, warnings)
+	}
+	var count int
+	var total int64
+	if err := database.Conn().QueryRow(`SELECT COUNT(*), COALESCE(SUM(total_tokens), 0) FROM usage_events`).Scan(&count, &total); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 || total != 160 {
+		t.Fatalf("stored count=%d total=%d", count, total)
+	}
 }
 
 func TestImportWarningsAreRedactedBeforePersistence(t *testing.T) {
