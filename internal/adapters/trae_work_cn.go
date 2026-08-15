@@ -1,85 +1,196 @@
 package adapters
 
 import (
-	"bufio"
-	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
-	"os"
+	"io"
+	"math"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/BlueSkyXN/AgentLedger/internal/fingerprint"
 	"github.com/BlueSkyXN/AgentLedger/internal/model"
 )
 
 const (
-	traeWorkCNSnapshotSchema    = "agentledger.trae-work-cn.usage.v1"
-	traeWorkCNAccountingProfile = "trae_work_cn_message_usage_v1"
-	traeWorkCNDefaultPath       = "~/.local/share/agent-ledger/sources/trae-work-cn"
+	traeWorkCNSnapshotSchema          = "agentledger.trae-work-cn.usage.v1"
+	traeWorkCNRuntimeCollectionSchema = "agentledger.trae-work-cn.runtime.v1"
+	traeWorkCNAccountingProfile       = "trae_work_cn_message_usage_v1"
+	traeWorkCNRuntimeSource           = "trae-work-cn://runtime"
+	traeWorkCNCollectTimeout          = 2 * time.Minute
 )
 
-// TraeWorkCNAdapter imports explicitly sanitized, per-message usage snapshots.
-// TRAE Work CN's native database is encrypted and its current in-process IPC is
-// not a stable external interface, so this adapter never reads either directly.
-type TraeWorkCNAdapter struct{}
+// TraeWorkCNAdapter directly collects explicitly reported per-message usage
+// from a running TRAE Work CN renderer. The runtime collector projects a strict
+// usage-only shape before data crosses the local debugger boundary.
+type TraeWorkCNAdapter struct {
+	runtime     traeWorkCNRuntime
+	diagnostics []ImportDiagnostic
+}
 
-func NewTraeWorkCNAdapter() *TraeWorkCNAdapter { return &TraeWorkCNAdapter{} }
+func NewTraeWorkCNAdapter() *TraeWorkCNAdapter {
+	return &TraeWorkCNAdapter{runtime: newTraeWorkCNRuntimeCollector()}
+}
+
+func newTraeWorkCNAdapterWithRuntime(runtime traeWorkCNRuntime) *TraeWorkCNAdapter {
+	return &TraeWorkCNAdapter{runtime: runtime}
+}
 
 func (a *TraeWorkCNAdapter) Name() string { return "trae-work-cn" }
 
 func (a *TraeWorkCNAdapter) Discover(paths []string) ([]string, error) {
-	if len(paths) == 0 {
-		paths = []string{traeWorkCNDefaultPath}
+	return nil, nil
+}
+
+func (a *TraeWorkCNAdapter) Probe(paths []string) (DirectSourceProbe, error) {
+	if a.runtime == nil {
+		return DirectSourceProbe{}, fmt.Errorf("TRAE Work CN runtime collector is unavailable")
 	}
-	files, err := DiscoverFiles(paths, []string{".jsonl"})
+	return a.runtime.Probe(paths)
+}
+
+func (a *TraeWorkCNAdapter) Collect(paths []string) ([]*fingerprint.ParsedRecord, []string, error) {
+	a.diagnostics = nil
+	if a.runtime == nil {
+		return nil, nil, fmt.Errorf("TRAE Work CN runtime collector is unavailable")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), traeWorkCNCollectTimeout)
+	defer cancel()
+	payloads, warnings, err := a.runtime.Collect(ctx, paths)
 	if err != nil {
-		return nil, err
+		return nil, warnings, err
 	}
-	sort.Strings(files)
-	return files, nil
+
+	recordsByIdentity := make(map[string]*fingerprint.ParsedRecord)
+	parseDiagnostics := newTraeWorkCNParseDiagnostics()
+	var sessionsScanned int64
+	var messagesScanned int64
+	var assistantMessages int64
+	var runtimeDuplicates int64
+	var skippedMissingIdentity int64
+	var skippedInvalidTimestamp int64
+	var skippedMissingUsage int64
+	var skippedInvalidUsage int64
+	for _, payload := range payloads {
+		projection, decodeErr := decodeTraeWorkCNRuntimeProjection(payload)
+		if decodeErr != nil {
+			return nil, warnings, decodeErr
+		}
+		sessionsScanned += projection.SessionsScanned
+		messagesScanned += projection.MessagesScanned
+		assistantMessages += projection.AssistantMessages
+		runtimeDuplicates += projection.DuplicateMessages
+		skippedMissingIdentity += projection.SkippedMissingIdentity
+		skippedInvalidTimestamp += projection.SkippedInvalidTimestamp
+		skippedMissingUsage += projection.SkippedMissingUsage
+		skippedInvalidUsage += projection.SkippedInvalidUsage
+
+		for index, snapshot := range projection.Records {
+			sourceLine, marshalErr := json.Marshal(snapshot)
+			if marshalErr != nil {
+				parseDiagnostics.add(index+1, "sanitized_envelope_encoding_failed")
+				continue
+			}
+			record, reason := traeWorkCNRecordFromSnapshot(snapshot, traeWorkCNRuntimeSource, index+1, sourceLine)
+			if reason != "" {
+				parseDiagnostics.add(index+1, reason)
+				continue
+			}
+			identity := record.NativeSessionID + "\x00" + record.NativeEventID
+			recordsByIdentity[identity] = record
+		}
+	}
+
+	records := make([]*fingerprint.ParsedRecord, 0, len(recordsByIdentity))
+	var totalTokens int64
+	for _, record := range recordsByIdentity {
+		if record.TotalTokens > math.MaxInt64-totalTokens {
+			return nil, warnings, fmt.Errorf("TRAE Work CN runtime token total overflow")
+		}
+		totalTokens += record.TotalTokens
+		records = append(records, record)
+	}
+	sort.Slice(records, func(i, j int) bool {
+		if records[i].TimestampMs != records[j].TimestampMs {
+			return records[i].TimestampMs < records[j].TimestampMs
+		}
+		if records[i].NativeSessionID != records[j].NativeSessionID {
+			return records[i].NativeSessionID < records[j].NativeSessionID
+		}
+		return records[i].NativeEventID < records[j].NativeEventID
+	})
+
+	warnings = append(warnings, parseDiagnostics.warnings()...)
+	skippedTotal := skippedMissingIdentity + skippedInvalidTimestamp + skippedInvalidUsage
+	if skippedTotal > 0 {
+		warnings = append(warnings, fmt.Sprintf(
+			"runtime scan rejected %d malformed assistant message(s) (missing_identity=%d, invalid_timestamp=%d, invalid_usage=%d)",
+			skippedTotal,
+			skippedMissingIdentity,
+			skippedInvalidTimestamp,
+			skippedInvalidUsage,
+		))
+	}
+	if runtimeDuplicates > 0 {
+		warnings = append(warnings, fmt.Sprintf("runtime scan ignored %d duplicate message observation(s)", runtimeDuplicates))
+	}
+
+	a.diagnostics = []ImportDiagnostic{
+		{Code: "trae_work_cn_sessions_scanned", Unit: ImportDiagnosticUnitCount, Count: sessionsScanned},
+		{Code: "trae_work_cn_messages_scanned", Unit: ImportDiagnosticUnitCount, Count: messagesScanned},
+		{Code: "trae_work_cn_assistant_messages", Unit: ImportDiagnosticUnitCount, Count: assistantMessages},
+		{Code: "trae_work_cn_unmetered_assistant_messages", Unit: ImportDiagnosticUnitCount, Count: skippedMissingUsage},
+		{Code: "trae_work_cn_direct_usage", Unit: ImportDiagnosticUnitUsage, Events: int64(len(records)), Tokens: totalTokens},
+	}
+	return records, warnings, nil
+}
+
+func (a *TraeWorkCNAdapter) ImportDiagnostics() []ImportDiagnostic {
+	return append([]ImportDiagnostic(nil), a.diagnostics...)
+}
+
+type traeWorkCNRuntimeProjection struct {
+	Schema                  string                `json:"schema"`
+	SessionsScanned         int64                 `json:"sessions_scanned"`
+	MessagesScanned         int64                 `json:"messages_scanned"`
+	AssistantMessages       int64                 `json:"assistant_messages"`
+	DuplicateMessages       int64                 `json:"duplicate_messages"`
+	SkippedMissingIdentity  int64                 `json:"skipped_missing_identity"`
+	SkippedInvalidTimestamp int64                 `json:"skipped_invalid_timestamp"`
+	SkippedMissingUsage     int64                 `json:"skipped_missing_usage"`
+	SkippedInvalidUsage     int64                 `json:"skipped_invalid_usage"`
+	Records                 []*traeWorkCNSnapshot `json:"records"`
+}
+
+func decodeTraeWorkCNRuntimeProjection(payload string) (*traeWorkCNRuntimeProjection, error) {
+	decoder := json.NewDecoder(strings.NewReader(payload))
+	decoder.UseNumber()
+	decoder.DisallowUnknownFields()
+	var projection traeWorkCNRuntimeProjection
+	if err := decoder.Decode(&projection); err != nil {
+		return nil, fmt.Errorf("invalid TRAE Work CN runtime projection")
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return nil, fmt.Errorf("invalid TRAE Work CN runtime projection")
+	}
+	if projection.Schema != traeWorkCNRuntimeCollectionSchema || projection.SessionsScanned < 0 || projection.MessagesScanned < 0 || projection.AssistantMessages < 0 || projection.DuplicateMessages < 0 || projection.SkippedMissingIdentity < 0 || projection.SkippedInvalidTimestamp < 0 || projection.SkippedMissingUsage < 0 || projection.SkippedInvalidUsage < 0 {
+		return nil, fmt.Errorf("invalid TRAE Work CN runtime projection")
+	}
+	if projection.Records == nil || projection.SessionsScanned > 10_000 || projection.MessagesScanned > 250_000 || projection.DuplicateMessages > 250_000 || projection.AssistantMessages > projection.MessagesScanned || int64(len(projection.Records)) > projection.AssistantMessages || projection.SkippedMissingIdentity > projection.AssistantMessages || projection.SkippedInvalidTimestamp > projection.AssistantMessages || projection.SkippedMissingUsage > projection.AssistantMessages || projection.SkippedInvalidUsage > projection.AssistantMessages {
+		return nil, fmt.Errorf("invalid TRAE Work CN runtime projection")
+	}
+	accountedAssistantMessages := int64(len(projection.Records)) + projection.SkippedMissingIdentity + projection.SkippedInvalidTimestamp + projection.SkippedMissingUsage + projection.SkippedInvalidUsage
+	if accountedAssistantMessages != projection.AssistantMessages {
+		return nil, fmt.Errorf("invalid TRAE Work CN runtime projection")
+	}
+	return &projection, nil
 }
 
 func (a *TraeWorkCNAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, error) {
-	records, _, err := a.ParseFileWithWarnings(path)
-	return records, err
-}
-
-func (a *TraeWorkCNAdapter) ParseFileWithWarnings(path string) ([]*fingerprint.ParsedRecord, []string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, nil, fmt.Errorf("open TRAE Work CN snapshot %s: %w", path, err)
-	}
-	defer f.Close()
-
-	records := make([]*fingerprint.ParsedRecord, 0)
-	diagnostics := newTraeWorkCNParseDiagnostics()
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
-	lineNumber := 0
-	for scanner.Scan() {
-		lineNumber++
-		line := scanner.Bytes()
-		if len(bytes.TrimSpace(line)) == 0 {
-			continue
-		}
-
-		snapshot, reason := decodeTraeWorkCNSnapshot(line)
-		if reason != "" {
-			diagnostics.add(lineNumber, reason)
-			continue
-		}
-		record, reason := traeWorkCNRecordFromSnapshot(snapshot, path, lineNumber, line)
-		if reason != "" {
-			diagnostics.add(lineNumber, reason)
-			continue
-		}
-		records = append(records, record)
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, diagnostics.warnings(), fmt.Errorf("scan TRAE Work CN snapshot %s: %w", path, err)
-	}
-	return records, diagnostics.warnings(), nil
+	return nil, fmt.Errorf("TRAE Work CN uses direct runtime collection; file input is unsupported")
 }
 
 type traeWorkCNSnapshot struct {
@@ -106,20 +217,6 @@ type traeWorkCNTokenUsage struct {
 	MaxTokens                *json.Number `json:"max_tokens"`
 }
 
-func decodeTraeWorkCNSnapshot(line []byte) (*traeWorkCNSnapshot, string) {
-	if !json.Valid(line) {
-		return nil, "invalid_json"
-	}
-	decoder := json.NewDecoder(bytes.NewReader(line))
-	decoder.UseNumber()
-	decoder.DisallowUnknownFields()
-	var snapshot traeWorkCNSnapshot
-	if err := decoder.Decode(&snapshot); err != nil {
-		return nil, "invalid_schema"
-	}
-	return &snapshot, ""
-}
-
 func traeWorkCNRecordFromSnapshot(snapshot *traeWorkCNSnapshot, path string, lineNumber int, sourceLine []byte) (*fingerprint.ParsedRecord, string) {
 	if snapshot == nil || snapshot.Schema != traeWorkCNSnapshotSchema || snapshot.TokenUsage == nil {
 		return nil, "missing_required_fields"
@@ -128,6 +225,9 @@ func traeWorkCNRecordFromSnapshot(snapshot *traeWorkCNSnapshot, path string, lin
 	messageID := strings.TrimSpace(snapshot.MessageID)
 	if sessionID == "" || messageID == "" || snapshot.TimestampMs == nil || snapshot.TokenUsage.TotalTokens == nil {
 		return nil, "missing_required_fields"
+	}
+	if len(sessionID) > 512 || len(messageID) > 512 {
+		return nil, "invalid_identity"
 	}
 	timestampMs, err := snapshot.TimestampMs.Int64()
 	if err != nil || timestampMs <= 0 {
@@ -178,16 +278,11 @@ func traeWorkCNRecordFromSnapshot(snapshot *traeWorkCNSnapshot, path string, lin
 		return nil, "invalid_token_totals"
 	}
 
-	modelRaw := strings.TrimSpace(snapshot.Model)
+	modelRaw := safeTraeWorkCNModel(snapshot.Model)
 	modelNormalized := modelRaw
 	modelResolution := model.ModelResolutionDirectEvent
 	modelIsFallback := false
-	if modelRaw == "" {
-		modelRaw = "unknown"
-		modelNormalized = "unknown"
-		modelResolution = model.ModelResolutionUnknown
-		modelIsFallback = true
-	} else if strings.EqualFold(modelRaw, "auto") || strings.EqualFold(modelRaw, "unknown") {
+	if strings.EqualFold(modelRaw, "auto") || strings.EqualFold(modelRaw, "unknown") {
 		modelNormalized = "unknown"
 		modelResolution = model.ModelResolutionUnknown
 		modelIsFallback = true
@@ -276,6 +371,22 @@ func validTraeWorkCNAgentType(value string) bool {
 	return true
 }
 
+func safeTraeWorkCNModel(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) == 0 || len(value) > 128 {
+		return "unknown"
+	}
+	for index := 0; index < len(value); index++ {
+		char := value[index]
+		alphaNumeric := (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9')
+		if alphaNumeric || (index > 0 && strings.ContainsRune("._:/+-", rune(char))) {
+			continue
+		}
+		return "unknown"
+	}
+	return value
+}
+
 type traeWorkCNParseDiagnostics struct {
 	total   int
 	counts  map[string]int
@@ -307,7 +418,7 @@ func (d *traeWorkCNParseDiagnostics) warnings() []string {
 	for _, reason := range reasons {
 		counts = append(counts, fmt.Sprintf("%s=%d", reason, d.counts[reason]))
 	}
-	warning := fmt.Sprintf("skipped %d invalid TRAE Work CN snapshot line(s) (%s); samples: %s", d.total, strings.Join(counts, ", "), strings.Join(d.samples, ", "))
+	warning := fmt.Sprintf("skipped %d invalid TRAE Work CN usage record(s) (%s); samples: %s", d.total, strings.Join(counts, ", "), strings.Join(d.samples, ", "))
 	if d.total > len(d.samples) {
 		warning += fmt.Sprintf(", ... %d more", d.total-len(d.samples))
 	}

@@ -70,7 +70,7 @@ func Default() *Config {
 			Gemini:     AgentConfig{Enabled: true, Paths: []string{"~/.gemini"}},
 			Copilot:    AgentConfig{Enabled: true, Paths: []string{"~/.copilot/otel", "~/.copilot/session-state"}},
 			WorkBuddy:  AgentConfig{Enabled: true, Paths: []string{"~/.workbuddy/projects"}},
-			TraeWorkCN: AgentConfig{Enabled: false, Paths: []string{"~/.local/share/agent-ledger/sources/trae-work-cn"}},
+			TraeWorkCN: AgentConfig{Enabled: false, Experimental: true},
 		},
 	}
 }

@@ -23,7 +23,7 @@ const recentFileStabilityDelay = 100 * time.Millisecond
 
 var importCmd = &cobra.Command{
 	Use:   "import",
-	Short: "Import usage data from local logs and sanitized snapshots",
+	Short: "Import usage data from local sources",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.Load()
 		if err != nil {
@@ -71,6 +71,17 @@ var importCmd = &cobra.Command{
 			adapter = configureImportAdapter(adapter, agentCfg)
 			for _, sourcePath := range agentCfg.Paths {
 				warningSourcePaths = append(warningSourcePaths, config.ExpandHome(sourcePath))
+			}
+			if directAdapter, ok := adapter.(adapters.DirectRecordAdapter); ok {
+				result := importDirectAdapter(database, adapter, directAdapter, agentCfg.Paths)
+				totalFiles += result.files
+				totalAdded += result.added
+				totalUpdated += result.updated
+				totalSkipped += result.skipped
+				totalRejected += result.rejected
+				warnings = append(warnings, result.warnings...)
+				collectImportDiagnostics(importDiagnostics, adapter)
+				continue
 			}
 
 			files, err := adapter.Discover(agentCfg.Paths)
@@ -123,6 +134,40 @@ type importAdapterResult struct {
 	skipped  int
 	rejected int
 	warnings []string
+}
+
+func importDirectAdapter(database *db.Database, adapter adapters.Adapter, directAdapter adapters.DirectRecordAdapter, paths []string) importAdapterResult {
+	result := importAdapterResult{}
+	records, collectionWarnings, err := directAdapter.Collect(paths)
+	if err != nil {
+		for _, collectionWarning := range collectionWarnings {
+			warning := fmt.Sprintf("%s direct scan warning: %s", adapter.Name(), collectionWarning)
+			result.warnings = append(result.warnings, warning)
+			fmt.Fprintf(os.Stderr, "Warning: %s\n", warning)
+		}
+		expandedPaths := make([]string, 0, len(paths))
+		for _, path := range paths {
+			expandedPaths = append(expandedPaths, config.ExpandHome(path))
+		}
+		warning := fmt.Sprintf("%s direct scan failed: %s", adapter.Name(), sanitizeImportError(err, expandedPaths))
+		result.warnings = append(result.warnings, warning)
+		fmt.Fprintf(os.Stderr, "Warning: %s\n", warning)
+		return result
+	}
+
+	result.files = 1
+	for _, collectionWarning := range collectionWarnings {
+		warning := fmt.Sprintf("%s direct scan warning: %s", adapter.Name(), collectionWarning)
+		result.warnings = append(result.warnings, warning)
+		fmt.Fprintf(os.Stderr, "Warning: %s\n", warning)
+	}
+	added, updated, skipped, rejected, recordWarnings := importParsedRecords(database, adapter.Name(), records)
+	result.added = added
+	result.updated = updated
+	result.skipped = skipped
+	result.rejected = rejected
+	result.warnings = append(result.warnings, recordWarnings...)
+	return result
 }
 
 func importAdapterFiles(database *db.Database, adapter adapters.Adapter, files []string, cutoff time.Time) importAdapterResult {

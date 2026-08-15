@@ -12,7 +12,7 @@
 - `/api/v2/*` 只读 API；summary 增加 distinct Session 数。
 - 基于 IANA timezone 的逐事件 SQLite bucket function，正确处理历史 DST。
 - 配置级 pricing profile、即时 estimated cost、coverage、`policy_zero` 和稳定 unavailable error code。
-- 默认关闭的 TRAE Work CN 脱敏 JSONL snapshot adapter，以逐消息 `total_tokens` 作为权威 usage 总量。
+- 默认关闭、macOS experimental 的 TRAE Work CN direct runtime adapter；直接扫描运行中应用的逐消息显式 `token_usage`，并以 `total_tokens` 作为权威 usage 总量。
 
 ### Changed
 

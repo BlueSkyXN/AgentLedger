@@ -11,6 +11,24 @@ type Adapter interface {
 	ParseFile(path string) ([]*fingerprint.ParsedRecord, error)
 }
 
+// DirectRecordAdapter collects records from a running local source without an
+// intermediate file. Implementations must return only normalized records and
+// privacy-safe aggregate warnings.
+type DirectRecordAdapter interface {
+	Collect(paths []string) ([]*fingerprint.ParsedRecord, []string, error)
+}
+
+type DirectSourceProbe struct {
+	Supported      bool
+	RunningSources int
+}
+
+// DirectSourceProber performs a non-invasive availability check. Probe must
+// not attach a debugger, query source data, or mutate the source application.
+type DirectSourceProber interface {
+	Probe(paths []string) (DirectSourceProbe, error)
+}
+
 // ParseWarningAdapter can return non-fatal, aggregated diagnostics while still
 // importing valid records from the same file.
 type ParseWarningAdapter interface {

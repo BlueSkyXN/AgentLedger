@@ -23,10 +23,10 @@ func TestDefaultContainsOnlyV3ConfigurationSurface(t *testing.T) {
 		t.Fatalf("unexpected DB path %q", cfg.DBPath())
 	}
 	if cfg.Agents.TraeWorkCN.Enabled {
-		t.Fatal("TRAE Work CN snapshot import must be opt-in until a local exporter is configured")
+		t.Fatal("TRAE Work CN direct runtime scan must be opt-in")
 	}
-	if len(cfg.Agents.TraeWorkCN.Paths) != 1 || cfg.Agents.TraeWorkCN.Paths[0] != "~/.local/share/agent-ledger/sources/trae-work-cn" {
-		t.Fatalf("unexpected TRAE Work CN snapshot path: %#v", cfg.Agents.TraeWorkCN.Paths)
+	if !cfg.Agents.TraeWorkCN.Experimental || len(cfg.Agents.TraeWorkCN.Paths) != 0 {
+		t.Fatalf("unexpected TRAE Work CN direct scan defaults: %#v", cfg.Agents.TraeWorkCN)
 	}
 }
 
@@ -71,7 +71,7 @@ func TestTraeWorkCNConfigRoundTrip(t *testing.T) {
 	t.Setenv("AGENT_LEDGER_DATA_DIR", dataDir)
 	cfg := Default()
 	cfg.Agents.TraeWorkCN.Enabled = true
-	cfg.Agents.TraeWorkCN.Paths = []string{"~/synthetic-trae-work-cn-snapshots"}
+	cfg.Agents.TraeWorkCN.Paths = []string{"~/Applications/TRAE SOLO CN.app"}
 	if err := cfg.Save(); err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestTraeWorkCNConfigRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !loaded.Agents.TraeWorkCN.Enabled || len(loaded.Agents.TraeWorkCN.Paths) != 1 || loaded.Agents.TraeWorkCN.Paths[0] != "~/synthetic-trae-work-cn-snapshots" {
+	if !loaded.Agents.TraeWorkCN.Enabled || !loaded.Agents.TraeWorkCN.Experimental || len(loaded.Agents.TraeWorkCN.Paths) != 1 || loaded.Agents.TraeWorkCN.Paths[0] != "~/Applications/TRAE SOLO CN.app" {
 		t.Fatalf("unexpected TRAE Work CN config after roundtrip: %#v", loaded.Agents.TraeWorkCN)
 	}
 }

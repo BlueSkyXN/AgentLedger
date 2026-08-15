@@ -153,7 +153,7 @@ func TestAPISnapshotsRedactExternalAbsolutePaths(t *testing.T) {
 	cfg.Database.Path = databasePath
 	cfg.Reports.PricingPath = filepath.Join(external, "pricing.json")
 	cfg.Agents.Codex.Paths = []string{filepath.Join(external, "sessions")}
-	cfg.Agents.TraeWorkCN.Paths = []string{filepath.Join(external, "trae-snapshots")}
+	cfg.Agents.TraeWorkCN.Paths = []string{filepath.Join(external, "TRAE SOLO CN.app")}
 	handler := NewServer(cfg, database, Options{}).Handler()
 
 	for _, endpoint := range []string{"/api/v2/health", "/api/v2/status", "/api/v2/config"} {
@@ -183,7 +183,7 @@ func TestConfigSnapshotIncludesDisabledTraeWorkCNWithRedactedPath(t *testing.T) 
 	defer database.Close()
 	cfg := config.Default()
 	cfg.Agents.TraeWorkCN.Enabled = false
-	cfg.Agents.TraeWorkCN.Paths = []string{filepath.Join(home, "private", "trae-work-cn")}
+	cfg.Agents.TraeWorkCN.Paths = []string{filepath.Join(home, "private", "TRAE SOLO CN.app")}
 	handler := NewServer(cfg, database, Options{}).Handler()
 
 	request := httptest.NewRequest(http.MethodGet, "/api/v2/config", nil)
@@ -202,7 +202,7 @@ func TestConfigSnapshotIncludesDisabledTraeWorkCNWithRedactedPath(t *testing.T) 
 		t.Fatalf("decode config snapshot: %v", err)
 	}
 	snapshot, ok := payload.Agents["trae-work-cn"]
-	if !ok || snapshot.Enabled || len(snapshot.Paths) != 1 || snapshot.Paths[0] != "~/private/trae-work-cn" {
+	if !ok || snapshot.Enabled || len(snapshot.Paths) != 1 || snapshot.Paths[0] != "~/private/TRAE SOLO CN.app" {
 		t.Fatalf("unexpected TRAE Work CN config snapshot: %#v", snapshot)
 	}
 	if strings.Contains(recorder.Body.String(), home) {

@@ -144,38 +144,28 @@ func TestTotalForAccountingProfileUsesOverlapRules(t *testing.T) {
 	}
 }
 
-func TestTraeWorkCNSnapshotReimportIsIdempotent(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "trae-work-cn.jsonl")
-	snapshot := `{"schema":"agentledger.trae-work-cn.usage.v1","session_id":"synthetic-session","message_id":"synthetic-message","timestamp_ms":1780000000000,"model":"claude-sonnet-4","mode":"work","agent_type":"solo_work_lite","token_usage":{"prompt_tokens":100,"completion_tokens":40,"total_tokens":160,"cache_read_input_tokens":10,"reasoning_tokens":5}}`
-	if err := os.WriteFile(path, []byte(snapshot), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	records, err := adapters.NewTraeWorkCNAdapter().ParseFile(path)
-	if err != nil || len(records) != 1 {
-		t.Fatalf("parse snapshot records=%d err=%v", len(records), err)
-	}
-
+func TestDirectAdapterImportIsIdempotentWithoutIntermediateFiles(t *testing.T) {
 	database, err := db.Open(filepath.Join(t.TempDir(), "import.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer database.Close()
 
-	added, updated, skipped, rejected, warnings := importParsedRecords(database, "trae-work-cn", records)
-	if added != 1 || updated != 0 || skipped != 0 || rejected != 0 || len(warnings) != 0 {
-		t.Fatalf("first import counts=%d/%d/%d/%d warnings=%v", added, updated, skipped, rejected, warnings)
+	adapter := &fakeDirectImportAdapter{records: []*fingerprint.ParsedRecord{{
+		Agent: "trae-work-cn", SourceProduct: "trae-work-cn", Provider: "unknown",
+		Model: "unknown", ModelNormalized: "unknown", ModelResolution: model.ModelResolutionUnknown, ModelIsFallback: true,
+		TimestampMs: 1_780_000_000_000, NativeSessionID: "runtime-session", SessionID: "runtime-session",
+		NativeEventID: "runtime-message", MessageID: "runtime-message", IdentityKind: "message", IdentityScope: "session",
+		ParserVersion: "trae-work-cn-v1", Granularity: "message", InputTokens: 100, OutputTokens: 40, TotalTokens: 140,
+		ObservabilityLevel: "partial", TokenAccountingMethod: model.AccTraeWorkCNMessageUsage, AccountingProfile: "trae_work_cn_message_usage_v1",
+	}}}
+	first := importDirectAdapter(database, adapter, adapter, nil)
+	if first.files != 1 || first.added != 1 || first.updated != 0 || first.skipped != 0 || first.rejected != 0 || len(first.warnings) != 0 {
+		t.Fatalf("unexpected first direct import: %#v", first)
 	}
-	added, updated, skipped, rejected, warnings = importParsedRecords(database, "trae-work-cn", records)
-	if added != 0 || updated != 0 || skipped != 1 || rejected != 0 || len(warnings) != 0 {
-		t.Fatalf("repeat import counts=%d/%d/%d/%d warnings=%v", added, updated, skipped, rejected, warnings)
-	}
-	var count int
-	var total int64
-	if err := database.Conn().QueryRow(`SELECT COUNT(*), COALESCE(SUM(total_tokens), 0) FROM usage_events`).Scan(&count, &total); err != nil {
-		t.Fatal(err)
-	}
-	if count != 1 || total != 160 {
-		t.Fatalf("stored count=%d total=%d", count, total)
+	second := importDirectAdapter(database, adapter, adapter, nil)
+	if second.files != 1 || second.added != 0 || second.updated != 0 || second.skipped != 1 || second.rejected != 0 || len(second.warnings) != 0 {
+		t.Fatalf("unexpected second direct import: %#v", second)
 	}
 }
 
@@ -190,4 +180,20 @@ func TestImportWarningsAreRedactedBeforePersistence(t *testing.T) {
 
 func separatorForTest() string {
 	return string(filepath.Separator)
+}
+
+type fakeDirectImportAdapter struct {
+	records []*fingerprint.ParsedRecord
+}
+
+func (f *fakeDirectImportAdapter) Name() string { return "trae-work-cn" }
+
+func (f *fakeDirectImportAdapter) Discover([]string) ([]string, error) { return nil, nil }
+
+func (f *fakeDirectImportAdapter) ParseFile(string) ([]*fingerprint.ParsedRecord, error) {
+	return nil, nil
+}
+
+func (f *fakeDirectImportAdapter) Collect([]string) ([]*fingerprint.ParsedRecord, []string, error) {
+	return f.records, nil, nil
 }

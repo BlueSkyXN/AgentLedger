@@ -11,7 +11,7 @@ agent-ledger init --reset
 
 ## `import`
 
-扫描启用 adapter 的稳定日志文件，解析 usage event，并按 identity v2 reconcile。输出固定计数：files、added、updated、skipped、rejected。存在 parse/reconcile warning 时 run 状态为 `completed_with_warnings`，命令仍处理其余有效记录。
+扫描启用 adapter 的稳定日志文件，或调用其本机 direct collector，解析 usage event，并按 identity v2 reconcile。输出固定计数：files/source、added、updated、skipped、rejected。存在 parse/reconcile warning 时 run 状态为 `completed_with_warnings`，命令仍处理其余有效记录。
 
 import 会重新读取稳定文件；本版不保存 file offset/checkpoint。重复正确性来自 event identity，不来自“未变化文件跳过”。
 
@@ -21,7 +21,7 @@ import 会重新读取稳定文件；本版不保存 file offset/checkpoint。�
 
 ## `doctor`
 
-只读检查当前 config、启用 adapter 和 discovery 路径。输出可能含本机私有路径，公开分享前应脱敏。
+只读检查当前 config、启用 adapter 和 discovery 路径。`doctor trae-work-cn` 只检查平台支持与运行进程数量，不附加 debugger 或读取 Session。输出可能含本机私有路径，公开分享前应脱敏。
 
 ## `verify`
 
