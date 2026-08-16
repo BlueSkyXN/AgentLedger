@@ -225,18 +225,6 @@ func validateAccountingProfile(event *model.UsageEvent) error {
 			return reject("accounting_reasoning_exceeds_output")
 		}
 		expected = event.InputTokens + event.OutputTokens + event.CacheCreationTokens + event.CacheReadTokens
-	case model.AccTraeWorkCNMessageUsage:
-		if event.ReasoningTokens != 0 || event.CacheCreationTokens != 0 || event.CacheReadTokens != 0 {
-			return reject("accounting_unsupported_bucket")
-		}
-		if event.InputTokens > event.TotalTokens || event.OutputTokens > event.TotalTokens-event.InputTokens {
-			return reject("accounting_total_mismatch")
-		}
-		expected = event.InputTokens + event.OutputTokens
-		if expected < event.TotalTokens && event.ObservabilityLevel != "partial" {
-			return reject("accounting_total_mismatch")
-		}
-		strict = false
 	default:
 		strict = false
 	}
@@ -266,14 +254,22 @@ func normalizedEvent(event *model.UsageEvent) *model.UsageEvent {
 	copy.SourceProduct = strings.TrimSpace(copy.SourceProduct)
 	copy.Provider = strings.TrimSpace(copy.Provider)
 	copy.ModelRaw = strings.TrimSpace(copy.ModelRaw)
-	copy.ModelNormalized = strings.TrimSpace(copy.ModelNormalized)
+	modelNormalized := model.CanonicalModelID(copy.ModelNormalized)
 	copy.ModelResolution = strings.TrimSpace(copy.ModelResolution)
 	copy.SessionKey = strings.TrimSpace(copy.SessionKey)
 	if copy.IdentityVersion == 0 {
 		copy.IdentityVersion = model.IdentityVersion
 	}
-	if copy.ModelNormalized == "" {
-		copy.ModelNormalized = "unknown"
+	if modelNormalized == "" {
+		modelNormalized = "unknown"
+	}
+	if copy.ModelNormalized != modelNormalized {
+		copy.ModelNormalized = modelNormalized
+		if copy.ContentSHA256 != "" {
+			if hash, err := contentSHA256ForEvent(&copy); err == nil {
+				copy.ContentSHA256 = hash
+			}
+		}
 	}
 	if copy.ModelResolution == "" && strings.EqualFold(copy.ModelNormalized, "unknown") {
 		copy.ModelResolution = model.ModelResolutionUnknown
@@ -321,7 +317,9 @@ func reconcile(existing, incoming *model.UsageEvent) (*model.UsageEvent, string,
 
 	existingModelRank := modelEvidenceRank(existing)
 	incomingModelRank := modelEvidenceRank(incoming)
-	if existingModelRank == 2 && incomingModelRank == 2 && !strings.EqualFold(existing.ModelNormalized, incoming.ModelNormalized) {
+	existingCanon := model.CanonicalModelID(existing.ModelNormalized)
+	incomingCanon := model.CanonicalModelID(incoming.ModelNormalized)
+	if existingModelRank == 2 && incomingModelRank == 2 && !strings.EqualFold(existingCanon, incomingCanon) {
 		return nil, ReconcileRejected, reject("direct_model_conflict")
 	}
 	canonical := *existing
@@ -329,11 +327,15 @@ func reconcile(existing, incoming *model.UsageEvent) (*model.UsageEvent, string,
 	metadataChanged := false
 	if incomingModelRank > existingModelRank {
 		canonical.ModelRaw = incoming.ModelRaw
-		canonical.ModelNormalized = incoming.ModelNormalized
+		canonical.ModelNormalized = incomingCanon
 		canonical.ModelResolution = incoming.ModelResolution
 		canonical.ModelIsFallback = incoming.ModelIsFallback
 		contentChanged = true
-	} else if incomingModelRank == existingModelRank && strings.EqualFold(canonical.ModelNormalized, incoming.ModelNormalized) {
+	} else if incomingModelRank == existingModelRank && strings.EqualFold(existingCanon, incomingCanon) {
+		if canonical.ModelNormalized != existingCanon {
+			canonical.ModelNormalized = existingCanon
+			contentChanged = true
+		}
 		contentChanged = fillString(&canonical.ModelRaw, incoming.ModelRaw) || contentChanged
 		contentChanged = fillString(&canonical.ModelResolution, incoming.ModelResolution) || contentChanged
 	}
@@ -504,6 +506,49 @@ func listEvents(queryer interface {
 		events = append(events, event)
 	}
 	return events, rows.Err()
+}
+
+// RepairCanonicalModelIDs rewrites stored model_normalized values that still
+// include a trailing parenthetical suffix and recomputes their content hashes.
+func (d *Database) RepairCanonicalModelIDs() (updated int, err error) {
+	rows, err := d.conn.Query(`
+		SELECT event_id
+		FROM usage_events
+		WHERE instr(model_normalized, '(') > 0 OR instr(model_normalized, ')') > 0
+	`)
+	if err != nil {
+		return 0, err
+	}
+	var eventIDs []string
+	for rows.Next() {
+		var eventID string
+		if err := rows.Scan(&eventID); err != nil {
+			_ = rows.Close()
+			return updated, err
+		}
+		eventIDs = append(eventIDs, eventID)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return updated, err
+	}
+	if err := rows.Close(); err != nil {
+		return updated, err
+	}
+	for _, eventID := range eventIDs {
+		existing, selectErr := selectEvent(d.conn, eventID)
+		if selectErr != nil {
+			return updated, selectErr
+		}
+		status, upsertErr := d.UpsertEvent(existing)
+		if upsertErr != nil {
+			return updated, upsertErr
+		}
+		if status == ReconcileUpdated {
+			updated++
+		}
+	}
+	return updated, nil
 }
 
 func insertEvent(exec interface {

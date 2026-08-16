@@ -370,6 +370,30 @@ func TestDefaultProfilePricesCurrentModelIDs(t *testing.T) {
 			wantMicroUSD: 1_218_000,
 		},
 		{
+			name: "grok 4.6 short context",
+			event: Event{
+				Model:               "grok-4.6",
+				InputTokens:         50_000,
+				OutputTokens:        100_000,
+				CacheCreationTokens: 50_000,
+				CacheReadTokens:     50_000,
+			},
+			wantRuleID:   "grok-4.6",
+			wantMicroUSD: 825_000,
+		},
+		{
+			name: "grok 4.6 long context",
+			event: Event{
+				Model:               "grok-4.6",
+				InputTokens:         50_000,
+				OutputTokens:        100_000,
+				CacheCreationTokens: 50_000,
+				CacheReadTokens:     100_000,
+			},
+			wantRuleID:   "grok-4.6-long",
+			wantMicroUSD: 1_700_000,
+		},
+		{
 			name: "grok 4.5 short context",
 			event: Event{
 				Model:               "grok-4.5",
@@ -503,9 +527,13 @@ func TestDefaultProfileUsesExactAliasesAndContextBoundaries(t *testing.T) {
 	}{
 		{name: "sol canonical alias", event: Event{Model: "gpt-5.6", InputTokens: 1}, wantRuleID: "gpt-5.6-sol", wantPriced: true},
 		{name: "case and reasoning suffix", event: Event{Model: "GPT-5.6-SOL (reasoning=xhigh)", InputTokens: 1}, wantRuleID: "gpt-5.6-sol", wantPriced: true},
+		{name: "sol max suffix", event: Event{Model: "gpt-5.6-sol(max)", InputTokens: 1}, wantRuleID: "gpt-5.6-sol", wantPriced: true},
+		{name: "any parenthetical suffix", event: Event{Model: "gpt-5.6-sol(custom-effort)", InputTokens: 1}, wantRuleID: "gpt-5.6-sol", wantPriced: true},
 		{name: "gpt threshold minus one", event: Event{Model: "gpt-5.5", InputTokens: 271_999}, wantRuleID: "gpt-5.5", wantPriced: true},
 		{name: "gpt threshold", event: Event{Model: "gpt-5.5", InputTokens: 272_000}, wantRuleID: "gpt-5.5-long", wantPriced: true},
 		{name: "gpt threshold includes cache input", event: Event{Model: "gpt-5.5", InputTokens: 271_999, CacheReadTokens: 1}, wantRuleID: "gpt-5.5-long", wantPriced: true},
+		{name: "grok 4.6 threshold minus one", event: Event{Model: "grok-4.6", InputTokens: 199_999}, wantRuleID: "grok-4.6", wantPriced: true},
+		{name: "grok 4.6 threshold", event: Event{Model: "grok-4.6", InputTokens: 200_000}, wantRuleID: "grok-4.6-long", wantPriced: true},
 		{name: "grok threshold minus one", event: Event{Model: "grok-4.5", InputTokens: 199_999}, wantRuleID: "grok-4.5", wantPriced: true},
 		{name: "grok threshold", event: Event{Model: "grok-4.5", InputTokens: 200_000}, wantRuleID: "grok-4.5-long", wantPriced: true},
 		{name: "grok official alias", event: Event{Model: "grok-build-latest", InputTokens: 1}, wantRuleID: "grok-4.5", wantPriced: true},

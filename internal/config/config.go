@@ -35,17 +35,15 @@ type ReportsConfig struct {
 }
 
 type AgentsConfig struct {
-	Claude     AgentConfig `toml:"claude"`
-	Codex      AgentConfig `toml:"codex"`
-	Gemini     AgentConfig `toml:"gemini"`
-	Copilot    AgentConfig `toml:"copilot"`
-	WorkBuddy  AgentConfig `toml:"workbuddy"`
-	TraeWorkCN AgentConfig `toml:"trae-work-cn"`
+	Claude    AgentConfig `toml:"claude"`
+	Codex     AgentConfig `toml:"codex"`
+	Gemini    AgentConfig `toml:"gemini"`
+	Copilot   AgentConfig `toml:"copilot"`
+	WorkBuddy AgentConfig `toml:"workbuddy"`
 }
 
 type AgentConfig struct {
 	Enabled         bool     `toml:"enabled"`
-	Experimental    bool     `toml:"experimental"`
 	Paths           []string `toml:"paths"`
 	DuplicatePolicy string   `toml:"duplicate_policy"`
 }
@@ -65,12 +63,11 @@ func Default() *Config {
 			Timezone: "Local",
 		},
 		Agents: AgentsConfig{
-			Claude:     AgentConfig{Enabled: true, Paths: []string{"~/.config/claude/projects", "~/.claude/projects"}},
-			Codex:      AgentConfig{Enabled: true, Paths: []string{"~/.codex/sessions"}, DuplicatePolicy: "ledger"},
-			Gemini:     AgentConfig{Enabled: true, Paths: []string{"~/.gemini"}},
-			Copilot:    AgentConfig{Enabled: true, Paths: []string{"~/.copilot/otel", "~/.copilot/session-state"}},
-			WorkBuddy:  AgentConfig{Enabled: true, Paths: []string{"~/.workbuddy/projects"}},
-			TraeWorkCN: AgentConfig{Enabled: false, Experimental: true},
+			Claude:    AgentConfig{Enabled: true, Paths: []string{"~/.config/claude/projects", "~/.claude/projects"}},
+			Codex:     AgentConfig{Enabled: true, Paths: []string{"~/.codex/sessions"}, DuplicatePolicy: "ledger"},
+			Gemini:    AgentConfig{Enabled: true, Paths: []string{"~/.gemini"}},
+			Copilot:   AgentConfig{Enabled: true, Paths: []string{"~/.copilot/otel", "~/.copilot/session-state"}},
+			WorkBuddy: AgentConfig{Enabled: true, Paths: []string{"~/.workbuddy/projects"}},
 		},
 	}
 }

@@ -183,7 +183,7 @@ func workBuddyRecordFromObject(obj map[string]interface{}, path string, lineNumb
 	requestModelID := getString(providerData, "requestModelId")
 	requestModelName := getString(providerData, "requestModelName")
 	routeKind := workBuddyRouteKind(requestModelID)
-	modelNormalized := normalizeWorkBuddyModel(modelRaw)
+	modelNormalized := model.CanonicalModelID(normalizeWorkBuddyModel(modelRaw))
 	modelResolution := model.ModelResolutionDirectEvent
 	modelIsFallback := false
 	if strings.EqualFold(strings.TrimSpace(modelNormalized), "auto") {

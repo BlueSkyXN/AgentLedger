@@ -27,10 +27,17 @@ export type Summary = {
 
 export type PricingSummary = {
   status: string;
-  error_code: string | null;
+  error_code?: string | null;
+  profile_id?: string;
   priced_events: number;
   unpriced_events: number;
   policy_zero_events: number;
+  priced_tokens?: number;
+  unpriced_tokens?: number;
+  policy_zero_tokens?: number;
+  event_coverage_ratio?: number;
+  token_coverage_ratio?: number;
+  confidence?: string;
 };
 
 export type MetricRow = {

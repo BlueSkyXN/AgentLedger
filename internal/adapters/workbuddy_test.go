@@ -92,14 +92,15 @@ func TestWorkBuddyAdapterPartialUsageAndAliases(t *testing.T) {
 		`{"id":"req-kimi","timestamp":1710000001,"sessionId":"session","cwd":"/private","providerData":{"model":"kimi-k3-2","requestModelId":"kimi-k3-2","usage":{"requests":1},"rawUsage":{"prompt_tokens":12,"completion_tokens":3,"total_tokens":15,"prompt_cache_write_tokens":0}}}`,
 		`{"id":"req-auto","timestamp":1710000002,"sessionId":"session","cwd":"/private","providerData":{"model":"auto","requestModelId":"auto","usage":{"requests":1},"rawUsage":{"prompt_tokens":8,"completion_tokens":2,"total_tokens":10,"prompt_tokens_details":{"cached_tokens":0},"prompt_cache_write_tokens":0,"completion_tokens_details":{"reasoning_tokens":0}}}}`,
 		`{"id":"req-unknown","timestamp":1710000003,"sessionId":"session","cwd":"/private","providerData":{"model":"other-model-v9","requestModelId":"other-model-v9","usage":{"requests":1},"rawUsage":{"prompt_tokens":8,"completion_tokens":2,"total_tokens":10,"prompt_tokens_details":{"cached_tokens":0},"prompt_cache_write_tokens":0,"completion_tokens_details":{"reasoning_tokens":0}}}}`,
+		`{"id":"req-sol-max","timestamp":1710000004,"sessionId":"session","cwd":"/private","providerData":{"model":"gpt-5.6-sol(max)","requestModelId":"gpt-5.6-sol(max)","usage":{"requests":1},"rawUsage":{"prompt_tokens":8,"completion_tokens":2,"total_tokens":10,"prompt_tokens_details":{"cached_tokens":0},"prompt_cache_write_tokens":0,"completion_tokens_details":{"reasoning_tokens":0}}}}`,
 	}, "\n"))
 
 	records, err := NewWorkBuddyAdapter().ParseFile(path)
 	if err != nil {
 		t.Fatalf("ParseFile: %v", err)
 	}
-	if len(records) != 4 {
-		t.Fatalf("expected four records, got %d", len(records))
+	if len(records) != 5 {
+		t.Fatalf("expected five records, got %d", len(records))
 	}
 	if records[0].ModelNormalized != "kimi-k3" || records[0].Provider != "workbuddy" || records[0].ObservabilityLevel != "partial" || records[0].TimestampMs != 1710000000000 {
 		t.Fatalf("unexpected k3 record: %#v", records[0])
@@ -112,6 +113,9 @@ func TestWorkBuddyAdapterPartialUsageAndAliases(t *testing.T) {
 	}
 	if records[3].ModelNormalized != "other-model-v9" {
 		t.Fatalf("unknown model must not use family fallback: %#v", records[3])
+	}
+	if records[4].Model != "gpt-5.6-sol(max)" || records[4].ModelNormalized != "gpt-5.6-sol" {
+		t.Fatalf("parenthetical workbuddy model should keep raw ID and strip suffix: %#v", records[4])
 	}
 }
 

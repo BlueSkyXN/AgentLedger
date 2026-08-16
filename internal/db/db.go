@@ -8,6 +8,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	sqlite3 "github.com/mattn/go-sqlite3"
@@ -17,6 +18,8 @@ const (
 	sqliteDriverName     = "agentledger_sqlite3"
 	readOnlyMaxOpenConns = 4
 )
+
+var timeLocationCache sync.Map
 
 type Database struct {
 	conn *sql.DB
@@ -223,7 +226,8 @@ func sqliteFileURI(absPath string, pathSeparator uint8, query url.Values) string
 // individual event. This is intentionally a Go SQLite function because SQLite's
 // built-in date modifiers cannot apply historical IANA timezone/DST rules.
 func timeBucket(timestampMs int64, timezone, bucket string) (string, error) {
-	location, err := time.LoadLocation(strings.TrimSpace(timezone))
+	timezone = strings.TrimSpace(timezone)
+	location, err := cachedTimeLocation(timezone)
 	if err != nil {
 		return "", fmt.Errorf("invalid reports timezone %q: %w", timezone, err)
 	}
@@ -240,6 +244,18 @@ func timeBucket(timestampMs int64, timezone, bucket string) (string, error) {
 	default:
 		return "", fmt.Errorf("unsupported time bucket %q", bucket)
 	}
+}
+
+func cachedTimeLocation(name string) (*time.Location, error) {
+	if cached, ok := timeLocationCache.Load(name); ok {
+		return cached.(*time.Location), nil
+	}
+	location, err := time.LoadLocation(name)
+	if err != nil {
+		return nil, err
+	}
+	actual, _ := timeLocationCache.LoadOrStore(name, location)
+	return actual.(*time.Location), nil
 }
 
 func (d *Database) Close() error {

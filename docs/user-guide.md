@@ -18,6 +18,7 @@ agent-ledger report sessions
 - `updated`：同 event 的兼容补充，例如 unknown/fallback 模型升级为直接证据。
 - `skipped`：content 完全相同，数据库零写入。
 - `rejected`：同 identity 下出现 token/Session/time/direct-model/accounting 冲突或记录本身无效。
+- `Model IDs repaired`：已入库但仍带尾部括号的 `model_normalized` 被改写成规范 ID；`model_raw` 保持来源原值。
 
 `completed_with_warnings` 不等于整个 import 失败；先读取 warning reason 和四类计数。拒绝记录不会覆盖 canonical row。
 

@@ -35,6 +35,11 @@ var importCmd = &cobra.Command{
 		}
 		defer database.Close()
 
+		repairedModels, err := repairStoredCanonicalModelIDs(database)
+		if err != nil {
+			return fmt.Errorf("failed to canonicalize stored model IDs: %w", err)
+		}
+
 		entropy := ulid.Monotonic(rand.Reader, 0)
 		runID := ulid.MustNew(ulid.Timestamp(time.Now()), entropy).String()
 		if err := database.StartImportRun(runID); err != nil {
@@ -55,12 +60,11 @@ var importCmd = &cobra.Command{
 
 		allAdapters := adapters.AllAdapters()
 		agentConfigs := map[string]*config.AgentConfig{
-			"claude":       &cfg.Agents.Claude,
-			"codex":        &cfg.Agents.Codex,
-			"gemini":       &cfg.Agents.Gemini,
-			"copilot":      &cfg.Agents.Copilot,
-			"workbuddy":    &cfg.Agents.WorkBuddy,
-			"trae-work-cn": &cfg.Agents.TraeWorkCN,
+			"claude":    &cfg.Agents.Claude,
+			"codex":     &cfg.Agents.Codex,
+			"gemini":    &cfg.Agents.Gemini,
+			"copilot":   &cfg.Agents.Copilot,
+			"workbuddy": &cfg.Agents.WorkBuddy,
 		}
 
 		for _, adapter := range allAdapters {
@@ -71,17 +75,6 @@ var importCmd = &cobra.Command{
 			adapter = configureImportAdapter(adapter, agentCfg)
 			for _, sourcePath := range agentCfg.Paths {
 				warningSourcePaths = append(warningSourcePaths, config.ExpandHome(sourcePath))
-			}
-			if directAdapter, ok := adapter.(adapters.DirectRecordAdapter); ok {
-				result := importDirectAdapter(database, adapter, directAdapter, agentCfg.Paths)
-				totalFiles += result.files
-				totalAdded += result.added
-				totalUpdated += result.updated
-				totalSkipped += result.skipped
-				totalRejected += result.rejected
-				warnings = append(warnings, result.warnings...)
-				collectImportDiagnostics(importDiagnostics, adapter)
-				continue
 			}
 
 			files, err := adapter.Discover(agentCfg.Paths)
@@ -120,11 +113,18 @@ var importCmd = &cobra.Command{
 		fmt.Printf("  Events skipped:  %d (duplicates)\n", totalSkipped)
 		fmt.Printf("  Events rejected: %d\n", totalRejected)
 		printImportDiagnostics(importDiagnostics)
+		if repairedModels > 0 {
+			fmt.Printf("  Model IDs repaired: %d\n", repairedModels)
+		}
 		if len(warnings) > 0 {
 			fmt.Printf("  Warnings:        %d\n", len(warnings))
 		}
 		return nil
 	},
+}
+
+func repairStoredCanonicalModelIDs(database *db.Database) (int, error) {
+	return database.RepairCanonicalModelIDs()
 }
 
 type importAdapterResult struct {
@@ -134,40 +134,6 @@ type importAdapterResult struct {
 	skipped  int
 	rejected int
 	warnings []string
-}
-
-func importDirectAdapter(database *db.Database, adapter adapters.Adapter, directAdapter adapters.DirectRecordAdapter, paths []string) importAdapterResult {
-	result := importAdapterResult{}
-	records, collectionWarnings, err := directAdapter.Collect(paths)
-	if err != nil {
-		for _, collectionWarning := range collectionWarnings {
-			warning := fmt.Sprintf("%s direct scan warning: %s", adapter.Name(), collectionWarning)
-			result.warnings = append(result.warnings, warning)
-			fmt.Fprintf(os.Stderr, "Warning: %s\n", warning)
-		}
-		expandedPaths := make([]string, 0, len(paths))
-		for _, path := range paths {
-			expandedPaths = append(expandedPaths, config.ExpandHome(path))
-		}
-		warning := fmt.Sprintf("%s direct scan failed: %s", adapter.Name(), sanitizeImportError(err, expandedPaths))
-		result.warnings = append(result.warnings, warning)
-		fmt.Fprintf(os.Stderr, "Warning: %s\n", warning)
-		return result
-	}
-
-	result.files = 1
-	for _, collectionWarning := range collectionWarnings {
-		warning := fmt.Sprintf("%s direct scan warning: %s", adapter.Name(), collectionWarning)
-		result.warnings = append(result.warnings, warning)
-		fmt.Fprintf(os.Stderr, "Warning: %s\n", warning)
-	}
-	added, updated, skipped, rejected, recordWarnings := importParsedRecords(database, adapter.Name(), records)
-	result.added = added
-	result.updated = updated
-	result.skipped = skipped
-	result.rejected = rejected
-	result.warnings = append(result.warnings, recordWarnings...)
-	return result
 }
 
 func importAdapterFiles(database *db.Database, adapter adapters.Adapter, files []string, cutoff time.Time) importAdapterResult {
@@ -400,6 +366,7 @@ func importParsedRecords(database *db.Database, adapterName string, records []*f
 		if rec.ModelNormalized != "" {
 			normalized = rec.ModelNormalized
 		}
+		normalized = model.CanonicalModelID(normalized)
 		if strings.TrimSpace(normalized) == "" {
 			normalized = "unknown"
 		}
@@ -553,8 +520,6 @@ func sourceProductForAgent(agent string) string {
 		return "gemini-cli"
 	case "workbuddy":
 		return "workbuddy"
-	case "trae-work-cn":
-		return "trae-work-cn"
 	default:
 		return agent
 	}
@@ -564,8 +529,6 @@ func defaultObservability(agent string) string {
 	switch agent {
 	case "claude", "codex", "copilot", "workbuddy":
 		return "full"
-	case "trae-work-cn":
-		return "partial"
 	default:
 		return "unknown"
 	}
@@ -614,8 +577,6 @@ func totalForAccountingProfile(event *model.UsageEvent) int64 {
 		return event.InputTokens + event.CacheCreationTokens + event.CacheReadTokens + maxInt64(event.OutputTokens, event.ReasoningTokens)
 	case model.AccWorkBuddyRawUsage:
 		return event.InputTokens + event.OutputTokens + event.CacheCreationTokens + event.CacheReadTokens
-	case model.AccTraeWorkCNMessageUsage:
-		return event.InputTokens + event.OutputTokens
 	default:
 		return event.InputTokens + event.OutputTokens + event.ReasoningTokens + event.CacheCreationTokens + event.CacheReadTokens
 	}

@@ -133,12 +133,11 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			"pricing_path": redactPath(s.cfg.Reports.PricingPath),
 		},
 		"agents": map[string]any{
-			"claude":       agentSnapshot(s.cfg.Agents.Claude),
-			"codex":        agentSnapshot(s.cfg.Agents.Codex),
-			"copilot":      agentSnapshot(s.cfg.Agents.Copilot),
-			"gemini":       agentSnapshot(s.cfg.Agents.Gemini),
-			"workbuddy":    agentSnapshot(s.cfg.Agents.WorkBuddy),
-			"trae-work-cn": agentSnapshot(s.cfg.Agents.TraeWorkCN),
+			"claude":    agentSnapshot(s.cfg.Agents.Claude),
+			"codex":     agentSnapshot(s.cfg.Agents.Codex),
+			"copilot":   agentSnapshot(s.cfg.Agents.Copilot),
+			"gemini":    agentSnapshot(s.cfg.Agents.Gemini),
+			"workbuddy": agentSnapshot(s.cfg.Agents.WorkBuddy),
 		},
 		"privacy_note": "面板 API 只读，不返回对话正文、raw usage、设备信息或已记录金额。",
 	})
@@ -162,6 +161,10 @@ func (s *Server) handleTimeseries(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	filters.CostMode, ok = parseTimeseriesCost(w, r)
+	if !ok {
+		return
+	}
 	bucket := r.URL.Query().Get("bucket")
 	rows, err := analytics.BuildTimeseries(s.database.Conn(), bucket, filters)
 	if err != nil {
@@ -169,6 +172,18 @@ func (s *Server) handleTimeseries(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, rows)
+}
+
+func parseTimeseriesCost(w http.ResponseWriter, r *http.Request) (string, bool) {
+	cost := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("cost")))
+	if cost == "" {
+		return "estimated", true
+	}
+	if cost == "estimated" || cost == "none" {
+		return cost, true
+	}
+	writeError(w, http.StatusBadRequest, "cost must be estimated or none")
+	return "", false
 }
 
 func (s *Server) handleBreakdown(w http.ResponseWriter, r *http.Request) {

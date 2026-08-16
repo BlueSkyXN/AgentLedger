@@ -4,6 +4,8 @@ import (
 	"path"
 	"strings"
 	"time"
+
+	"github.com/BlueSkyXN/AgentLedger/internal/model"
 )
 
 type Event struct {
@@ -112,42 +114,13 @@ func matchesAnyPattern(patterns []string, values ...string) bool {
 	return false
 }
 
-func pricingModelAliases(model string) []string {
-	model = strings.ToLower(strings.TrimSpace(model))
-	aliases := []string{model}
-	if base, ok := stripReasoningSuffix(model); ok && base != model {
+func pricingModelAliases(modelName string) []string {
+	modelName = strings.ToLower(strings.TrimSpace(modelName))
+	aliases := []string{modelName}
+	if base := model.CanonicalModelID(modelName); base != modelName {
 		aliases = append(aliases, base)
 	}
 	return aliases
-}
-
-func stripReasoningSuffix(model string) (string, bool) {
-	if !strings.HasSuffix(model, ")") {
-		return model, false
-	}
-	start := strings.LastIndex(model, "(")
-	if start <= 0 {
-		return model, false
-	}
-	suffix := strings.TrimSpace(model[start+1 : len(model)-1])
-	if !isReasoningSuffix(suffix) {
-		return model, false
-	}
-	return strings.TrimSpace(model[:start]), true
-}
-
-func isReasoningSuffix(value string) bool {
-	value = strings.ToLower(strings.TrimSpace(value))
-	value = strings.TrimPrefix(value, "reasoning=")
-	value = strings.TrimPrefix(value, "reasoning:")
-	value = strings.TrimPrefix(value, "effort=")
-	value = strings.TrimPrefix(value, "effort:")
-	switch value {
-	case "minimal", "low", "medium", "high", "xhigh", "x-high":
-		return true
-	default:
-		return false
-	}
 }
 
 func matchesEffectiveWindow(rule *Rule, timestampMs int64) bool {

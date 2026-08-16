@@ -3,7 +3,9 @@ package db
 import (
 	"net/url"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestSQLiteFileURIWindowsPaths(t *testing.T) {
@@ -56,5 +58,31 @@ func TestSQLiteOpenFunctionsSupportReservedCharacters(t *testing.T) {
 	}
 	if err := readWrite.Close(); err != nil {
 		t.Fatalf("close read-write: %v", err)
+	}
+}
+
+func TestCachedTimeLocationPreservesHistoricalDSTBuckets(t *testing.T) {
+	timeLocationCache = sync.Map{}
+	beforeDST, err := timeBucket(time.Date(2026, time.March, 8, 4, 30, 0, 0, time.UTC).UnixMilli(), "America/New_York", "daily")
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterDST, err := timeBucket(time.Date(2026, time.July, 8, 4, 30, 0, 0, time.UTC).UnixMilli(), "America/New_York", "daily")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if beforeDST != "2026-03-07" || afterDST != "2026-07-08" {
+		t.Fatalf("cached historical buckets are wrong: before=%s after=%s", beforeDST, afterDST)
+	}
+	first, ok := timeLocationCache.Load("America/New_York")
+	if !ok {
+		t.Fatal("expected IANA location to be cached")
+	}
+	second, err := cachedTimeLocation("America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != second {
+		t.Fatal("expected cached location pointer to be reused")
 	}
 }
