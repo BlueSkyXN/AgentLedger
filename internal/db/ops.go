@@ -214,6 +214,14 @@ func validateAccountingProfile(event *model.UsageEvent) error {
 			return reject("accounting_total_mismatch")
 		}
 		strict = false
+	case model.AccCursorAgentExec:
+		expected = event.InputTokens + event.OutputTokens + event.CacheCreationTokens + event.CacheReadTokens
+		if event.ReasoningTokens != 0 || event.RawInputTokens == nil || event.SourceTotalTokens == nil ||
+			*event.RawInputTokens != event.InputTokens+event.CacheCreationTokens+event.CacheReadTokens ||
+			*event.SourceTotalTokens != *event.RawInputTokens+event.OutputTokens ||
+			*event.SourceTotalTokens != event.TotalTokens {
+			return reject("accounting_total_mismatch")
+		}
 	case model.AccCopilotOtelParts, model.AccCopilotSessionMetrics:
 		expected = event.InputTokens + event.OutputTokens + event.ReasoningTokens + event.CacheCreationTokens + event.CacheReadTokens
 	case model.AccCopilotOtelTotalFallback:
@@ -509,12 +517,14 @@ func listEvents(queryer interface {
 }
 
 // RepairCanonicalModelIDs rewrites stored model_normalized values that still
-// include a trailing parenthetical suffix and recomputes their content hashes.
+// include a recognized trailing annotation and recomputes their content hashes.
 func (d *Database) RepairCanonicalModelIDs() (updated int, err error) {
 	rows, err := d.conn.Query(`
 		SELECT event_id
 		FROM usage_events
-		WHERE instr(model_normalized, '(') > 0 OR instr(model_normalized, ')') > 0
+		WHERE instr(model_normalized, '(') > 0
+		   OR instr(model_normalized, ')') > 0
+		   OR lower(substr(rtrim(model_normalized, ' ' || char(9)), -4)) = '[1m]'
 	`)
 	if err != nil {
 		return 0, err

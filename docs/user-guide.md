@@ -18,7 +18,7 @@ agent-ledger report sessions
 - `updated`：同 event 的兼容补充，例如 unknown/fallback 模型升级为直接证据。
 - `skipped`：content 完全相同，数据库零写入。
 - `rejected`：同 identity 下出现 token/Session/time/direct-model/accounting 冲突或记录本身无效。
-- `Model IDs repaired`：已入库但仍带尾部括号的 `model_normalized` 被改写成规范 ID；`model_raw` 保持来源原值。
+- `Model IDs repaired`：已入库但仍带尾部括号或 `[1m]` context 标记的 `model_normalized` 被改写成规范 ID；`model_raw` 保持来源原值。
 
 `completed_with_warnings` 不等于整个 import 失败；先读取 warning reason 和四类计数。拒绝记录不会覆盖 canonical row。
 
@@ -46,8 +46,8 @@ agent-ledger merge laptop.aldb
 
 channel、source product、provider 是不同维度：
 
-- channel：Agent 类别，如 `codex`。
-- source product：日志形态，如 `copilot-otel` 或 `copilot-session-state`。
+- channel：Agent 类别，如 `codex` 或 `cursor`。
+- source product：日志形态，如 `cursor-agent-exec`、`copilot-otel` 或 `copilot-session-state`。
 - provider：模型/provider 证据，如 `openai`、`anthropic`。
 
 Session filter 接受稳定 `session_key` 或 native session ID；project filter 使用本机 path 派生的 basename label。

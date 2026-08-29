@@ -22,6 +22,9 @@ func TestDefaultContainsOnlyV3ConfigurationSurface(t *testing.T) {
 	if cfg.DBPath() != filepath.Join(DataDir(), "agent-ledger.db") {
 		t.Fatalf("unexpected DB path %q", cfg.DBPath())
 	}
+	if !cfg.Agents.Cursor.Enabled || len(cfg.Agents.Cursor.Paths) == 0 {
+		t.Fatalf("Cursor adapter should be enabled with discovery roots: %#v", cfg.Agents.Cursor)
+	}
 }
 
 func TestSavedConfigOmitsRemovedV2Keys(t *testing.T) {
@@ -42,7 +45,7 @@ func TestSavedConfigOmitsRemovedV2Keys(t *testing.T) {
 			t.Errorf("saved v3 config contains removed key %q:\n%s", removed, text)
 		}
 	}
-	for _, required := range []string{"redact_paths_on_export", "gracing_minutes", "timezone", "pricing_path", "[agents.workbuddy]"} {
+	for _, required := range []string{"redact_paths_on_export", "gracing_minutes", "timezone", "pricing_path", "[agents.cursor]", "[agents.workbuddy]"} {
 		if !strings.Contains(text, required) {
 			t.Errorf("saved v3 config missing %q", required)
 		}

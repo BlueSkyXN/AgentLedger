@@ -37,6 +37,7 @@ type ReportsConfig struct {
 type AgentsConfig struct {
 	Claude    AgentConfig `toml:"claude"`
 	Codex     AgentConfig `toml:"codex"`
+	Cursor    AgentConfig `toml:"cursor"`
 	Gemini    AgentConfig `toml:"gemini"`
 	Copilot   AgentConfig `toml:"copilot"`
 	WorkBuddy AgentConfig `toml:"workbuddy"`
@@ -65,6 +66,7 @@ func Default() *Config {
 		Agents: AgentsConfig{
 			Claude:    AgentConfig{Enabled: true, Paths: []string{"~/.config/claude/projects", "~/.claude/projects"}},
 			Codex:     AgentConfig{Enabled: true, Paths: []string{"~/.codex/sessions"}, DuplicatePolicy: "ledger"},
+			Cursor:    AgentConfig{Enabled: true, Paths: []string{"~/Library/Application Support/Cursor/logs", "~/Library/Application Support/Cursor Private Inference/logs", "~/.config/Cursor/logs", "~/AppData/Roaming/Cursor/logs"}},
 			Gemini:    AgentConfig{Enabled: true, Paths: []string{"~/.gemini"}},
 			Copilot:   AgentConfig{Enabled: true, Paths: []string{"~/.copilot/otel", "~/.copilot/session-state"}},
 			WorkBuddy: AgentConfig{Enabled: true, Paths: []string{"~/.workbuddy/projects"}},

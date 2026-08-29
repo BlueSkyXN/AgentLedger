@@ -7,6 +7,7 @@ const (
 	AccCodexLastTokenUsage      = "codex_last_token_usage"
 	AccCodexTotalDelta          = "codex_total_delta"
 	AccCodexHeadlessUsage       = "codex_headless_usage"
+	AccCursorAgentExec          = "cursor_agent_exec_usage"
 	AccCopilotOtelParts         = "copilot_otel_parts"
 	AccCopilotOtelTotalFallback = "copilot_otel_total_fallback"
 	AccCopilotSessionMetrics    = "copilot_session_model_metrics"

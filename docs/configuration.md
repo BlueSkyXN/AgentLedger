@@ -27,6 +27,10 @@ enabled = true
 paths = ["~/.codex/sessions"]
 duplicate_policy = "ledger"
 
+[agents.cursor]
+enabled = true
+paths = ["~/Library/Application Support/Cursor/logs", "~/Library/Application Support/Cursor Private Inference/logs", "~/.config/Cursor/logs", "~/AppData/Roaming/Cursor/logs"]
+
 [agents.gemini]
 enabled = true
 paths = ["~/.gemini"]
@@ -53,6 +57,8 @@ paths = ["~/.workbuddy/projects"]
 | `agents.*.enabled` | 是否扫描对应来源。 |
 | `agents.*.paths` | Adapter discovery roots，指向各来源本机日志目录。 |
 | `agents.codex.duplicate_policy` | `ledger` 或 `ccusage_compatible`；重建 candidate 时应与 v2 baseline 保持一致。 |
+
+Cursor adapter 只会从配置 root 下选择 `exthost/anysphere.cursor-agent-exec/Cursor Agent Exec*.log`，不会扫描 `Cursor Structured Logs`、对话 transcript 或 `state.vscdb`。
 
 
 CLI `--pricing` 优先于 `reports.pricing_path`，且显式文件无效会直接失败。

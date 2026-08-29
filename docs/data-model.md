@@ -57,7 +57,7 @@ model_resolution
 model_is_fallback
 ```
 
-`model_normalized` 缺失时保存 `unknown`。尾部括号会从 model ID 上剥掉，例如 `gpt-5.6-sol(max)` 保存为 `gpt-5.6-sol`；`model_raw` 仍保留来源原值。思考档位不参与价格规则匹配。`import` 会按同一规则改写已入库的同形记录并重算 `content_sha256`。channel、source product 和 provider 是独立维度。
+`model_normalized` 缺失时保存 `unknown`。尾部括号和明确的 1M context 标记 `[1m]` 会从 model ID 上剥掉，例如 `gpt-5.6-sol(max)`、`gpt-5.6-sol[1m]` 都保存为 `gpt-5.6-sol`；`model_raw` 仍保留来源原值。其他方括号后缀不会被泛化删除。思考档位和 context 标记不参与价格规则匹配。`import` 会按同一规则改写已入库的同形记录并重算 `content_sha256`。channel、source product 和 provider 是独立维度。
 
 ### 时间、Session 与 locator
 

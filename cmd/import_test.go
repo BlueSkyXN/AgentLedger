@@ -14,7 +14,7 @@ import (
 
 func TestCodexStagedTaskCompleteReimportKeepsOneEvent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "codex.jsonl")
-	usage := `{"type":"event_msg","timestamp":"2026-01-01T00:00:10Z","session_id":"A","payload":{"type":"token_count","model":"gpt-5-codex","info":{"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":40,"reasoning_output_tokens":5,"total_tokens":145}}}}`
+	usage := `{"type":"event_msg","timestamp":"2026-01-01T00:00:10Z","session_id":"A","payload":{"type":"token_count","model":"gpt-5-codex[1m]","info":{"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":40,"reasoning_output_tokens":5,"total_tokens":145}}}}`
 	if err := os.WriteFile(path, []byte(usage+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -32,6 +32,13 @@ func TestCodexStagedTaskCompleteReimportKeepsOneEvent(t *testing.T) {
 	added, updated, skipped, rejected, warnings := importParsedRecords(database, "codex", records)
 	if added != 1 || updated != 0 || skipped != 0 || rejected != 0 || len(warnings) != 0 {
 		t.Fatalf("first import counts=%d/%d/%d/%d warnings=%v", added, updated, skipped, rejected, warnings)
+	}
+	var modelRaw, modelNormalized string
+	if err := database.Conn().QueryRow(`SELECT model_raw, model_normalized FROM usage_events`).Scan(&modelRaw, &modelNormalized); err != nil {
+		t.Fatal(err)
+	}
+	if modelRaw != "gpt-5-codex[1m]" || modelNormalized != "gpt-5-codex" {
+		t.Fatalf("Codex 1m model was not canonicalized: raw=%q normalized=%q", modelRaw, modelNormalized)
 	}
 
 	taskComplete := `{"type":"event_msg","timestamp":"2026-01-01T00:00:12Z","session_id":"A","payload":{"type":"task_complete","turn_id":"turn-a"}}`
@@ -149,7 +156,7 @@ func TestImportWarningsAreRedactedBeforePersistence(t *testing.T) {
 	}
 }
 
-func TestImportRepairsStoredParentheticalModelIDs(t *testing.T) {
+func TestImportRepairsStoredAnnotatedModelIDs(t *testing.T) {
 	database, err := db.Open(filepath.Join(t.TempDir(), "import.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -164,7 +171,7 @@ func TestImportRepairsStoredParentheticalModelIDs(t *testing.T) {
 			cache_creation_tokens, cache_read_tokens, total_tokens, imported_at_ms, updated_at_ms
 		) VALUES (
 			'repair-import', 2, 'native_event', 'session', 'hash-polluted',
-			'request', 'codex', 'codex-cli', 'gpt-5.6-sol(max)', 'gpt-5.6-sol(max)', 0,
+			'request', 'codex', 'codex-cli', 'gpt-5.6-sol[1m]', 'gpt-5.6-sol[1m]', 0,
 			1700000000000, 'session-repair', 3, 0, 0, 0, 0, 3, 1, 1
 		)
 	`)
@@ -181,7 +188,7 @@ func TestImportRepairsStoredParentheticalModelIDs(t *testing.T) {
 	if err := database.Conn().QueryRow(`SELECT model_raw, model_normalized FROM usage_events WHERE event_id = ?`, "repair-import").Scan(&modelRaw, &modelNormalized); err != nil {
 		t.Fatal(err)
 	}
-	if modelRaw != "gpt-5.6-sol(max)" || modelNormalized != "gpt-5.6-sol" {
+	if modelRaw != "gpt-5.6-sol[1m]" || modelNormalized != "gpt-5.6-sol" {
 		t.Fatalf("import repair did not canonicalize stored model: raw=%q normalized=%q", modelRaw, modelNormalized)
 	}
 }

@@ -221,6 +221,7 @@ func TestAPISnapshotsRedactExternalAbsolutePaths(t *testing.T) {
 	cfg.Database.Path = databasePath
 	cfg.Reports.PricingPath = filepath.Join(external, "pricing.json")
 	cfg.Agents.Codex.Paths = []string{filepath.Join(external, "sessions")}
+	cfg.Agents.Cursor.Paths = []string{filepath.Join(external, "cursor-logs")}
 	handler := NewServer(cfg, database, Options{}).Handler()
 
 	for _, endpoint := range []string{"/api/v2/health", "/api/v2/status", "/api/v2/config"} {
@@ -236,6 +237,9 @@ func TestAPISnapshotsRedactExternalAbsolutePaths(t *testing.T) {
 		}
 		if !strings.Contains(body, `\u003cexternal\u003e`) {
 			t.Fatalf("%s did not return a redacted external path: %s", endpoint, body)
+		}
+		if endpoint == "/api/v2/config" && !strings.Contains(body, `"cursor"`) {
+			t.Fatalf("config snapshot omitted Cursor adapter: %s", body)
 		}
 	}
 }

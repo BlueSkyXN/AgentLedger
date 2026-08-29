@@ -3,10 +3,12 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/BlueSkyXN/AgentLedger/internal/adapters"
 	"github.com/BlueSkyXN/AgentLedger/internal/config"
+	"github.com/BlueSkyXN/AgentLedger/internal/fingerprint"
 	"github.com/spf13/cobra"
 )
 
@@ -19,8 +21,13 @@ var doctorCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("failed to load config: %w", err)
 		}
-		if len(args) == 1 && strings.EqualFold(args[0], "codex") {
-			return runCodexDoctor(cfg)
+		if len(args) == 1 {
+			switch strings.ToLower(args[0]) {
+			case "codex":
+				return runCodexDoctor(cfg)
+			case "cursor":
+				return runCursorDoctor(cfg)
+			}
 		}
 
 		fmt.Println("AgentLedger Doctor")
@@ -36,6 +43,7 @@ var doctorCmd = &cobra.Command{
 		agentConfigs := map[string]*config.AgentConfig{
 			"claude":    &cfg.Agents.Claude,
 			"codex":     &cfg.Agents.Codex,
+			"cursor":    &cfg.Agents.Cursor,
 			"copilot":   &cfg.Agents.Copilot,
 			"gemini":    &cfg.Agents.Gemini,
 			"workbuddy": &cfg.Agents.WorkBuddy,
@@ -94,6 +102,93 @@ func runCodexDoctor(cfg *config.Config) error {
 	fmt.Println("\nTop models:")
 	for _, item := range configured.TopModels(10) {
 		fmt.Printf("  %s: %d events\n", item.Model, item.Count)
+	}
+	return nil
+}
+
+type cursorDoctorModel struct {
+	model  string
+	events int
+	tokens int64
+}
+
+func runCursorDoctor(cfg *config.Config) error {
+	adapter := adapters.NewCursorAdapter()
+	files, err := adapter.Discover(cfg.Agents.Cursor.Paths)
+	if err != nil {
+		return err
+	}
+
+	var records []*fingerprint.ParsedRecord
+	var warnings []string
+	for _, path := range files {
+		parsed, parseWarnings, err := adapter.ParseFileWithWarnings(path)
+		if err != nil {
+			return err
+		}
+		records = append(records, parsed...)
+		warnings = append(warnings, parseWarnings...)
+	}
+	rawEvents := len(records)
+	records = adapter.PostProcessRecords(records)
+
+	models := make(map[string]*cursorDoctorModel)
+	var inputTokens, cacheReadTokens, cacheWriteTokens, outputTokens, totalTokens int64
+	for _, record := range records {
+		inputTokens += record.InputTokens
+		cacheReadTokens += record.CacheReadTokens
+		cacheWriteTokens += record.CacheCreationTokens
+		outputTokens += record.OutputTokens
+		totalTokens += record.TotalTokens
+		item := models[record.ModelNormalized]
+		if item == nil {
+			item = &cursorDoctorModel{model: record.ModelNormalized}
+			models[record.ModelNormalized] = item
+		}
+		item.events++
+		item.tokens += record.TotalTokens
+	}
+	modelList := make([]cursorDoctorModel, 0, len(models))
+	for _, item := range models {
+		modelList = append(modelList, *item)
+	}
+	sort.Slice(modelList, func(i, j int) bool {
+		if modelList[i].tokens != modelList[j].tokens {
+			return modelList[i].tokens > modelList[j].tokens
+		}
+		return modelList[i].model < modelList[j].model
+	})
+
+	fmt.Println("AgentLedger Doctor - Cursor")
+	fmt.Println("===========================")
+	fmt.Printf("Configured paths:    %s\n", strings.Join(cfg.Agents.Cursor.Paths, ", "))
+	fmt.Printf("Agent Exec files:    %d\n", len(files))
+	fmt.Printf("Non-zero usage rows: %d\n", rawEvents)
+	fmt.Printf("Deduped events:      %d\n", len(records))
+	for _, diagnostic := range adapter.ImportDiagnostics() {
+		if diagnostic.Events > 0 {
+			fmt.Printf("Semantic duplicates: %d\n", diagnostic.Events)
+		}
+	}
+	fmt.Printf("Parse warnings:      %d\n", len(warnings))
+	fmt.Println("\nCanonical tokens:")
+	fmt.Printf("  input:       %d\n", inputTokens)
+	fmt.Printf("  cache read:  %d\n", cacheReadTokens)
+	fmt.Printf("  cache write: %d\n", cacheWriteTokens)
+	fmt.Printf("  output:      %d\n", outputTokens)
+	fmt.Printf("  total:       %d\n", totalTokens)
+	if len(warnings) > 0 {
+		fmt.Println("\nWarnings:")
+		for _, warning := range warnings {
+			fmt.Printf("  %s\n", warning)
+		}
+	}
+	fmt.Println("\nTop models:")
+	for index, item := range modelList {
+		if index == 10 {
+			break
+		}
+		fmt.Printf("  %s: events=%d tokens=%d\n", item.model, item.events, item.tokens)
 	}
 	return nil
 }

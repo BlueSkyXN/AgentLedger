@@ -11,7 +11,7 @@ agent-ledger init --reset
 
 ## `import`
 
-扫描启用 adapter 的稳定日志文件，解析 usage event，并按 identity v2 reconcile。输出固定计数：files、added、updated、skipped、rejected。若已入库 model ID 仍带尾部括号，import 会先改写这些 `model_normalized`，并额外输出 `Model IDs repaired`。存在 parse/reconcile warning 时 run 状态为 `completed_with_warnings`，命令仍处理其余有效记录。
+扫描启用 adapter 的稳定日志文件，解析 usage event，并按 identity v2 reconcile。输出固定计数：files、added、updated、skipped、rejected。若已入库 model ID 仍带尾部括号或 `[1m]` context 标记，import 会先改写这些 `model_normalized`，并额外输出 `Model IDs repaired`。存在 parse/reconcile warning 时 run 状态为 `completed_with_warnings`，命令仍处理其余有效记录。
 
 import 会重新读取稳定文件；本版不保存 file offset/checkpoint。重复正确性来自 event identity，不来自“未变化文件跳过”。
 
@@ -21,7 +21,7 @@ import 会重新读取稳定文件；本版不保存 file offset/checkpoint。�
 
 ## `doctor`
 
-只读检查当前 config、启用 adapter 和 discovery 路径。`doctor codex` 会额外输出 Codex 解析与 duplicate-policy 对照。输出可能含本机私有路径，公开分享前应脱敏。
+只读检查当前 config、启用 adapter 和 discovery 路径。`doctor codex` 会额外输出 Codex 解析与 duplicate-policy 对照；`doctor cursor` 会解析 Cursor Agent Exec 日志并输出非零 usage、语义去重、token 分项和模型汇总，但不写数据库。输出可能含本机私有路径，公开分享前应脱敏。
 
 ## `verify`
 

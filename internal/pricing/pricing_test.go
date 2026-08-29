@@ -529,6 +529,7 @@ func TestDefaultProfileUsesExactAliasesAndContextBoundaries(t *testing.T) {
 		{name: "case and reasoning suffix", event: Event{Model: "GPT-5.6-SOL (reasoning=xhigh)", InputTokens: 1}, wantRuleID: "gpt-5.6-sol", wantPriced: true},
 		{name: "sol max suffix", event: Event{Model: "gpt-5.6-sol(max)", InputTokens: 1}, wantRuleID: "gpt-5.6-sol", wantPriced: true},
 		{name: "any parenthetical suffix", event: Event{Model: "gpt-5.6-sol(custom-effort)", InputTokens: 1}, wantRuleID: "gpt-5.6-sol", wantPriced: true},
+		{name: "one million context suffix", event: Event{Model: "gpt-5.6-sol[1m]", InputTokens: 1}, wantRuleID: "gpt-5.6-sol", wantPriced: true},
 		{name: "gpt threshold minus one", event: Event{Model: "gpt-5.5", InputTokens: 271_999}, wantRuleID: "gpt-5.5", wantPriced: true},
 		{name: "gpt threshold", event: Event{Model: "gpt-5.5", InputTokens: 272_000}, wantRuleID: "gpt-5.5-long", wantPriced: true},
 		{name: "gpt threshold includes cache input", event: Event{Model: "gpt-5.5", InputTokens: 271_999, CacheReadTokens: 1}, wantRuleID: "gpt-5.5-long", wantPriced: true},
