@@ -57,6 +57,7 @@ func AllAdapters() []Adapter {
 	return []Adapter{
 		NewClaudeAdapter(),
 		NewCodexAdapter(),
+		NewCursorAdapter(),
 		NewGeminiAdapter(),
 		NewCopilotAdapter(),
 		NewWorkBuddyAdapter(),

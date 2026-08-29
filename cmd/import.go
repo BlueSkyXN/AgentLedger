@@ -62,6 +62,7 @@ var importCmd = &cobra.Command{
 		agentConfigs := map[string]*config.AgentConfig{
 			"claude":    &cfg.Agents.Claude,
 			"codex":     &cfg.Agents.Codex,
+			"cursor":    &cfg.Agents.Cursor,
 			"gemini":    &cfg.Agents.Gemini,
 			"copilot":   &cfg.Agents.Copilot,
 			"workbuddy": &cfg.Agents.WorkBuddy,
@@ -380,13 +381,16 @@ func importParsedRecords(database *db.Database, adapterName string, records []*f
 				modelResolution = model.ModelResolutionDirectEvent
 			}
 		}
-		provider := rec.Provider
-		if provider == "" || provider == "unknown" {
-			provider = modelProvider
-		}
 		channel := rec.Agent
 		if channel == "" {
 			channel = adapterName
+		}
+		provider := rec.Provider
+		if provider == "" || (provider == "unknown" && channel != "cursor") {
+			provider = modelProvider
+		}
+		if strings.TrimSpace(provider) == "" {
+			provider = "unknown"
 		}
 		observability := rec.ObservabilityLevel
 		if observability == "" {
@@ -514,6 +518,8 @@ func sourceProductForAgent(agent string) string {
 		return "claude-code"
 	case "codex":
 		return "codex-cli"
+	case "cursor":
+		return "cursor-agent-exec"
 	case "copilot":
 		return "copilot-otel"
 	case "gemini":
@@ -529,6 +535,8 @@ func defaultObservability(agent string) string {
 	switch agent {
 	case "claude", "codex", "copilot", "workbuddy":
 		return "full"
+	case "cursor":
+		return "partial"
 	default:
 		return "unknown"
 	}
@@ -538,6 +546,8 @@ func defaultAccountingMethod(agent string) string {
 	switch agent {
 	case "claude":
 		return model.AccClaudeUsageSum
+	case "cursor":
+		return model.AccCursorAgentExec
 	default:
 		return ""
 	}
@@ -575,7 +585,7 @@ func totalForAccountingProfile(event *model.UsageEvent) int64 {
 	switch event.TokenAccountingMethod {
 	case model.AccCodexLastTokenUsage, model.AccCodexTotalDelta, model.AccCodexHeadlessUsage:
 		return event.InputTokens + event.CacheCreationTokens + event.CacheReadTokens + maxInt64(event.OutputTokens, event.ReasoningTokens)
-	case model.AccWorkBuddyRawUsage:
+	case model.AccCursorAgentExec, model.AccWorkBuddyRawUsage:
 		return event.InputTokens + event.OutputTokens + event.CacheCreationTokens + event.CacheReadTokens
 	default:
 		return event.InputTokens + event.OutputTokens + event.ReasoningTokens + event.CacheCreationTokens + event.CacheReadTokens

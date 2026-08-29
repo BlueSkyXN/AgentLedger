@@ -2,7 +2,7 @@ package model
 
 import "testing"
 
-func TestCanonicalModelIDStripsTrailingParenthetical(t *testing.T) {
+func TestCanonicalModelIDStripsRecognizedTrailingAnnotations(t *testing.T) {
 	tests := []struct {
 		raw  string
 		want string
@@ -15,6 +15,14 @@ func TestCanonicalModelIDStripsTrailingParenthetical(t *testing.T) {
 		{raw: "gpt-5.6-sol(custom)", want: "gpt-5.6-sol"},
 		{raw: "gpt-5.6-sol(max)(extra)", want: "gpt-5.6-sol"},
 		{raw: "gpt-5.6-sol(note(max))", want: "gpt-5.6-sol"},
+		{raw: "gpt-5.6-sol[1m]", want: "gpt-5.6-sol"},
+		{raw: "gpt-5.6-sol [1M]", want: "gpt-5.6-sol"},
+		{raw: "gpt-5.6-sol[1m](max)", want: "gpt-5.6-sol"},
+		{raw: "gpt-5.6-sol(max)[1m]", want: "gpt-5.6-sol"},
+		{raw: "gpt-5.6-sol[1m][1m]", want: "gpt-5.6-sol"},
+		{raw: "gpt-5.6-sol[2m]", want: "gpt-5.6-sol[2m]"},
+		{raw: "gpt-5.6-sol[preview]", want: "gpt-5.6-sol[preview]"},
+		{raw: "gpt-5.6-sol[1m", want: "gpt-5.6-sol[1m"},
 		{raw: "gpt-5.6-sol", want: "gpt-5.6-sol"},
 		{raw: "gpt-5.6-sol(max", want: "gpt-5.6-sol(max"},
 		{raw: "unknown", want: "unknown"},

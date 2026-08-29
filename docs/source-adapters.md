@@ -41,6 +41,27 @@ Session 优先原生 session ID，回退到 `sessions`/`archived_sessions` root-
 
 `ledger` 对累计 `total_token_usage` 做 per-session reset-aware delta；`ccusage_compatible` 优先 `last_token_usage`，缺失时用累计 delta。source total 是权威 `total_tokens`；缓存 input 从 raw input 分离，reasoning 可能包含在 output 中。当累计 counter 局部回退导致已知分项不能完整解释 source total 时，保留 source total、把分项限制在 total 内并标记 `observability_level=partial`，不会把分项缺口伪造成某个 token bucket。该情况按 `codex_accounting_partial` diagnostic 汇总。replay matcher 继续 fail-closed。
 
+## Cursor
+
+```text
+channel = cursor
+source_product = cursor-agent-exec
+provider = unknown
+parser_version = cursor-agent-exec-v1
+event_granularity = request
+```
+
+只扫描 `exthost/anysphere.cursor-agent-exec/Cursor Agent Exec*.log` 中的 `Setting token details for client token ring` usage 行。`usedTokens`、`inputTokens`、`outputTokens`、`cacheReadTokens`、`cacheWriteTokens` 必须全部存在、非负，并满足：
+
+```text
+usedTokens = inputTokens + outputTokens
+cacheReadTokens + cacheWriteTokens <= inputTokens
+```
+
+Cursor 的 `inputTokens` 是包含 cache 的 raw input。canonical `input_tokens` 会减去 cache read/write，`source_total_tokens` 保留 `usedTokens`；全零行跳过，非法行聚合 warning 后跳过。来源未提供 provider、request ID 或 conversation/composer ID，因此 provider 保持 `unknown`，Session 使用 `cursor-agent-exec/YYYY-MM-DD` 本地日期日志桶，不能解释成 Cursor UI 对话。日期桶不依赖文件名，日志轮转或移动不会改变 Session key。
+
+事件使用 global `content_fallback`，语义包含毫秒 timestamp、action、model 与完整 token 分项，因此日志复制、轮转和重复 import 不重复累计。若两个真实调用在同一毫秒具有完全相同的上述字段，来源证据无法区分，adapter 会按同一事件处理。
+
 ## GitHub Copilot
 
 OTel 存在时选择 OTel request events，不再同时导入 session-state summary：

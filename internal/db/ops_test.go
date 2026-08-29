@@ -70,7 +70,7 @@ func TestReconcileDuplicateSupplementAndConflict(t *testing.T) {
 	}
 }
 
-func TestParentheticalModelAliasIsCanonicalized(t *testing.T) {
+func TestAnnotatedModelAliasIsCanonicalized(t *testing.T) {
 	database := openTestDatabase(t)
 	defer database.Close()
 
@@ -107,27 +107,35 @@ func TestParentheticalModelAliasIsCanonicalized(t *testing.T) {
 		t.Fatalf("parenthetical alias overwrote canonical model: %+v", stored)
 	}
 
-	polluted := testEvent("event-polluted", "hash-polluted", 8)
-	polluted.ModelRaw = "gpt-5.4(xhigh)"
-	polluted.ModelNormalized = "gpt-5.4(xhigh)"
-	polluted.ModelResolution = model.ModelResolutionDirectEvent
-	polluted.ModelIsFallback = false
-	if err := insertEvent(database.Conn(), polluted); err != nil {
-		t.Fatal(err)
+	pollutedModels := map[string]string{
+		"event-polluted-parenthetical": "gpt-5.4(xhigh)",
+		"event-polluted-context":       "gpt-5.4[1m]",
+	}
+	for eventID, modelID := range pollutedModels {
+		polluted := testEvent(eventID, "hash-"+eventID, 8)
+		polluted.ModelRaw = modelID
+		polluted.ModelNormalized = modelID
+		polluted.ModelResolution = model.ModelResolutionDirectEvent
+		polluted.ModelIsFallback = false
+		if err := insertEvent(database.Conn(), polluted); err != nil {
+			t.Fatal(err)
+		}
 	}
 	updated, err := database.RepairCanonicalModelIDs()
-	if err != nil || updated != 1 {
+	if err != nil || updated != len(pollutedModels) {
 		t.Fatalf("repair updated=%d err=%v", updated, err)
 	}
-	repaired, err := selectEvent(database.Conn(), polluted.EventID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if repaired.ModelRaw != "gpt-5.4(xhigh)" || repaired.ModelNormalized != "gpt-5.4" {
-		t.Fatalf("repair did not canonicalize stored model: %+v", repaired)
-	}
-	if repaired.ContentSHA256 != mustContentSHA256(t, repaired) {
-		t.Fatalf("repair stored inconsistent content hash")
+	for eventID, modelID := range pollutedModels {
+		repaired, err := selectEvent(database.Conn(), hashTestValue("event:"+eventID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if repaired.ModelRaw != modelID || repaired.ModelNormalized != "gpt-5.4" {
+			t.Fatalf("repair did not canonicalize stored model: %+v", repaired)
+		}
+		if repaired.ContentSHA256 != mustContentSHA256(t, repaired) {
+			t.Fatalf("repair stored inconsistent content hash")
+		}
 	}
 }
 

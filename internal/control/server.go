@@ -135,6 +135,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		"agents": map[string]any{
 			"claude":    agentSnapshot(s.cfg.Agents.Claude),
 			"codex":     agentSnapshot(s.cfg.Agents.Codex),
+			"cursor":    agentSnapshot(s.cfg.Agents.Cursor),
 			"copilot":   agentSnapshot(s.cfg.Agents.Copilot),
 			"gemini":    agentSnapshot(s.cfg.Agents.Gemini),
 			"workbuddy": agentSnapshot(s.cfg.Agents.WorkBuddy),
