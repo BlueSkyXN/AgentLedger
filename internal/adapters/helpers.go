@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/BlueSkyXN/AgentLedger/internal/model"
 )
 
 // DiscoverFiles walks directories finding files with given extensions
@@ -292,6 +294,6 @@ func NormalizeModelName(raw string) (normalized, provider, family string) {
 		family = "unknown"
 	}
 
-	normalized = raw
+	normalized = model.CanonicalModelID(raw)
 	return
 }

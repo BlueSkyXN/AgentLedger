@@ -12,7 +12,9 @@
 - `/api/v2/*` 只读 API；summary 增加 distinct Session 数。
 - 基于 IANA timezone 的逐事件 SQLite bucket function，正确处理历史 DST。
 - 配置级 pricing profile、即时 estimated cost、coverage、`policy_zero` 和稳定 unavailable error code。
-- 默认关闭、macOS experimental 的 TRAE Work CN direct runtime adapter；直接扫描运行中应用的逐消息显式 `token_usage`，并以 `total_tokens` 作为权威 usage 总量。
+- 内置 pricing profile 增加 Grok 4.6 短上下文/长上下文估算规则。
+- `/api/v2/analytics/timeseries` 支持 `cost=estimated|none`；Web Overview 的每日 Tokens 图默认 `cost=none`。
+- Web Overview 增加模型成本占比、计价覆盖，以及图表加载/失败状态。
 
 ### Changed
 
@@ -22,9 +24,11 @@
 - 默认 redacted export 只清空路径和 import warning，不改变 identity/totals。
 - Web 以 Sessions 为主要分析页，并分开展示 channel、source product 和 provider。
 - pricing rule 现在正确匹配 provider/channel，并拒绝非法日期、负费率和不支持的费率。
+- 逐事件 timezone bucket 缓存 IANA location，避免重复 `LoadLocation`。
 
 ### Fixed
 
+- model ID 尾部括号（如 `gpt-5.6-sol(max)`）会统一剥掉后再识别和计价，思考档位不再影响价格规则；`import` 会按同一规则改写已入库的 `model_normalized` 并重算 content hash。
 - Codex append-only 日志后补 `task_complete` 不再改写既有 event identity；Claude optional/null 字段不再让合法 usage 静默丢失。
 - reconcile 从最终 canonical row 重算 `content_sha256`，相同 content 可补回 locator metadata；merge 会拒绝 malformed identity hash 或 content hash 不自洽的 v3 行。
 - 全部缺价的聚合金额保持 `null`，partial event 的 token coverage 只统计实际进入价格 bucket 的分项；Codex/Copilot/WorkBuddy 的 reasoning token 按各自 accounting contract 计价。
@@ -38,6 +42,8 @@
 - `/api/v1/*` 与 `/analytics/slow`。
 - `cleanup.*`、`import.single_thread`、`reports.currency`、`privacy.mode`/envelope alias。
 - 设备、source checkpoint、observation/conflict/merge ledger 和持久化 Session 表。
+- TRAE Work CN experimental direct runtime adapter，以及对应的 config、import、doctor 与 API snapshot 入口。
+- `agents.*.experimental` 配置字段。
 
 ## v2
 

@@ -22,12 +22,6 @@ func TestDefaultContainsOnlyV3ConfigurationSurface(t *testing.T) {
 	if cfg.DBPath() != filepath.Join(DataDir(), "agent-ledger.db") {
 		t.Fatalf("unexpected DB path %q", cfg.DBPath())
 	}
-	if cfg.Agents.TraeWorkCN.Enabled {
-		t.Fatal("TRAE Work CN direct runtime scan must be opt-in")
-	}
-	if !cfg.Agents.TraeWorkCN.Experimental || len(cfg.Agents.TraeWorkCN.Paths) != 0 {
-		t.Fatalf("unexpected TRAE Work CN direct scan defaults: %#v", cfg.Agents.TraeWorkCN)
-	}
 }
 
 func TestSavedConfigOmitsRemovedV2Keys(t *testing.T) {
@@ -43,12 +37,12 @@ func TestSavedConfigOmitsRemovedV2Keys(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(data)
-	for _, removed := range []string{"[cleanup]", "single_thread", "currency", "mode =", "envelope"} {
+	for _, removed := range []string{"[cleanup]", "single_thread", "currency", "mode =", "envelope", "[agents.trae-work-cn]", "experimental"} {
 		if strings.Contains(text, removed) {
 			t.Errorf("saved v3 config contains removed key %q:\n%s", removed, text)
 		}
 	}
-	for _, required := range []string{"redact_paths_on_export", "gracing_minutes", "timezone", "pricing_path", "[agents.trae-work-cn]"} {
+	for _, required := range []string{"redact_paths_on_export", "gracing_minutes", "timezone", "pricing_path", "[agents.workbuddy]"} {
 		if !strings.Contains(text, required) {
 			t.Errorf("saved v3 config missing %q", required)
 		}
@@ -66,20 +60,50 @@ func TestLoadReadOnlyDoesNotCreateConfig(t *testing.T) {
 	}
 }
 
-func TestTraeWorkCNConfigRoundTrip(t *testing.T) {
+func TestLoadIgnoresRemovedTraeWorkCNSection(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("AGENT_LEDGER_DATA_DIR", dataDir)
 	cfg := Default()
-	cfg.Agents.TraeWorkCN.Enabled = true
-	cfg.Agents.TraeWorkCN.Paths = []string{"~/Applications/TRAE SOLO CN.app"}
 	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(ConfigPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = append(data, []byte("\n[agents.trae-work-cn]\nenabled = true\nexperimental = true\npaths = [\"/unused.app\"]\n")...)
+	if err := os.WriteFile(ConfigPath(), data, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	loaded, err := LoadReadOnly()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !loaded.Agents.TraeWorkCN.Enabled || !loaded.Agents.TraeWorkCN.Experimental || len(loaded.Agents.TraeWorkCN.Paths) != 1 || loaded.Agents.TraeWorkCN.Paths[0] != "~/Applications/TRAE SOLO CN.app" {
-		t.Fatalf("unexpected TRAE Work CN config after roundtrip: %#v", loaded.Agents.TraeWorkCN)
+	if !loaded.Agents.WorkBuddy.Enabled {
+		t.Fatalf("existing adapters should still load after a leftover TRAE section: %#v", loaded.Agents)
+	}
+}
+
+func TestLoadIgnoresRemovedExperimentalFlag(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENT_LEDGER_DATA_DIR", dataDir)
+	cfg := Default()
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(ConfigPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = append(data, []byte("\nexperimental = true\n")...)
+	if err := os.WriteFile(ConfigPath(), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadReadOnly()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !loaded.Agents.WorkBuddy.Enabled || !loaded.Agents.Codex.Enabled {
+		t.Fatalf("legacy experimental key should be ignored: %#v", loaded.Agents)
 	}
 }

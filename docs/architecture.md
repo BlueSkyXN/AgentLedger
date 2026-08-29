@@ -8,10 +8,9 @@ AgentLedger v3 将本机 AI Coding Agent Session 日志转换为可重复导入�
 
 ```text
 Claude/Codex/Copilot/Gemini/WorkBuddy logs
-      + TRAE Work CN local runtime usage
                          │
                          ▼
- Adapter discovery/direct collection + accounting
+ Adapter discovery + accounting
                  │ ParsedRecord
                  ▼
        fingerprint identity v2/content hash

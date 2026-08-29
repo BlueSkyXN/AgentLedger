@@ -70,6 +70,67 @@ func TestReconcileDuplicateSupplementAndConflict(t *testing.T) {
 	}
 }
 
+func TestParentheticalModelAliasIsCanonicalized(t *testing.T) {
+	database := openTestDatabase(t)
+	defer database.Close()
+
+	first := testEvent("event-parens", "hash-parens", 4)
+	first.ModelRaw = "gpt-5.4(xhigh)"
+	first.ModelNormalized = "gpt-5.4(xhigh)"
+	first.ModelResolution = model.ModelResolutionDirectEvent
+	first.ModelIsFallback = false
+	if _, err := database.UpsertEvent(first); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := selectEvent(database.Conn(), first.EventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.ModelRaw != "gpt-5.4(xhigh)" || stored.ModelNormalized != "gpt-5.4" {
+		t.Fatalf("insert did not canonicalize parenthetical model: %+v", stored)
+	}
+	if stored.ContentSHA256 != mustContentSHA256(t, stored) {
+		t.Fatalf("canonical insert stored inconsistent content hash")
+	}
+
+	second := *stored
+	second.ModelNormalized = "gpt-5.4"
+	status, err := database.UpsertEvent(&second)
+	if err != nil || (status != ReconcileSkipped && status != ReconcileUpdated) {
+		t.Fatalf("canonical alias status=%q err=%v", status, err)
+	}
+	stored, err = selectEvent(database.Conn(), first.EventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.ModelNormalized != "gpt-5.4" {
+		t.Fatalf("parenthetical alias overwrote canonical model: %+v", stored)
+	}
+
+	polluted := testEvent("event-polluted", "hash-polluted", 8)
+	polluted.ModelRaw = "gpt-5.4(xhigh)"
+	polluted.ModelNormalized = "gpt-5.4(xhigh)"
+	polluted.ModelResolution = model.ModelResolutionDirectEvent
+	polluted.ModelIsFallback = false
+	if err := insertEvent(database.Conn(), polluted); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := database.RepairCanonicalModelIDs()
+	if err != nil || updated != 1 {
+		t.Fatalf("repair updated=%d err=%v", updated, err)
+	}
+	repaired, err := selectEvent(database.Conn(), polluted.EventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repaired.ModelRaw != "gpt-5.4(xhigh)" || repaired.ModelNormalized != "gpt-5.4" {
+		t.Fatalf("repair did not canonicalize stored model: %+v", repaired)
+	}
+	if repaired.ContentSHA256 != mustContentSHA256(t, repaired) {
+		t.Fatalf("repair stored inconsistent content hash")
+	}
+}
+
 func TestDirectModelConflictIsRejected(t *testing.T) {
 	database := openTestDatabase(t)
 	defer database.Close()
@@ -373,34 +434,6 @@ func TestValidateAccountingProfiles(t *testing.T) {
 	codexPartial.ObservabilityLevel = "full"
 	if err := ValidateEvent(codexPartial); !IsRejectError(err) {
 		t.Fatalf("full Codex delta must conserve total, got %v", err)
-	}
-
-	traePartial := testEvent("trae-partial", "trae-partial-hash", 20)
-	traePartial.Channel = "trae-work-cn"
-	traePartial.SourceProduct = "trae-work-cn"
-	traePartial.TokenAccountingMethod = model.AccTraeWorkCNMessageUsage
-	traePartial.InputTokens = 10
-	traePartial.OutputTokens = 5
-	traePartial.ObservabilityLevel = "partial"
-	if err := ValidateEvent(traePartial); err != nil {
-		t.Fatalf("partial TRAE Work CN usage may preserve an authoritative total above known buckets: %v", err)
-	}
-	traePartial.OutputTokens = 11
-	if err := ValidateEvent(traePartial); !IsRejectError(err) {
-		t.Fatalf("TRAE Work CN known buckets must not exceed the source total, got %v", err)
-	}
-	traePartial.TotalTokens = int64(^uint64(0) >> 1)
-	traePartial.InputTokens = traePartial.TotalTokens
-	traePartial.OutputTokens = 1
-	if err := ValidateEvent(traePartial); !IsRejectError(err) {
-		t.Fatalf("TRAE Work CN known bucket overflow must be rejected, got %v", err)
-	}
-	traePartial.TotalTokens = 20
-	traePartial.InputTokens = 10
-	traePartial.OutputTokens = 5
-	traePartial.CacheReadTokens = 1
-	if err := ValidateEvent(traePartial); !IsRejectError(err) {
-		t.Fatalf("TRAE Work CN cache details must not enter canonical buckets before inclusion semantics are known, got %v", err)
 	}
 }
 

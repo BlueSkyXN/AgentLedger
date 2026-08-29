@@ -138,35 +138,6 @@ func TestTotalForAccountingProfileUsesOverlapRules(t *testing.T) {
 	if got := totalForAccountingProfile(workbuddy); got != 12 {
 		t.Fatalf("workbuddy total=%d", got)
 	}
-	traeWorkCN := &model.UsageEvent{InputTokens: 2, OutputTokens: 5, TokenAccountingMethod: model.AccTraeWorkCNMessageUsage}
-	if got := totalForAccountingProfile(traeWorkCN); got != 7 {
-		t.Fatalf("TRAE Work CN known token total=%d", got)
-	}
-}
-
-func TestDirectAdapterImportIsIdempotentWithoutIntermediateFiles(t *testing.T) {
-	database, err := db.Open(filepath.Join(t.TempDir(), "import.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer database.Close()
-
-	adapter := &fakeDirectImportAdapter{records: []*fingerprint.ParsedRecord{{
-		Agent: "trae-work-cn", SourceProduct: "trae-work-cn", Provider: "unknown",
-		Model: "unknown", ModelNormalized: "unknown", ModelResolution: model.ModelResolutionUnknown, ModelIsFallback: true,
-		TimestampMs: 1_780_000_000_000, NativeSessionID: "runtime-session", SessionID: "runtime-session",
-		NativeEventID: "runtime-message", MessageID: "runtime-message", IdentityKind: "message", IdentityScope: "session",
-		ParserVersion: "trae-work-cn-v1", Granularity: "message", InputTokens: 100, OutputTokens: 40, TotalTokens: 140,
-		ObservabilityLevel: "partial", TokenAccountingMethod: model.AccTraeWorkCNMessageUsage, AccountingProfile: "trae_work_cn_message_usage_v1",
-	}}}
-	first := importDirectAdapter(database, adapter, adapter, nil)
-	if first.files != 1 || first.added != 1 || first.updated != 0 || first.skipped != 0 || first.rejected != 0 || len(first.warnings) != 0 {
-		t.Fatalf("unexpected first direct import: %#v", first)
-	}
-	second := importDirectAdapter(database, adapter, adapter, nil)
-	if second.files != 1 || second.added != 0 || second.updated != 0 || second.skipped != 1 || second.rejected != 0 || len(second.warnings) != 0 {
-		t.Fatalf("unexpected second direct import: %#v", second)
-	}
 }
 
 func TestImportWarningsAreRedactedBeforePersistence(t *testing.T) {
@@ -178,22 +149,43 @@ func TestImportWarningsAreRedactedBeforePersistence(t *testing.T) {
 	}
 }
 
+func TestImportRepairsStoredParentheticalModelIDs(t *testing.T) {
+	database, err := db.Open(filepath.Join(t.TempDir(), "import.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	_, err = database.Conn().Exec(`
+		INSERT INTO usage_events (
+			event_id, identity_version, identity_strategy, identity_scope, content_sha256,
+			event_granularity, channel, source_product, model_raw, model_normalized, model_is_fallback,
+			timestamp_ms, session_key, input_tokens, output_tokens, reasoning_tokens,
+			cache_creation_tokens, cache_read_tokens, total_tokens, imported_at_ms, updated_at_ms
+		) VALUES (
+			'repair-import', 2, 'native_event', 'session', 'hash-polluted',
+			'request', 'codex', 'codex-cli', 'gpt-5.6-sol(max)', 'gpt-5.6-sol(max)', 0,
+			1700000000000, 'session-repair', 3, 0, 0, 0, 0, 3, 1, 1
+		)
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	updated, err := repairStoredCanonicalModelIDs(database)
+	if err != nil || updated != 1 {
+		t.Fatalf("repair updated=%d err=%v", updated, err)
+	}
+
+	var modelRaw, modelNormalized string
+	if err := database.Conn().QueryRow(`SELECT model_raw, model_normalized FROM usage_events WHERE event_id = ?`, "repair-import").Scan(&modelRaw, &modelNormalized); err != nil {
+		t.Fatal(err)
+	}
+	if modelRaw != "gpt-5.6-sol(max)" || modelNormalized != "gpt-5.6-sol" {
+		t.Fatalf("import repair did not canonicalize stored model: raw=%q normalized=%q", modelRaw, modelNormalized)
+	}
+}
+
 func separatorForTest() string {
 	return string(filepath.Separator)
-}
-
-type fakeDirectImportAdapter struct {
-	records []*fingerprint.ParsedRecord
-}
-
-func (f *fakeDirectImportAdapter) Name() string { return "trae-work-cn" }
-
-func (f *fakeDirectImportAdapter) Discover([]string) ([]string, error) { return nil, nil }
-
-func (f *fakeDirectImportAdapter) ParseFile(string) ([]*fingerprint.ParsedRecord, error) {
-	return nil, nil
-}
-
-func (f *fakeDirectImportAdapter) Collect([]string) ([]*fingerprint.ParsedRecord, []string, error) {
-	return f.records, nil, nil
 }

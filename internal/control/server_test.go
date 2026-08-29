@@ -70,6 +70,74 @@ func TestAPIV2ContractAndV1Removal(t *testing.T) {
 	}
 }
 
+func TestTimeseriesHandlerCostModes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "control.db")
+	database, err := db.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if _, err := database.UpsertEvent(&model.UsageEvent{
+		EventID: "timeseries-cost", IdentityVersion: model.IdentityVersion, IdentityStrategy: "native_event", IdentityScope: "session",
+		ContentSHA256: "timeseries-hash", ParserVersion: "test-v1", EventGranularity: "request",
+		Channel: "codex", SourceProduct: "codex-cli", Provider: "openai",
+		ModelRaw: "unknown", ModelNormalized: "unknown", ModelResolution: model.ModelResolutionUnknown, ModelIsFallback: true,
+		TimestampMs: 1_700_000_000_000, SessionKey: "timeseries-session", SessionID: "private-session",
+		InputTokens: 3, TotalTokens: 3, ImportedAtMs: 1, UpdatedAtMs: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.Database.Path = path
+	cfg.Reports.Timezone = "UTC"
+	handler := NewServer(cfg, database, Options{}).Handler()
+
+	type timeseriesRow struct {
+		Label            string   `json:"label"`
+		Events           int64    `json:"events"`
+		TotalTokens      int64    `json:"total_tokens"`
+		EstimatedCostUSD *float64 `json:"estimated_cost_usd"`
+		Pricing          *struct {
+			Status string `json:"status"`
+		} `json:"pricing"`
+	}
+	getRows := func(query string) []timeseriesRow {
+		t.Helper()
+		request := httptest.NewRequest(http.MethodGet, "/api/v2/analytics/timeseries?bucket=daily"+query, nil)
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("timeseries %s status=%d body=%s", query, recorder.Code, recorder.Body.String())
+		}
+		var rows []timeseriesRow
+		if err := json.NewDecoder(recorder.Body).Decode(&rows); err != nil {
+			t.Fatalf("decode timeseries %s response: %v", query, err)
+		}
+		return rows
+	}
+
+	defaultRows := getRows("")
+	if len(defaultRows) != 1 || defaultRows[0].EstimatedCostUSD == nil || defaultRows[0].Pricing == nil {
+		t.Fatalf("default timeseries cost mode must remain estimated: %+v", defaultRows)
+	}
+	if defaultRows[0].Pricing.Status != "available" {
+		t.Fatalf("default timeseries pricing should be available: %+v", defaultRows[0].Pricing)
+	}
+	noneRows := getRows("&cost=none")
+	if len(noneRows) != len(defaultRows) || noneRows[0].Label != defaultRows[0].Label || noneRows[0].Events != defaultRows[0].Events || noneRows[0].TotalTokens != defaultRows[0].TotalTokens {
+		t.Fatalf("cost=none must preserve token rows: default=%+v none=%+v", defaultRows, noneRows)
+	}
+	if noneRows[0].EstimatedCostUSD != nil || noneRows[0].Pricing != nil {
+		t.Fatalf("cost=none should omit cost and pricing: %+v", noneRows)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/v2/analytics/timeseries?bucket=daily&cost=recorded", nil)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "cost must be estimated or none") {
+		t.Fatalf("invalid timeseries cost status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestSessionsAndEventsArePaginatedWithoutRemovedFields(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "control.db")
 	database, err := db.Open(path)
@@ -153,7 +221,6 @@ func TestAPISnapshotsRedactExternalAbsolutePaths(t *testing.T) {
 	cfg.Database.Path = databasePath
 	cfg.Reports.PricingPath = filepath.Join(external, "pricing.json")
 	cfg.Agents.Codex.Paths = []string{filepath.Join(external, "sessions")}
-	cfg.Agents.TraeWorkCN.Paths = []string{filepath.Join(external, "TRAE SOLO CN.app")}
 	handler := NewServer(cfg, database, Options{}).Handler()
 
 	for _, endpoint := range []string{"/api/v2/health", "/api/v2/status", "/api/v2/config"} {
@@ -170,43 +237,6 @@ func TestAPISnapshotsRedactExternalAbsolutePaths(t *testing.T) {
 		if !strings.Contains(body, `\u003cexternal\u003e`) {
 			t.Fatalf("%s did not return a redacted external path: %s", endpoint, body)
 		}
-	}
-}
-
-func TestConfigSnapshotIncludesDisabledTraeWorkCNWithRedactedPath(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	database, err := db.Open(filepath.Join(t.TempDir(), "control.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer database.Close()
-	cfg := config.Default()
-	cfg.Agents.TraeWorkCN.Enabled = false
-	cfg.Agents.TraeWorkCN.Paths = []string{filepath.Join(home, "private", "TRAE SOLO CN.app")}
-	handler := NewServer(cfg, database, Options{}).Handler()
-
-	request := httptest.NewRequest(http.MethodGet, "/api/v2/config", nil)
-	recorder := httptest.NewRecorder()
-	handler.ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("config status=%d body=%s", recorder.Code, recorder.Body.String())
-	}
-	var payload struct {
-		Agents map[string]struct {
-			Enabled bool     `json:"enabled"`
-			Paths   []string `json:"paths"`
-		} `json:"agents"`
-	}
-	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("decode config snapshot: %v", err)
-	}
-	snapshot, ok := payload.Agents["trae-work-cn"]
-	if !ok || snapshot.Enabled || len(snapshot.Paths) != 1 || snapshot.Paths[0] != "~/private/TRAE SOLO CN.app" {
-		t.Fatalf("unexpected TRAE Work CN config snapshot: %#v", snapshot)
-	}
-	if strings.Contains(recorder.Body.String(), home) {
-		t.Fatalf("config snapshot exposed HOME path: %s", recorder.Body.String())
 	}
 }
 

@@ -35,7 +35,7 @@ export const api = {
   config: () => request<ConfigSnapshot>("/config"),
   summary: (filters: Filters) => request<Summary>(`/analytics/summary${query(filters)}`),
   timeseries: (bucket: "daily" | "weekly" | "monthly", filters: Filters) =>
-    request<MetricRow[]>(`/analytics/timeseries${query({ ...filters, bucket })}`),
+    request<MetricRow[]>(`/analytics/timeseries${query({ ...filters, bucket, cost: "none" })}`),
   breakdown: (by: "channel" | "source_product" | "model" | "provider" | "session" | "project", filters: Filters) =>
     request<MetricRow[]>(`/analytics/breakdown${query({ ...filters, by })}`),
   filterOptions: () => request<FilterOptions>("/filter-options"),

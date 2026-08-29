@@ -37,9 +37,9 @@
     },
     {
       "provider": "xai",
-      "name": "xAI Grok 4.5 pricing",
-      "url": "https://docs.x.ai/developers/models/grok-4.5",
-      "checked_at": "2026-07-23"
+      "name": "xAI Grok pricing",
+      "url": "https://docs.x.ai/docs/models#model-pricing",
+      "checked_at": "2026-08-13"
     },
     {
       "provider": "anthropic",
@@ -718,6 +718,48 @@
       "source_url": "https://platform.kimi.ai/docs/pricing/chat-k27-code",
       "pricing_notes_url": "https://platform.kimi.ai/docs/guide/kimi-k2-7-code-quickstart",
       "as_of": "2026-07-23"
+    },
+    {
+      "id": "grok-4.6-long",
+      "model_patterns": [
+        "grok-4.6"
+      ],
+      "priority": 100,
+      "basis": "official_model_list_price",
+      "condition": {
+        "min_input_side_tokens": 200000
+      },
+      "rates": {
+        "input": 4.0,
+        "cached_input": 1.0,
+        "output": 12.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "At 200000 full input-side tokens, the long-context rate applies to the entire request.",
+      "model_id": "grok-4.6",
+      "source_url": "https://docs.x.ai/developers/models/grok-4.6",
+      "as_of": "2026-08-13"
+    },
+    {
+      "id": "grok-4.6",
+      "model_patterns": [
+        "grok-4.6"
+      ],
+      "priority": 30,
+      "basis": "official_model_list_price",
+      "rates": {
+        "input": 2.0,
+        "cached_input": 0.5,
+        "output": 6.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "model_id": "grok-4.6",
+      "source_url": "https://docs.x.ai/developers/models/grok-4.6",
+      "as_of": "2026-08-13"
     },
     {
       "id": "grok-4.5-long",
