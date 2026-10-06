@@ -38,6 +38,7 @@
 - Claude Sonnet 5 价格改为官方标准价 $2 / $10（原定 2026-09-01 涨价到 $3 / $15 已取消），并补齐 5m/1h 缓存写入价；此前缓存写入按 input 价计。
 - Claude Opus 5 补齐 1 小时缓存写入价；Claude Fable 5.1 缓存读取改为官方 $0.25（此前被 `claude-fable-5-*` 按 Fable 5 的 $1 匹配）；`claude-opus-4-1`、`claude-opus-4-2025*` 不再被 Opus 4.5+ 规则按 $5 计价；`claude-opus-4-8-fast` 不再按标准价计价。
 
+- Codex 累计用量在源文件重写后因行号变化产生新 `event_id` 时，import 与 merge 共用受限语义去重：仅双方均为无 native request/message ID 的 `session_record`，且 Session/turn identity、完整 content facts（含来源累计总量、TTL、accounting 与模型证据）一致时跳过。不同原生 ID、其他来源、非累计或缺证据的样本保持独立；同 ID 的 TTL 补齐及冲突拒绝不变。merge 预检查包含本批次新增/更新，仍保证冲突整批回滚。
 - model ID 尾部括号（如 `gpt-5.6-sol(max)`）和明确的 1M context 标记（如 `gpt-5.6-sol[1m]`）会统一剥掉后再识别和计价，思考档位与 context 标记不再影响价格规则；`import` 会按同一规则改写已入库的 `model_normalized` 并重算 content hash。
 - Codex append-only 日志后补 `task_complete` 不再改写既有 event identity；Claude optional/null 字段不再让合法 usage 静默丢失。
 - reconcile 从最终 canonical row 重算 `content_sha256`，相同 content 可补回 locator metadata；merge 会拒绝 malformed identity hash 或 content hash 不自洽的 v3 行。

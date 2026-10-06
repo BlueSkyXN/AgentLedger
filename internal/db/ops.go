@@ -105,6 +105,16 @@ func (d *Database) UpsertEvent(event *model.UsageEvent) (status string, err erro
 	if err != nil {
 		return "", err
 	}
+	if existing == nil {
+		duplicate, semErr := selectSemanticDuplicate(tx, incoming)
+		if semErr != nil {
+			return "", semErr
+		}
+		if duplicate {
+			_ = tx.Rollback()
+			return ReconcileSkipped, nil
+		}
+	}
 
 	canonical, status, decisionErr := reconcile(existing, incoming)
 	if decisionErr != nil {
@@ -542,6 +552,31 @@ func selectEvent(queryer interface {
 	return scanEvent(queryer.QueryRow(`SELECT `+eventColumns+` FROM usage_events WHERE event_id = ?`, eventID))
 }
 
+func selectSemanticDuplicate(queryer interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+}, event *model.UsageEvent) (bool, error) {
+	key, ok := semanticKeyForEvent(event)
+	if !ok {
+		return false, nil
+	}
+	rows, err := queryer.Query(`SELECT `+eventColumns+` FROM usage_events
+        WHERE session_key = ? AND timestamp_ms = ?`, event.SessionKey, event.TimestampMs)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		candidate, err := scanEvent(rows)
+		if err != nil {
+			return false, err
+		}
+		if candidateKey, ok := semanticKeyForEvent(candidate); ok && candidateKey == key {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
 func listEvents(queryer interface {
 	Query(query string, args ...any) (*sql.Rows, error)
 }, hasCacheCreation1h bool) ([]*model.UsageEvent, error) {
@@ -741,11 +776,13 @@ func (d *Database) MergeFrom(incomingPath string) (result MergeResult, err error
 		return result, err
 	}
 	virtual := make(map[string]*model.UsageEvent, len(existingEvents)+len(incomingEvents))
+	semanticIndex := make(semanticEventIndex)
 	for _, event := range existingEvents {
 		if validationErr := validateStoredEvent(event); validationErr != nil {
 			return result, fmt.Errorf("destination database contains an invalid event: %w", validationErr)
 		}
 		virtual[event.EventID] = event
+		semanticIndex.add(event)
 	}
 	actions := make([]mergeAction, 0, len(incomingEvents))
 	conflictCounts := make(map[string]int)
@@ -770,6 +807,10 @@ func (d *Database) MergeFrom(incomingPath string) (result MergeResult, err error
 			continue
 		}
 		existing := virtual[incoming.EventID]
+		if existing == nil && semanticIndex.contains(incoming) {
+			actions = append(actions, mergeAction{status: ReconcileSkipped})
+			continue
+		}
 		canonical, status, decisionErr := reconcile(existing, incoming)
 		if decisionErr != nil {
 			var rejected *RejectError
@@ -781,7 +822,9 @@ func (d *Database) MergeFrom(incomingPath string) (result MergeResult, err error
 			continue
 		}
 		actions = append(actions, mergeAction{status: status, event: canonical})
+		semanticIndex.remove(existing)
 		virtual[incoming.EventID] = canonical
+		semanticIndex.add(canonical)
 	}
 	if len(conflictCounts) > 0 {
 		result.Conflicts = sortedConflicts(conflictCounts)

@@ -145,6 +145,7 @@ CREATE TABLE IF NOT EXISTS usage_events (
 
 CREATE INDEX IF NOT EXISTS idx_usage_timestamp ON usage_events(timestamp_ms);
 CREATE INDEX IF NOT EXISTS idx_usage_session ON usage_events(session_key);
+CREATE INDEX IF NOT EXISTS idx_usage_session_time ON usage_events(session_key, timestamp_ms);
 CREATE INDEX IF NOT EXISTS idx_usage_channel_time ON usage_events(channel, timestamp_ms);
 CREATE INDEX IF NOT EXISTS idx_usage_source_time ON usage_events(source_product, timestamp_ms);
 CREATE INDEX IF NOT EXISTS idx_usage_model_time ON usage_events(model_normalized, timestamp_ms);
