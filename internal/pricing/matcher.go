@@ -13,6 +13,7 @@ type Event struct {
 	Channel               string
 	Provider              string
 	Model                 string
+	ServiceTier           string
 	SourceProduct         string
 	ObservabilityLevel    string
 	TokenAccountingMethod string
@@ -145,6 +146,9 @@ func matchesEffectiveWindow(rule *Rule, timestampMs int64) bool {
 
 func matchesCondition(condition Condition, ev Event) bool {
 	if condition.RequiresObservability != "" && !strings.EqualFold(condition.RequiresObservability, ev.ObservabilityLevel) {
+		return false
+	}
+	if len(condition.ServiceTier) > 0 && !matchesAnyPattern(condition.ServiceTier, strings.ToLower(strings.TrimSpace(ev.ServiceTier))) {
 		return false
 	}
 	if condition.MinInputSideTokens != nil {

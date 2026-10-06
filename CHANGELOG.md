@@ -13,10 +13,12 @@
 - 基于 IANA timezone 的逐事件 SQLite bucket function，正确处理历史 DST。
 - 配置级 pricing profile、即时 estimated cost、coverage、`policy_zero` 和稳定 unavailable error code。
 - 内置 pricing profile 增加 Grok 4.6 短上下文/长上下文估算规则。
+- 内置 pricing profile 增加 `origin-deepseek-v4-flash`、`origin-deepseek-v4-1-flash`、`gemini-3.8-flash`：按用户网关价格表 CNY ÷ 6.8 换算，v4-flash 为用户确认的 origin 档推导价（origin = 2× zj 档）。
 - 增加纯本地只读 Cursor Agent Exec adapter：导入显式 request usage、拆分 raw input/cache，并提供 `doctor cursor` 对账。
 - 增加纯本地只读 ZCode adapter：导入 `~/.zcode/cli/db/db.sqlite` 的 `model_usage` request usage，schema fail-closed，拆分 cache/reasoning 并验证 total 守恒；不读取正文、`model-io` 或 raw usage。
 - `/api/v2/analytics/timeseries` 支持 `cost=estimated|none`；Web Overview 的每日 Tokens 图默认 `cost=none`。
 - Web Overview 增加模型成本占比、计价覆盖，以及图表加载/失败状态。
+- 内置 pricing profile 增加 Claude Opus 5.5、Sonnet 5.5、Fable 5.1 / Mythos 5.1、Opus 4.1 / 4 legacy 以及 Opus 5.5 / 5 / 4.8 fast mode 规则（`-fast` 模型后缀）。
 
 ### Changed
 
@@ -30,6 +32,8 @@
 
 ### Fixed
 
+- Claude Sonnet 5 价格改为官方标准价 $2 / $10（原定 2026-09-01 涨价到 $3 / $15 已取消），并补齐 5m/1h 缓存写入价；此前缓存写入按 input 价计。
+- Claude Opus 5 补齐 1 小时缓存写入价；Claude Fable 5.1 缓存读取改为官方 $0.25（此前被 `claude-fable-5-*` 按 Fable 5 的 $1 匹配）；`claude-opus-4-1`、`claude-opus-4-2025*` 不再被 Opus 4.5+ 规则按 $5 计价；`claude-opus-4-8-fast` 不再按标准价计价。
 
 - model ID 尾部括号（如 `gpt-5.6-sol(max)`）和明确的 1M context 标记（如 `gpt-5.6-sol[1m]`）会统一剥掉后再识别和计价，思考档位与 context 标记不再影响价格规则；`import` 会按同一规则改写已入库的 `model_normalized` 并重算 content hash。
 - Codex append-only 日志后补 `task_complete` 不再改写既有 event identity；Claude optional/null 字段不再让合法 usage 静默丢失。

@@ -2,6 +2,7 @@ package pricing
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,7 +14,7 @@ func TestDefaultProfileLoads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load default profile: %v", err)
 	}
-	if profile.ID == "" || len(profile.Rules) == 0 {
+	if profile.ID != "agentledger-pricing-2026-10-05" || profile.CheckedAt != "2026-10-05" || len(profile.Rules) == 0 {
 		t.Fatalf("unexpected profile: %+v", profile)
 	}
 }
@@ -214,6 +215,22 @@ func TestDefaultProfilePricesCurrentModelIDs(t *testing.T) {
 		wantMicroUSD int64
 	}{
 		{
+			name: "gpt 6 astra short context",
+			event: Event{
+				Model: "gpt-6-astra", InputTokens: 50_000, OutputTokens: 50_000,
+				CacheCreationTokens: 50_000, CacheReadTokens: 50_000,
+			},
+			wantRuleID: "gpt-6-astra", wantMicroUSD: 3_675_000,
+		},
+		{
+			name: "gpt 6 astra long context",
+			event: Event{
+				Model: "gpt-6-astra", InputTokens: 100_001, OutputTokens: 100_000,
+				CacheCreationTokens: 72_000, CacheReadTokens: 100_000,
+			},
+			wantRuleID: "gpt-6-astra-long", wantMicroUSD: 11_500_020,
+		},
+		{
 			name: "gpt 5.6 sol short context",
 			event: Event{
 				Model:               "gpt-5.6-sol",
@@ -223,7 +240,7 @@ func TestDefaultProfilePricesCurrentModelIDs(t *testing.T) {
 				CacheReadTokens:     50_000,
 			},
 			wantRuleID:   "gpt-5.6-sol",
-			wantMicroUSD: 2_087_500,
+			wantMicroUSD: 1_470_000,
 		},
 		{
 			name: "gpt 5.6 terra short context",
@@ -250,34 +267,82 @@ func TestDefaultProfilePricesCurrentModelIDs(t *testing.T) {
 			wantMicroUSD: 83_500,
 		},
 		{
+			name: "gpt 6 sol short context",
+			event: Event{
+				Model:               "gpt-6-sol",
+				InputTokens:         50_000,
+				OutputTokens:        50_000,
+				CacheCreationTokens: 50_000,
+				CacheReadTokens:     50_000,
+			},
+			wantRuleID:   "gpt-6-sol",
+			wantMicroUSD: 735_000,
+		},
+		{
+			name: "gpt 6 sol long context",
+			event: Event{
+				Model:               "gpt-6-sol",
+				InputTokens:         100_001,
+				OutputTokens:        100_000,
+				CacheCreationTokens: 72_000,
+				CacheReadTokens:     100_000,
+			},
+			wantRuleID:   "gpt-6-sol-long",
+			wantMicroUSD: 2_300_004,
+		},
+		{
+			name: "gpt 6 luna short context",
+			event: Event{
+				Model:               "gpt-6-luna",
+				InputTokens:         50_000,
+				OutputTokens:        50_000,
+				CacheCreationTokens: 50_000,
+				CacheReadTokens:     50_000,
+			},
+			wantRuleID:   "gpt-6-luna",
+			wantMicroUSD: 36_750,
+		},
+		{
+			name: "gpt 6 luna long context",
+			event: Event{
+				Model:               "gpt-6-luna",
+				InputTokens:         100_001,
+				OutputTokens:        100_000,
+				CacheCreationTokens: 72_000,
+				CacheReadTokens:     100_000,
+			},
+			wantRuleID:   "gpt-6-luna-long",
+			wantMicroUSD: 115_000,
+		},
+		{
 			name: "gpt 5.6 sol long context",
 			event: Event{
 				Model:               "gpt-5.6-sol",
-				InputTokens:         100_000,
+				InputTokens:         100_001,
 				OutputTokens:        100_000,
 				CacheCreationTokens: 72_000,
 				CacheReadTokens:     100_000,
 			},
 			wantRuleID:   "gpt-5.6-sol-long",
-			wantMicroUSD: 6_500_000,
+			wantMicroUSD: 4_600_008,
 		},
 		{
 			name: "gpt 5.6 terra long context",
 			event: Event{
 				Model:               "gpt-5.6-terra",
-				InputTokens:         100_000,
+				InputTokens:         100_001,
 				OutputTokens:        100_000,
 				CacheCreationTokens: 72_000,
 				CacheReadTokens:     100_000,
 			},
 			wantRuleID:   "gpt-5.6-terra-long",
-			wantMicroUSD: 2_600_000,
+			wantMicroUSD: 2_600_004,
 		},
 		{
 			name: "gpt 5.6 luna long context",
 			event: Event{
 				Model:               "gpt-5.6-luna",
-				InputTokens:         100_000,
+				InputTokens:         100_001,
 				OutputTokens:        100_000,
 				CacheCreationTokens: 72_000,
 				CacheReadTokens:     100_000,
@@ -289,25 +354,25 @@ func TestDefaultProfilePricesCurrentModelIDs(t *testing.T) {
 			name: "gpt 5.5 long context",
 			event: Event{
 				Model:               "gpt-5.5",
-				InputTokens:         100_000,
+				InputTokens:         100_001,
 				OutputTokens:        100_000,
 				CacheCreationTokens: 72_000,
 				CacheReadTokens:     100_000,
 			},
 			wantRuleID:   "gpt-5.5-long",
-			wantMicroUSD: 6_320_000,
+			wantMicroUSD: 6_320_010,
 		},
 		{
 			name: "gpt 5.4 long context",
 			event: Event{
 				Model:               "gpt-5.4",
-				InputTokens:         100_000,
+				InputTokens:         100_001,
 				OutputTokens:        100_000,
 				CacheCreationTokens: 72_000,
 				CacheReadTokens:     100_000,
 			},
 			wantRuleID:   "gpt-5.4-long",
-			wantMicroUSD: 3_160_000,
+			wantMicroUSD: 3_160_005,
 		},
 		{
 			name: "glm 5.2 keeps explicit free cache write",
@@ -320,6 +385,42 @@ func TestDefaultProfilePricesCurrentModelIDs(t *testing.T) {
 			},
 			wantRuleID:   "glm-5.2",
 			wantMicroUSD: 606_000,
+		},
+		{
+			name: "glm 5.3 original list price",
+			event: Event{
+				Model:               "glm-5.3",
+				InputTokens:         100_000,
+				OutputTokens:        100_000,
+				CacheCreationTokens: 100_000,
+				CacheReadTokens:     100_000,
+			},
+			wantRuleID:   "glm-5.3",
+			wantMicroUSD: 746_000,
+		},
+		{
+			name: "ox alpha uses glm 5.3 flash original list price",
+			event: Event{
+				Model:               "ox-alpha",
+				InputTokens:         100_000,
+				OutputTokens:        100_000,
+				CacheCreationTokens: 100_000,
+				CacheReadTokens:     100_000,
+			},
+			wantRuleID:   "glm-5.3-flash",
+			wantMicroUSD: 83_000,
+		},
+		{
+			name: "deepseek v4 pro dated alias uses peak price",
+			event: Event{
+				Model:               "deepseek-v4-pro-ga-260813",
+				InputTokens:         100_000,
+				OutputTokens:        100_000,
+				CacheCreationTokens: 100_000,
+				CacheReadTokens:     100_000,
+			},
+			wantRuleID:   "deepseek-v4-pro",
+			wantMicroUSD: 664_400,
 		},
 		{
 			name: "hy3 uses tencent cloud provider price",
@@ -394,6 +495,18 @@ func TestDefaultProfilePricesCurrentModelIDs(t *testing.T) {
 			wantMicroUSD: 1_700_000,
 		},
 		{
+			name: "grok 4.6 build alias long context",
+			event: Event{
+				Model:               "grok-4.6-build",
+				InputTokens:         50_000,
+				OutputTokens:        100_000,
+				CacheCreationTokens: 50_000,
+				CacheReadTokens:     100_000,
+			},
+			wantRuleID:   "grok-4.6-long",
+			wantMicroUSD: 1_700_000,
+		},
+		{
 			name: "grok 4.5 short context",
 			event: Event{
 				Model:               "grok-4.5",
@@ -454,7 +567,7 @@ func TestDefaultProfilePricesCurrentModelIDs(t *testing.T) {
 			wantMicroUSD: 3_675_000,
 		},
 		{
-			name: "claude sonnet 5 intro pricing",
+			name: "claude sonnet 5 launch pricing",
 			event: Event{
 				TimestampMs:         time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC).UnixMilli(),
 				Model:               "claude-sonnet-5",
@@ -463,11 +576,11 @@ func TestDefaultProfilePricesCurrentModelIDs(t *testing.T) {
 				CacheCreationTokens: 100_000,
 				CacheReadTokens:     100_000,
 			},
-			wantRuleID:   "claude-sonnet-5-intro",
-			wantMicroUSD: 1_420_000,
+			wantRuleID:   "claude-sonnet-5",
+			wantMicroUSD: 1_470_000,
 		},
 		{
-			name: "claude sonnet 5 standard pricing",
+			name: "claude sonnet 5 keeps launch pricing after cancelled increase",
 			event: Event{
 				TimestampMs:         time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC).UnixMilli(),
 				Model:               "claude-sonnet-5",
@@ -476,8 +589,110 @@ func TestDefaultProfilePricesCurrentModelIDs(t *testing.T) {
 				CacheCreationTokens: 100_000,
 				CacheReadTokens:     100_000,
 			},
-			wantRuleID:   "claude-sonnet-5-standard",
-			wantMicroUSD: 2_130_000,
+			wantRuleID:   "claude-sonnet-5",
+			wantMicroUSD: 1_470_000,
+		},
+		{
+			name: "claude sonnet 5.5 official pricing",
+			event: Event{
+				Model:               "claude-sonnet-5-5",
+				InputTokens:         100_000,
+				OutputTokens:        100_000,
+				CacheCreationTokens: 100_000,
+				CacheReadTokens:     100_000,
+			},
+			wantRuleID:   "claude-sonnet-5-5",
+			wantMicroUSD: 1_470_000,
+		},
+		{
+			name: "claude opus 5.5 official pricing",
+			event: Event{
+				Model:               "claude-opus-5-5",
+				InputTokens:         100_000,
+				OutputTokens:        100_000,
+				CacheCreationTokens: 100_000,
+				CacheReadTokens:     100_000,
+			},
+			wantRuleID:   "claude-opus-5-5",
+			wantMicroUSD: 2_920_000,
+		},
+		{
+			name: "claude fable 5.1 discounted cache reads",
+			event: Event{
+				Model:               "claude-fable-5-1",
+				InputTokens:         100_000,
+				OutputTokens:        100_000,
+				CacheCreationTokens: 100_000,
+				CacheReadTokens:     100_000,
+			},
+			wantRuleID:   "claude-fable-5-1",
+			wantMicroUSD: 7_275_000,
+		},
+		{
+			name: "claude mythos 5.1 shares fable 5.1 pricing",
+			event: Event{
+				Model:           "claude-mythos-5-1",
+				CacheReadTokens: 1_000_000,
+			},
+			wantRuleID:   "claude-fable-5-1",
+			wantMicroUSD: 250_000,
+		},
+		{
+			name: "claude opus 4.1 legacy pricing",
+			event: Event{
+				Model:               "claude-opus-4-1",
+				InputTokens:         100_000,
+				OutputTokens:        100_000,
+				CacheCreationTokens: 100_000,
+				CacheReadTokens:     100_000,
+			},
+			wantRuleID:   "claude-opus-4-legacy",
+			wantMicroUSD: 11_025_000,
+		},
+		{
+			name: "claude opus 4 dated id uses legacy pricing",
+			event: Event{
+				Model:       "claude-opus-4-20250514",
+				InputTokens: 1_000_000,
+			},
+			wantRuleID:   "claude-opus-4-legacy",
+			wantMicroUSD: 15_000_000,
+		},
+		{
+			name: "claude opus 4.8 standard pricing",
+			event: Event{
+				Model:               "claude-opus-4-8",
+				InputTokens:         100_000,
+				OutputTokens:        100_000,
+				CacheCreationTokens: 100_000,
+				CacheReadTokens:     100_000,
+			},
+			wantRuleID:   "claude-opus-4",
+			wantMicroUSD: 3_675_000,
+		},
+		{
+			name: "claude opus 4.8 fast mode",
+			event: Event{
+				Model:               "claude-opus-4-8-fast",
+				InputTokens:         100_000,
+				OutputTokens:        100_000,
+				CacheCreationTokens: 100_000,
+				CacheReadTokens:     100_000,
+			},
+			wantRuleID:   "claude-opus-4.8-fast",
+			wantMicroUSD: 7_350_000,
+		},
+		{
+			name: "claude opus 5.5 fast mode",
+			event: Event{
+				Model:               "claude-opus-5-5-fast",
+				InputTokens:         100_000,
+				OutputTokens:        100_000,
+				CacheCreationTokens: 100_000,
+				CacheReadTokens:     100_000,
+			},
+			wantRuleID:   "claude-opus-5-5-fast",
+			wantMicroUSD: 5_840_000,
 		},
 		{
 			name: "codex spark is explicitly free",
@@ -526,15 +741,26 @@ func TestDefaultProfileUsesExactAliasesAndContextBoundaries(t *testing.T) {
 		wantPriced bool
 	}{
 		{name: "sol canonical alias", event: Event{Model: "gpt-5.6", InputTokens: 1}, wantRuleID: "gpt-5.6-sol", wantPriced: true},
+		{name: "astra at 272k stays short", event: Event{Model: "gpt-6-astra", InputTokens: 272_000}, wantRuleID: "gpt-6-astra", wantPriced: true},
+		{name: "astra above 272k is long", event: Event{Model: "gpt-6-astra", InputTokens: 272_001}, wantRuleID: "gpt-6-astra-long", wantPriced: true},
+		{name: "astra threshold includes cache", event: Event{Model: "gpt-6-astra", InputTokens: 272_000, CacheReadTokens: 1}, wantRuleID: "gpt-6-astra-long", wantPriced: true},
+		{name: "astra context suffix", event: Event{Model: "gpt-6-astra[1m]", InputTokens: 1}, wantRuleID: "gpt-6-astra", wantPriced: true},
+		{name: "no fuzzy astra match", event: Event{Model: "gpt-6-astra-preview", InputTokens: 1}, wantPriced: false},
 		{name: "case and reasoning suffix", event: Event{Model: "GPT-5.6-SOL (reasoning=xhigh)", InputTokens: 1}, wantRuleID: "gpt-5.6-sol", wantPriced: true},
 		{name: "sol max suffix", event: Event{Model: "gpt-5.6-sol(max)", InputTokens: 1}, wantRuleID: "gpt-5.6-sol", wantPriced: true},
 		{name: "any parenthetical suffix", event: Event{Model: "gpt-5.6-sol(custom-effort)", InputTokens: 1}, wantRuleID: "gpt-5.6-sol", wantPriced: true},
 		{name: "one million context suffix", event: Event{Model: "gpt-5.6-sol[1m]", InputTokens: 1}, wantRuleID: "gpt-5.6-sol", wantPriced: true},
 		{name: "gpt threshold minus one", event: Event{Model: "gpt-5.5", InputTokens: 271_999}, wantRuleID: "gpt-5.5", wantPriced: true},
-		{name: "gpt threshold", event: Event{Model: "gpt-5.5", InputTokens: 272_000}, wantRuleID: "gpt-5.5-long", wantPriced: true},
-		{name: "gpt threshold includes cache input", event: Event{Model: "gpt-5.5", InputTokens: 271_999, CacheReadTokens: 1}, wantRuleID: "gpt-5.5-long", wantPriced: true},
+		{name: "gpt threshold stays short", event: Event{Model: "gpt-5.5", InputTokens: 272_000}, wantRuleID: "gpt-5.5", wantPriced: true},
+		{name: "gpt threshold above is long", event: Event{Model: "gpt-5.5", InputTokens: 272_001}, wantRuleID: "gpt-5.5-long", wantPriced: true},
+		{name: "gpt threshold includes cache input", event: Event{Model: "gpt-5.5", InputTokens: 272_000, CacheReadTokens: 1}, wantRuleID: "gpt-5.5-long", wantPriced: true},
+		{name: "sol 6 at 272k stays short", event: Event{Model: "gpt-6-sol", InputTokens: 272_000}, wantRuleID: "gpt-6-sol", wantPriced: true},
+		{name: "sol 6 above 272k is long", event: Event{Model: "gpt-6-sol", InputTokens: 272_001}, wantRuleID: "gpt-6-sol-long", wantPriced: true},
+		{name: "luna 6 above 272k is long", event: Event{Model: "gpt-6-luna", InputTokens: 272_001}, wantRuleID: "gpt-6-luna-long", wantPriced: true},
 		{name: "grok 4.6 threshold minus one", event: Event{Model: "grok-4.6", InputTokens: 199_999}, wantRuleID: "grok-4.6", wantPriced: true},
 		{name: "grok 4.6 threshold", event: Event{Model: "grok-4.6", InputTokens: 200_000}, wantRuleID: "grok-4.6-long", wantPriced: true},
+		{name: "grok 4.6 build threshold minus one", event: Event{Model: "grok-4.6-build", InputTokens: 199_999}, wantRuleID: "grok-4.6", wantPriced: true},
+		{name: "grok 4.6 build threshold", event: Event{Model: "grok-4.6-build", InputTokens: 200_000}, wantRuleID: "grok-4.6-long", wantPriced: true},
 		{name: "grok threshold minus one", event: Event{Model: "grok-4.5", InputTokens: 199_999}, wantRuleID: "grok-4.5", wantPriced: true},
 		{name: "grok threshold", event: Event{Model: "grok-4.5", InputTokens: 200_000}, wantRuleID: "grok-4.5-long", wantPriced: true},
 		{name: "grok official alias", event: Event{Model: "grok-build-latest", InputTokens: 1}, wantRuleID: "grok-4.5", wantPriced: true},
@@ -554,6 +780,84 @@ func TestDefaultProfileUsesExactAliasesAndContextBoundaries(t *testing.T) {
 			}
 			if estimate.Priced != tt.wantPriced || estimate.RuleID != tt.wantRuleID {
 				t.Fatalf("expected priced=%v rule=%q, got %+v", tt.wantPriced, tt.wantRuleID, estimate)
+			}
+		})
+	}
+}
+
+func TestDefaultProfilePricesFastServiceTier(t *testing.T) {
+	profile, err := LoadDefaultProfile()
+	if err != nil {
+		t.Fatalf("load default profile: %v", err)
+	}
+	estimator, err := NewEstimator(profile)
+	if err != nil {
+		t.Fatalf("estimator: %v", err)
+	}
+
+	tests := []struct {
+		name         string
+		event        Event
+		wantRuleID   string
+		wantMicroUSD int64
+	}{
+		{
+			name: "astra fast short context",
+			event: Event{
+				Model: "gpt-6-astra", ServiceTier: "fast",
+				InputTokens: 50_000, OutputTokens: 50_000,
+				CacheCreationTokens: 50_000, CacheReadTokens: 50_000,
+			},
+			wantRuleID: "gpt-6-astra-fast", wantMicroUSD: 7_350_000,
+		},
+		{
+			name: "astra priority tier long context",
+			event: Event{
+				Model: "gpt-6-astra", ServiceTier: "priority",
+				InputTokens: 100_001, OutputTokens: 100_000,
+				CacheCreationTokens: 72_000, CacheReadTokens: 100_000,
+			},
+			wantRuleID: "gpt-6-astra-fast-long", wantMicroUSD: 23_000_040,
+		},
+		{
+			name: "luna 5.6 fast short context",
+			event: Event{
+				Model: "gpt-5.6-luna", ServiceTier: "fast",
+				InputTokens: 50_000, OutputTokens: 50_000,
+				CacheCreationTokens: 50_000, CacheReadTokens: 50_000,
+			},
+			wantRuleID: "gpt-5.6-luna-fast", wantMicroUSD: 167_000,
+		},
+		{
+			name: "sol canonical alias fast tier",
+			event: Event{
+				Model: "gpt-5.6", ServiceTier: "fast",
+				InputTokens: 1, TotalTokens: 1,
+			},
+			wantRuleID: "gpt-5.6-sol-fast", wantMicroUSD: 8,
+		},
+		{
+			name: "model without fast rules keeps standard rate",
+			event: Event{
+				Model: "glm-5.2", ServiceTier: "fast",
+				InputTokens: 100_000, OutputTokens: 100_000,
+				CacheCreationTokens: 100_000, CacheReadTokens: 100_000,
+			},
+			wantRuleID: "glm-5.2", wantMicroUSD: 606_000,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			estimate, err := estimator.Estimate(tt.event)
+			if err != nil {
+				t.Fatalf("estimate: %v", err)
+			}
+			if !estimate.Priced || estimate.RuleID != tt.wantRuleID {
+				t.Fatalf("expected priced rule %q, got %+v", tt.wantRuleID, estimate)
+			}
+			if estimate.CostMicroUSD != tt.wantMicroUSD {
+				t.Fatalf("expected %d micro USD, got %d", tt.wantMicroUSD, estimate.CostMicroUSD)
 			}
 		})
 	}
@@ -803,4 +1107,34 @@ func testProfile(t *testing.T) *Profile {
 		t.Fatalf("decode profile: %v", err)
 	}
 	return profile
+}
+
+func TestDefaultProfileClaudeRulesPriceBothCacheWriteTTLs(t *testing.T) {
+	profile, err := LoadDefaultProfile()
+	if err != nil {
+		t.Fatalf("load default profile: %v", err)
+	}
+	checked := 0
+	for _, rule := range profile.Rules {
+		isClaude := false
+		for _, pattern := range rule.ModelPatterns {
+			if strings.Contains(strings.ToLower(pattern), "claude-") {
+				isClaude = true
+				break
+			}
+		}
+		if !isClaude {
+			continue
+		}
+		checked++
+		if rule.Rates.CacheWrite5m == nil || rule.Rates.CacheWrite1h == nil {
+			t.Errorf("claude rule %q must define both cache_write_5m and cache_write_1h", rule.ID)
+		}
+		if rule.Rates.CacheRead == nil {
+			t.Errorf("claude rule %q must define cache_read", rule.ID)
+		}
+	}
+	if checked == 0 {
+		t.Fatal("expected claude rules in the default profile")
+	}
 }
