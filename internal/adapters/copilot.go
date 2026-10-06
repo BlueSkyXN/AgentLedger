@@ -1,7 +1,6 @@
 package adapters
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -177,16 +176,20 @@ func (ctx *copilotSessionContext) observeContext(context map[string]interface{})
 }
 
 func (a *CopilotAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, error) {
+	records, _, err := a.ParseFileWithWarnings(path)
+	return records, err
+}
+
+func (a *CopilotAdapter) ParseFileWithWarnings(path string) ([]*fingerprint.ParsedRecord, []string, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	defer f.Close()
 
 	var candidates []copilotCandidate
 	sessionContext := copilotSessionContext{SessionPathID: copilotSessionIDFromPath(path)}
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 10*1024*1024), 10*1024*1024)
+	scanner := newJSONLLineReader(f)
 	lineNum := 0
 	for scanner.Scan() {
 		lineNum++
@@ -209,7 +212,7 @@ func (a *CopilotAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, er
 		sessionContext.observe(obj, path)
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	candidates = dedupeCopilotCandidates(candidates)
@@ -217,7 +220,7 @@ func (a *CopilotAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, er
 	for _, candidate := range candidates {
 		records = append(records, candidate.record)
 	}
-	return records, nil
+	return records, oversizedLineWarnings(scanner.SkippedLines()), nil
 }
 
 type copilotCandidate struct {

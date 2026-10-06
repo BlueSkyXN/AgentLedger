@@ -70,6 +70,46 @@ func TestReconcileDuplicateSupplementAndConflict(t *testing.T) {
 	}
 }
 
+func TestUpsertEventSkipsSemanticDuplicateFromRewrittenSource(t *testing.T) {
+	database := openTestDatabase(t)
+	defer database.Close()
+
+	original := semanticCodexEvent(t, "original-record")
+	if status, err := database.UpsertEvent(original); err != nil || status != ReconcileInserted {
+		t.Fatalf("insert status=%q err=%v", status, err)
+	}
+
+	rewritten := semanticCodexEvent(t, "rewritten-record")
+	rewritten.SourceFile = "/private/rollout.jsonl"
+	rewritten.LineNumber = 4321
+	status, err := database.UpsertEvent(rewritten)
+	if err != nil || status != ReconcileSkipped {
+		t.Fatalf("semantic duplicate status=%q err=%v", status, err)
+	}
+	var count int
+	if err := database.Conn().QueryRow(`SELECT COUNT(*) FROM usage_events`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("semantic duplicate inserted a row: count=%d", count)
+	}
+
+	distinct := testEvent("distinct-record", "content-distinct", 11)
+	distinct.IdentityStrategy = "session_record"
+	if status, err := database.UpsertEvent(distinct); err != nil || status != ReconcileInserted {
+		t.Fatalf("distinct record status=%q err=%v", status, err)
+	}
+
+	zeroFirst := testEvent("zero-meta-a", "content-zero-a", 0)
+	zeroSecond := testEvent("zero-meta-b", "content-zero-b", 0)
+	if status, err := database.UpsertEvent(zeroFirst); err != nil || status != ReconcileInserted {
+		t.Fatalf("zero-token insert status=%q err=%v", status, err)
+	}
+	if status, err := database.UpsertEvent(zeroSecond); err != nil || status != ReconcileInserted {
+		t.Fatalf("zero-token meta events must stay distinct: status=%q err=%v", status, err)
+	}
+}
+
 func TestAnnotatedModelAliasIsCanonicalized(t *testing.T) {
 	database := openTestDatabase(t)
 	defer database.Close()
@@ -430,6 +470,40 @@ func TestValidateAccountingProfiles(t *testing.T) {
 	gemini.TotalTokens = 16
 	if err := ValidateEvent(gemini); !IsRejectError(err) {
 		t.Fatalf("expected Gemini accounting rejection, got %v", err)
+	}
+
+	zcode := testEvent("zcode-accounting", "zcode-hash", 12)
+	zcode.Channel = "zcode"
+	zcode.SourceProduct = "zcode-cli-db"
+	zcode.TokenAccountingMethod = model.AccZCodeModelUsage
+	zcode.InputTokens = 4
+	zcode.OutputTokens = 5
+	zcode.ReasoningTokens = 2
+	zcode.CacheCreationTokens = 1
+	zcode.CacheReadTokens = 2
+	zcode.TotalTokens = 12
+	rawInput := int64(7)
+	sourceTotal := int64(12)
+	zcode.RawInputTokens = &rawInput
+	zcode.SourceTotalTokens = &sourceTotal
+	if err := ValidateEvent(zcode); err != nil {
+		t.Fatalf("valid ZCode accounting: %v", err)
+	}
+	zcode.TotalTokens = 13
+	if err := ValidateEvent(zcode); !IsRejectError(err) {
+		t.Fatalf("expected ZCode total rejection, got %v", err)
+	}
+	zcode.TotalTokens = 12
+	shiftedRawInput := int64(8)
+	zcode.RawInputTokens = &shiftedRawInput
+	if err := ValidateEvent(zcode); !IsRejectError(err) {
+		t.Fatalf("expected ZCode raw input rejection, got %v", err)
+	}
+	zcode.RawInputTokens = &rawInput
+	excessReasoning := int64(6)
+	zcode.ReasoningTokens = excessReasoning
+	if err := ValidateEvent(zcode); !IsRejectError(err) {
+		t.Fatalf("expected ZCode reasoning-above-output rejection, got %v", err)
 	}
 
 	codexPartial := testEvent("codex-partial", "codex-partial-hash", 10)

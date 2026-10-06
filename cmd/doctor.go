@@ -47,6 +47,7 @@ var doctorCmd = &cobra.Command{
 			"copilot":   &cfg.Agents.Copilot,
 			"gemini":    &cfg.Agents.Gemini,
 			"workbuddy": &cfg.Agents.WorkBuddy,
+			"zcode":     &cfg.Agents.ZCode,
 		}
 
 		allAdapters := adapters.AllAdapters()

@@ -23,6 +23,7 @@ func contentSHA256ForEvent(event *model.UsageEvent) (string, error) {
 		TotalTokens:           event.TotalTokens,
 		SourceTotalTokens:     event.SourceTotalTokens,
 		RawInputTokens:        event.RawInputTokens,
+		CacheCreation1hTokens: event.CacheCreation1hTokens,
 		SourceProduct:         event.SourceProduct,
 		ObservabilityLevel:    event.ObservabilityLevel,
 		TokenAccountingMethod: event.TokenAccountingMethod,

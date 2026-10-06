@@ -1,7 +1,6 @@
 package adapters
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -39,15 +38,19 @@ func (a *ClaudeAdapter) Discover(paths []string) ([]string, error) {
 }
 
 func (a *ClaudeAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, error) {
+	records, _, err := a.ParseFileWithWarnings(path)
+	return records, err
+}
+
+func (a *ClaudeAdapter) ParseFileWithWarnings(path string) ([]*fingerprint.ParsedRecord, []string, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open %s: %w", path, err)
+		return nil, nil, fmt.Errorf("failed to open %s: %w", path, err)
 	}
 	defer f.Close()
 
 	var records []*fingerprint.ParsedRecord
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 10*1024*1024), 10*1024*1024)
+	scanner := newJSONLLineReader(f)
 	lineNum := 0
 
 	for scanner.Scan() {
@@ -113,6 +116,7 @@ func (a *ClaudeAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, err
 			OutputTokens:          getInt64(candidate.usage, "output_tokens"),
 			CacheCreationTokens:   getInt64(candidate.usage, "cache_creation_input_tokens"),
 			CacheReadTokens:       getInt64(candidate.usage, "cache_read_input_tokens"),
+			CacheCreation1hTokens: claudeCacheCreation1hTokens(candidate.usage),
 			IsSidechain:           candidate.isSidechain,
 			UsageSpeed:            getString(candidate.usage, "speed"),
 			SourceProduct:         "claude-code",
@@ -128,7 +132,7 @@ func (a *ClaudeAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, err
 		records = append(records, rec)
 	}
 
-	return records, scanner.Err()
+	return records, oversizedLineWarnings(scanner.SkippedLines()), scanner.Err()
 }
 
 func (a *ClaudeAdapter) PostProcessRecords(records []*fingerprint.ParsedRecord) []*fingerprint.ParsedRecord {
@@ -234,6 +238,31 @@ func claudeUsageTotal(usage map[string]interface{}) int64 {
 		getInt64(usage, "output_tokens") +
 		getInt64(usage, "cache_creation_input_tokens") +
 		getInt64(usage, "cache_read_input_tokens")
+}
+
+// claudeCacheCreation1hTokens returns the 1-hour TTL share of
+// cache_creation_input_tokens from usage.cache_creation. It returns nil when
+// the source carries no TTL split, so pricing falls back to the profile
+// assumption instead of treating unknown writes as 5-minute writes.
+func claudeCacheCreation1hTokens(usage map[string]interface{}) *int64 {
+	split := getMap(usage, "cache_creation")
+	if split == nil {
+		return nil
+	}
+	_, has1h := split["ephemeral_1h_input_tokens"]
+	_, has5m := split["ephemeral_5m_input_tokens"]
+	if !has1h && !has5m {
+		return nil
+	}
+	oneHour := getInt64(split, "ephemeral_1h_input_tokens")
+	if oneHour < 0 {
+		oneHour = 0
+	}
+	// The split is a breakdown of the canonical total; never let it exceed it.
+	if total := getInt64(usage, "cache_creation_input_tokens"); oneHour > total {
+		oneHour = total
+	}
+	return &oneHour
 }
 
 func normalizeClaudeModel(model, speed string) string {

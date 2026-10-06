@@ -55,8 +55,9 @@ type Rule struct {
 }
 
 type Condition struct {
-	MinInputSideTokens    *int64 `json:"min_input_side_tokens"`
-	RequiresObservability string `json:"requires_observability"`
+	MinInputSideTokens    *int64   `json:"min_input_side_tokens"`
+	RequiresObservability string   `json:"requires_observability"`
+	ServiceTier           []string `json:"service_tier"`
 }
 
 type Rates struct {

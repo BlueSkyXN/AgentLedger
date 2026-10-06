@@ -66,6 +66,7 @@ var importCmd = &cobra.Command{
 			"gemini":    &cfg.Agents.Gemini,
 			"copilot":   &cfg.Agents.Copilot,
 			"workbuddy": &cfg.Agents.WorkBuddy,
+			"zcode":     &cfg.Agents.ZCode,
 		}
 
 		for _, adapter := range allAdapters {
@@ -452,6 +453,7 @@ func importParsedRecords(database *db.Database, adapterName string, records []*f
 			ModelIsFallback:       modelIsFallback,
 			SourceTotalTokens:     rec.SourceTotalTokens,
 			RawInputTokens:        rec.RawInputTokens,
+			CacheCreation1hTokens: rec.CacheCreation1hTokens,
 			TokenAccountingMethod: accountingMethod,
 			AccountingProfile:     rec.AccountingProfile,
 			TimestampMs:           rec.TimestampMs,
@@ -526,6 +528,8 @@ func sourceProductForAgent(agent string) string {
 		return "gemini-cli"
 	case "workbuddy":
 		return "workbuddy"
+	case "zcode":
+		return "zcode-cli-db"
 	default:
 		return agent
 	}
@@ -533,7 +537,7 @@ func sourceProductForAgent(agent string) string {
 
 func defaultObservability(agent string) string {
 	switch agent {
-	case "claude", "codex", "copilot", "workbuddy":
+	case "claude", "codex", "copilot", "workbuddy", "zcode":
 		return "full"
 	case "cursor":
 		return "partial"
@@ -548,6 +552,8 @@ func defaultAccountingMethod(agent string) string {
 		return model.AccClaudeUsageSum
 	case "cursor":
 		return model.AccCursorAgentExec
+	case "zcode":
+		return model.AccZCodeModelUsage
 	default:
 		return ""
 	}
@@ -585,7 +591,7 @@ func totalForAccountingProfile(event *model.UsageEvent) int64 {
 	switch event.TokenAccountingMethod {
 	case model.AccCodexLastTokenUsage, model.AccCodexTotalDelta, model.AccCodexHeadlessUsage:
 		return event.InputTokens + event.CacheCreationTokens + event.CacheReadTokens + maxInt64(event.OutputTokens, event.ReasoningTokens)
-	case model.AccCursorAgentExec, model.AccWorkBuddyRawUsage:
+	case model.AccCursorAgentExec, model.AccWorkBuddyRawUsage, model.AccZCodeModelUsage:
 		return event.InputTokens + event.OutputTokens + event.CacheCreationTokens + event.CacheReadTokens
 	default:
 		return event.InputTokens + event.OutputTokens + event.ReasoningTokens + event.CacheCreationTokens + event.CacheReadTokens

@@ -13,6 +13,7 @@ type Event struct {
 	Channel               string
 	Provider              string
 	Model                 string
+	ServiceTier           string
 	SourceProduct         string
 	ObservabilityLevel    string
 	TokenAccountingMethod string
@@ -20,6 +21,9 @@ type Event struct {
 	InputTokens           int64
 	OutputTokens          int64
 	CacheCreationTokens   int64
+	// CacheCreation1hTokens is the 1-hour TTL share of CacheCreationTokens;
+	// nil means the TTL split is unknown and cache_write_assumption applies.
+	CacheCreation1hTokens *int64
 	CacheReadTokens       int64
 	ReasoningTokens       int64
 	TotalTokens           int64
@@ -145,6 +149,9 @@ func matchesEffectiveWindow(rule *Rule, timestampMs int64) bool {
 
 func matchesCondition(condition Condition, ev Event) bool {
 	if condition.RequiresObservability != "" && !strings.EqualFold(condition.RequiresObservability, ev.ObservabilityLevel) {
+		return false
+	}
+	if len(condition.ServiceTier) > 0 && !matchesAnyPattern(condition.ServiceTier, strings.ToLower(strings.TrimSpace(ev.ServiceTier))) {
 		return false
 	}
 	if condition.MinInputSideTokens != nil {

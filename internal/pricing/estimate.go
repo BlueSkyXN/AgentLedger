@@ -27,7 +27,7 @@ func (e *Estimator) EstimateMatch(ev Event, match Match) (Estimate, error) {
 	if match.Rule == nil {
 		return Estimate{Confidence: "missing", Resolution: match.Resolution, MissingReason: match.MissingReason}, nil
 	}
-	cost, pricedTokens, err := estimateWithRule(ev, match.Rule, e.profile)
+	cost, pricedTokens, approximated, err := estimateWithRule(ev, match.Rule, e.profile)
 	if err != nil {
 		return Estimate{}, err
 	}
@@ -44,7 +44,7 @@ func (e *Estimator) EstimateMatch(ev Event, match Match) (Estimate, error) {
 		estimate.Resolution = ResolutionMissingPricingRate
 		estimate.MissingReason = ResolutionMissingPricingRate
 	}
-	if pricedTokens < eventTokens(ev) {
+	if pricedTokens < eventTokens(ev) || approximated {
 		estimate.Confidence = combineConfidence(estimate.Confidence, "partial")
 	}
 	if match.Resolution == ResolutionPolicyZero {
@@ -54,24 +54,28 @@ func (e *Estimator) EstimateMatch(ev Event, match Match) (Estimate, error) {
 	return estimate, nil
 }
 
-func estimateWithRule(ev Event, rule *Rule, profile *Profile) (int64, int64, error) {
+type pricedPart struct {
+	name   string
+	tokens int64
+	rate   *Rate
+}
+
+// estimateWithRule returns the cost, the number of tokens covered by a rate,
+// and whether any bucket was priced with a fallback rate (a lower bound).
+func estimateWithRule(ev Event, rule *Rule, profile *Profile) (int64, int64, bool, error) {
 	var total int64
 	var pricedTokens int64
 	pricedOutputTokens := outputTokensForPricing(ev, rule, profile)
-	parts := []struct {
-		name   string
-		tokens int64
-		rate   *Rate
-	}{
+	cacheParts, approximated := cacheCreationParts(ev, rule, profile)
+	parts := append([]pricedPart{
 		{"input", ev.InputTokens, rule.Rates.Input},
 		{"output", pricedOutputTokens, rule.Rates.Output},
 		{"cache_read", ev.CacheReadTokens, cacheReadRate(rule)},
-		{"cache_creation", ev.CacheCreationTokens, cacheCreationRate(rule, profile)},
-	}
+	}, cacheParts...)
 	for _, part := range parts {
 		value, err := part.rate.MicroUSD(part.tokens)
 		if err != nil {
-			return 0, 0, fmt.Errorf("%s cost: %w", part.name, err)
+			return 0, 0, false, fmt.Errorf("%s cost: %w", part.name, err)
 		}
 		total += value
 		if part.rate != nil && part.rate.raw != "" {
@@ -83,7 +87,41 @@ func estimateWithRule(ev Event, rule *Rule, profile *Profile) (int64, int64, err
 	} else if pricedTokens == 0 && eventTotal > 0 && allTokenRatesExplicitZero(rule, profile) {
 		pricedTokens = eventTotal
 	}
-	return total, pricedTokens, nil
+	return total, pricedTokens, approximated, nil
+}
+
+// cacheCreationParts prices cache writes by TTL when the event carries an
+// explicit 1-hour split: the 1-hour share uses cache_write_1h and the rest
+// uses cache_write_5m. A rule-wide cache_creation/cache_write rate applies to
+// both shares. Without a split, cache_write_assumption picks a single rate.
+// A known 1-hour share on a rule without cache_write_1h falls back to the
+// single-rate choice and is reported as approximated.
+func cacheCreationParts(ev Event, rule *Rule, profile *Profile) ([]pricedPart, bool) {
+	single := cacheCreationRate(rule, profile)
+	if ev.CacheCreation1hTokens == nil || rule.Rates.CacheCreation != nil || rule.Rates.CacheWrite != nil {
+		return []pricedPart{{"cache_creation", ev.CacheCreationTokens, single}}, false
+	}
+	oneHour := *ev.CacheCreation1hTokens
+	if oneHour < 0 {
+		oneHour = 0
+	}
+	if oneHour > ev.CacheCreationTokens {
+		oneHour = ev.CacheCreationTokens
+	}
+	fiveMinuteRate := rule.Rates.CacheWrite5m
+	if fiveMinuteRate == nil {
+		fiveMinuteRate = single
+	}
+	oneHourRate := rule.Rates.CacheWrite1h
+	approximated := false
+	if oneHourRate == nil {
+		oneHourRate = single
+		approximated = oneHour > 0
+	}
+	return []pricedPart{
+		{"cache_creation_5m", ev.CacheCreationTokens - oneHour, fiveMinuteRate},
+		{"cache_creation_1h", oneHour, oneHourRate},
+	}, approximated
 }
 
 func outputTokensForPricing(ev Event, rule *Rule, profile *Profile) int64 {

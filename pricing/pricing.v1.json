@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "id": "agentledger-pricing-2026-07-31",
+  "id": "agentledger-pricing-2026-10-05",
   "currency": "USD",
   "unit": "usd_per_1m_tokens",
-  "checked_at": "2026-07-31",
+  "checked_at": "2026-10-05",
   "defaults": {
     "unknown_model_policy": "zero",
     "reasoning_policy": "included_in_output",
@@ -15,13 +15,19 @@
       "provider": "openai",
       "name": "OpenAI API pricing",
       "url": "https://developers.openai.com/api/docs/pricing",
-      "checked_at": "2026-07-31"
+      "checked_at": "2026-09-23"
     },
     {
       "provider": "zai",
       "name": "Z.AI model pricing",
       "url": "https://docs.z.ai/guides/overview/pricing",
-      "checked_at": "2026-07-22"
+      "checked_at": "2026-09-03"
+    },
+    {
+      "provider": "deepseek",
+      "name": "OpenRouter DeepSeek provider peak pricing",
+      "url": "https://openrouter.ai/provider/deepseek",
+      "checked_at": "2026-09-03"
     },
     {
       "provider": "kimi",
@@ -45,7 +51,7 @@
       "provider": "anthropic",
       "name": "Anthropic Claude pricing",
       "url": "https://claude.com/pricing#api",
-      "checked_at": "2026-07-29"
+      "checked_at": "2026-10-05"
     },
     {
       "provider": "model_id",
@@ -80,6 +86,375 @@
       "as_of": "2026-07-25"
     },
     {
+      "id": "gpt-6-astra-fast-long",
+      "model_patterns": [
+        "gpt-6-astra"
+      ],
+      "priority": 400,
+      "basis": "official_model_list_price",
+      "condition": {
+        "min_input_side_tokens": 272001,
+        "service_tier": [
+          "fast*",
+          "priority*"
+        ]
+      },
+      "rates": {
+        "input": 40.0,
+        "cached_input": 4.0,
+        "cache_write": 50.0,
+        "output": 150.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Fast mode long-context rate (Priority processing was renamed Fast mode on 2026-07-30). Matched only when the event carries a fast or priority service tier; local agent sources do not persist service tier yet.",
+      "model_id": "gpt-6-astra",
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/guides/fast-mode",
+      "as_of": "2026-09-23"
+    },
+    {
+      "id": "gpt-6-astra-fast",
+      "model_patterns": [
+        "gpt-6-astra"
+      ],
+      "priority": 300,
+      "basis": "official_model_list_price",
+      "condition": {
+        "service_tier": [
+          "fast*",
+          "priority*"
+        ]
+      },
+      "rates": {
+        "input": 20.0,
+        "cached_input": 2.0,
+        "cache_write": 25.0,
+        "output": 100.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Fast mode standard rate (Priority processing was renamed Fast mode on 2026-07-30). Matched only when the event carries a fast or priority service tier; local agent sources do not persist service tier yet.",
+      "model_id": "gpt-6-astra",
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/guides/fast-mode",
+      "as_of": "2026-09-23"
+    },
+    {
+      "id": "gpt-6-astra-long",
+      "model_patterns": [
+        "gpt-6-astra"
+      ],
+      "priority": 100,
+      "basis": "official_model_list_price",
+      "condition": {
+        "min_input_side_tokens": 272001
+      },
+      "rates": {
+        "input": 20.0,
+        "cached_input": 2.0,
+        "cache_write": 25.0,
+        "output": 75.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Standard pricing only. Above 272000 full input-side tokens, the long-context rate applies to the entire request. Fast mode uses the gpt-6-astra-fast and gpt-6-astra-fast-long rules.",
+      "model_id": "gpt-6-astra",
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/models/gpt-6-astra",
+      "as_of": "2026-09-07"
+    },
+    {
+      "id": "gpt-6-astra",
+      "model_patterns": [
+        "gpt-6-astra"
+      ],
+      "priority": 30,
+      "basis": "official_model_list_price",
+      "rates": {
+        "input": 10.0,
+        "cached_input": 1.0,
+        "cache_write": 12.5,
+        "output": 50.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Standard pricing from the user-supplied OpenAI pricing table. Fast mode uses the gpt-6-astra-fast and gpt-6-astra-fast-long rules.",
+      "model_id": "gpt-6-astra",
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/models/gpt-6-astra",
+      "as_of": "2026-09-07"
+    },
+    {
+      "id": "gpt-6-sol-fast-long",
+      "model_patterns": [
+        "gpt-6-sol"
+      ],
+      "priority": 400,
+      "basis": "official_model_list_price",
+      "condition": {
+        "min_input_side_tokens": 272001,
+        "service_tier": [
+          "fast*",
+          "priority*"
+        ]
+      },
+      "rates": {
+        "input": 8.0,
+        "cached_input": 0.8,
+        "cache_write": 10.0,
+        "output": 30.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Fast mode long-context rate (Priority processing was renamed Fast mode on 2026-07-30). Matched only when the event carries a fast or priority service tier; local agent sources do not persist service tier yet.",
+      "model_id": "gpt-6-sol",
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/guides/fast-mode",
+      "as_of": "2026-09-23"
+    },
+    {
+      "id": "gpt-6-sol-fast",
+      "model_patterns": [
+        "gpt-6-sol"
+      ],
+      "priority": 300,
+      "basis": "official_model_list_price",
+      "condition": {
+        "service_tier": [
+          "fast*",
+          "priority*"
+        ]
+      },
+      "rates": {
+        "input": 4.0,
+        "cached_input": 0.4,
+        "cache_write": 5.0,
+        "output": 20.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Fast mode standard rate (Priority processing was renamed Fast mode on 2026-07-30). Matched only when the event carries a fast or priority service tier; local agent sources do not persist service tier yet.",
+      "model_id": "gpt-6-sol",
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/guides/fast-mode",
+      "as_of": "2026-09-23"
+    },
+    {
+      "id": "gpt-6-sol-long",
+      "model_patterns": [
+        "gpt-6-sol"
+      ],
+      "priority": 100,
+      "basis": "official_model_list_price",
+      "condition": {
+        "min_input_side_tokens": 272001
+      },
+      "rates": {
+        "input": 4.0,
+        "cached_input": 0.4,
+        "cache_write": 5.0,
+        "output": 15.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Above 272000 full input-side tokens, the long-context rate applies to the entire request (2x input/cache, 1.5x output).",
+      "model_id": "gpt-6-sol",
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/models/gpt-6-sol",
+      "as_of": "2026-09-23"
+    },
+    {
+      "id": "gpt-6-sol",
+      "model_patterns": [
+        "gpt-6-sol"
+      ],
+      "priority": 30,
+      "basis": "official_model_list_price",
+      "rates": {
+        "input": 2.0,
+        "cached_input": 0.2,
+        "cache_write": 2.5,
+        "output": 10.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "model_id": "gpt-6-sol",
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/models/gpt-6-sol",
+      "as_of": "2026-09-23"
+    },
+    {
+      "id": "gpt-6-luna-fast-long",
+      "model_patterns": [
+        "gpt-6-luna"
+      ],
+      "priority": 400,
+      "basis": "official_model_list_price",
+      "condition": {
+        "min_input_side_tokens": 272001,
+        "service_tier": [
+          "fast*",
+          "priority*"
+        ]
+      },
+      "rates": {
+        "input": 0.4,
+        "cached_input": 0.04,
+        "cache_write": 0.5,
+        "output": 1.5
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Fast mode long-context rate (Priority processing was renamed Fast mode on 2026-07-30). Matched only when the event carries a fast or priority service tier; local agent sources do not persist service tier yet.",
+      "model_id": "gpt-6-luna",
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/guides/fast-mode",
+      "as_of": "2026-09-23"
+    },
+    {
+      "id": "gpt-6-luna-fast",
+      "model_patterns": [
+        "gpt-6-luna"
+      ],
+      "priority": 300,
+      "basis": "official_model_list_price",
+      "condition": {
+        "service_tier": [
+          "fast*",
+          "priority*"
+        ]
+      },
+      "rates": {
+        "input": 0.2,
+        "cached_input": 0.02,
+        "cache_write": 0.25,
+        "output": 1.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Fast mode standard rate (Priority processing was renamed Fast mode on 2026-07-30). Matched only when the event carries a fast or priority service tier; local agent sources do not persist service tier yet.",
+      "model_id": "gpt-6-luna",
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/guides/fast-mode",
+      "as_of": "2026-09-23"
+    },
+    {
+      "id": "gpt-6-luna-long",
+      "model_patterns": [
+        "gpt-6-luna"
+      ],
+      "priority": 100,
+      "basis": "official_model_list_price",
+      "condition": {
+        "min_input_side_tokens": 272001
+      },
+      "rates": {
+        "input": 0.2,
+        "cached_input": 0.02,
+        "cache_write": 0.25,
+        "output": 0.75
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Above 272000 full input-side tokens, the long-context rate applies to the entire request (2x input/cache, 1.5x output).",
+      "model_id": "gpt-6-luna",
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/models/gpt-6-luna",
+      "as_of": "2026-09-23"
+    },
+    {
+      "id": "gpt-6-luna",
+      "model_patterns": [
+        "gpt-6-luna"
+      ],
+      "priority": 30,
+      "basis": "official_model_list_price",
+      "rates": {
+        "input": 0.1,
+        "cached_input": 0.01,
+        "cache_write": 0.125,
+        "output": 0.5
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "model_id": "gpt-6-luna",
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/models/gpt-6-luna",
+      "as_of": "2026-09-23"
+    },
+    {
+      "id": "gpt-5.6-sol-fast-long",
+      "model_patterns": [
+        "gpt-5.6-sol",
+        "gpt-5.6"
+      ],
+      "priority": 400,
+      "basis": "official_model_list_price",
+      "condition": {
+        "min_input_side_tokens": 272001,
+        "service_tier": [
+          "fast*",
+          "priority*"
+        ]
+      },
+      "rates": {
+        "input": 16.0,
+        "cached_input": 1.6,
+        "cache_write": 20.0,
+        "output": 60.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Fast mode long-context rate (Priority processing was renamed Fast mode on 2026-07-30). Matched only when the event carries a fast or priority service tier; local agent sources do not persist service tier yet.",
+      "model_id": "gpt-5.6-sol",
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/guides/fast-mode",
+      "as_of": "2026-09-23"
+    },
+    {
+      "id": "gpt-5.6-sol-fast",
+      "model_patterns": [
+        "gpt-5.6-sol",
+        "gpt-5.6"
+      ],
+      "priority": 300,
+      "basis": "official_model_list_price",
+      "condition": {
+        "service_tier": [
+          "fast*",
+          "priority*"
+        ]
+      },
+      "rates": {
+        "input": 8.0,
+        "cached_input": 0.8,
+        "cache_write": 10.0,
+        "output": 40.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Fast mode standard rate (Priority processing was renamed Fast mode on 2026-07-30). Matched only when the event carries a fast or priority service tier; local agent sources do not persist service tier yet.",
+      "model_id": "gpt-5.6-sol",
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/guides/fast-mode",
+      "as_of": "2026-09-23"
+    },
+    {
       "id": "gpt-5.6-sol-long",
       "model_patterns": [
         "gpt-5.6-sol",
@@ -88,22 +463,22 @@
       "priority": 100,
       "basis": "official_model_list_price",
       "condition": {
-        "min_input_side_tokens": 272000
+        "min_input_side_tokens": 272001
       },
       "rates": {
-        "input": 10.0,
-        "cached_input": 1.0,
-        "cache_write": 12.5,
-        "output": 45.0
+        "input": 8.0,
+        "cached_input": 0.8,
+        "cache_write": 10.0,
+        "output": 30.0
       },
       "reasoning_policy": "included_in_output",
       "cache_write_assumption": "treat_as_input",
       "confidence": "estimated",
-      "notes": "At 272000 full input-side tokens, the long-context rate applies to the entire request.",
+      "notes": "Above 272000 full input-side tokens, the long-context rate applies to the entire request. User-supplied Standard promotional pricing is available at least through 2026-11-21; the start date and post-promotion rates are not supplied.",
       "model_id": "gpt-5.6-sol",
       "source_url": "https://developers.openai.com/api/docs/pricing",
       "pricing_notes_url": "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
-      "as_of": "2026-07-20"
+      "as_of": "2026-09-07"
     },
     {
       "id": "gpt-5.6-sol",
@@ -114,10 +489,10 @@
       "priority": 30,
       "basis": "official_model_list_price",
       "rates": {
-        "input": 5.0,
-        "cached_input": 0.5,
-        "cache_write": 6.25,
-        "output": 30.0
+        "input": 4.0,
+        "cached_input": 0.4,
+        "cache_write": 5.0,
+        "output": 20.0
       },
       "reasoning_policy": "included_in_output",
       "cache_write_assumption": "treat_as_input",
@@ -125,7 +500,65 @@
       "model_id": "gpt-5.6-sol",
       "source_url": "https://developers.openai.com/api/docs/pricing",
       "pricing_notes_url": "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
-      "as_of": "2026-07-20"
+      "notes": "User-supplied Standard promotional pricing is available at least through 2026-11-21; the start date and post-promotion rates are not supplied. Fast mode uses the gpt-5.6-sol-fast and gpt-5.6-sol-fast-long rules.",
+      "as_of": "2026-09-07"
+    },
+    {
+      "id": "gpt-5.6-terra-fast-long",
+      "model_patterns": [
+        "gpt-5.6-terra"
+      ],
+      "priority": 400,
+      "basis": "official_model_list_price",
+      "condition": {
+        "min_input_side_tokens": 272001,
+        "service_tier": [
+          "fast*",
+          "priority*"
+        ]
+      },
+      "rates": {
+        "input": 8.0,
+        "cached_input": 0.8,
+        "cache_write": 10.0,
+        "output": 36.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Fast mode long-context rate (Priority processing was renamed Fast mode on 2026-07-30). Matched only when the event carries a fast or priority service tier; local agent sources do not persist service tier yet.",
+      "model_id": "gpt-5.6-terra",
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/guides/fast-mode",
+      "as_of": "2026-09-23"
+    },
+    {
+      "id": "gpt-5.6-terra-fast",
+      "model_patterns": [
+        "gpt-5.6-terra"
+      ],
+      "priority": 300,
+      "basis": "official_model_list_price",
+      "condition": {
+        "service_tier": [
+          "fast*",
+          "priority*"
+        ]
+      },
+      "rates": {
+        "input": 4.0,
+        "cached_input": 0.4,
+        "cache_write": 5.0,
+        "output": 24.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Fast mode standard rate (Priority processing was renamed Fast mode on 2026-07-30). Matched only when the event carries a fast or priority service tier; local agent sources do not persist service tier yet.",
+      "model_id": "gpt-5.6-terra",
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/guides/fast-mode",
+      "as_of": "2026-09-23"
     },
     {
       "id": "gpt-5.6-terra-long",
@@ -135,7 +568,7 @@
       "priority": 100,
       "basis": "official_model_list_price",
       "condition": {
-        "min_input_side_tokens": 272000
+        "min_input_side_tokens": 272001
       },
       "rates": {
         "input": 4.0,
@@ -146,11 +579,11 @@
       "reasoning_policy": "included_in_output",
       "cache_write_assumption": "treat_as_input",
       "confidence": "estimated",
-      "notes": "At 272000 full input-side tokens, the long-context rate applies to the entire request.",
+      "notes": "Above 272000 full input-side tokens, the long-context rate applies to the entire request.",
       "model_id": "gpt-5.6-terra",
       "source_url": "https://developers.openai.com/api/docs/pricing",
       "pricing_notes_url": "https://developers.openai.com/api/docs/models/gpt-5.6-terra",
-      "as_of": "2026-07-31"
+      "as_of": "2026-09-07"
     },
     {
       "id": "gpt-5.6-terra",
@@ -171,7 +604,64 @@
       "model_id": "gpt-5.6-terra",
       "source_url": "https://developers.openai.com/api/docs/pricing",
       "pricing_notes_url": "https://developers.openai.com/api/docs/models/gpt-5.6-terra",
-      "as_of": "2026-07-31"
+      "as_of": "2026-09-07"
+    },
+    {
+      "id": "gpt-5.6-luna-fast-long",
+      "model_patterns": [
+        "gpt-5.6-luna"
+      ],
+      "priority": 400,
+      "basis": "official_model_list_price",
+      "condition": {
+        "min_input_side_tokens": 272001,
+        "service_tier": [
+          "fast*",
+          "priority*"
+        ]
+      },
+      "rates": {
+        "input": 0.8,
+        "cached_input": 0.08,
+        "cache_write": 1.0,
+        "output": 3.6
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Fast mode long-context rate (Priority processing was renamed Fast mode on 2026-07-30). Matched only when the event carries a fast or priority service tier; local agent sources do not persist service tier yet.",
+      "model_id": "gpt-5.6-luna",
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/guides/fast-mode",
+      "as_of": "2026-09-23"
+    },
+    {
+      "id": "gpt-5.6-luna-fast",
+      "model_patterns": [
+        "gpt-5.6-luna"
+      ],
+      "priority": 300,
+      "basis": "official_model_list_price",
+      "condition": {
+        "service_tier": [
+          "fast*",
+          "priority*"
+        ]
+      },
+      "rates": {
+        "input": 0.4,
+        "cached_input": 0.04,
+        "cache_write": 0.5,
+        "output": 2.4
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Fast mode standard rate (Priority processing was renamed Fast mode on 2026-07-30). Matched only when the event carries a fast or priority service tier; local agent sources do not persist service tier yet.",
+      "model_id": "gpt-5.6-luna",
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/guides/fast-mode",
+      "as_of": "2026-09-23"
     },
     {
       "id": "gpt-5.6-luna-long",
@@ -181,7 +671,7 @@
       "priority": 100,
       "basis": "official_model_list_price",
       "condition": {
-        "min_input_side_tokens": 272000
+        "min_input_side_tokens": 272001
       },
       "rates": {
         "input": 0.4,
@@ -192,11 +682,11 @@
       "reasoning_policy": "included_in_output",
       "cache_write_assumption": "treat_as_input",
       "confidence": "estimated",
-      "notes": "At 272000 full input-side tokens, the long-context rate applies to the entire request.",
+      "notes": "Above 272000 full input-side tokens, the long-context rate applies to the entire request.",
       "model_id": "gpt-5.6-luna",
       "source_url": "https://developers.openai.com/api/docs/pricing",
       "pricing_notes_url": "https://developers.openai.com/api/docs/models/gpt-5.6-luna",
-      "as_of": "2026-07-31"
+      "as_of": "2026-09-07"
     },
     {
       "id": "gpt-5.6-luna",
@@ -217,7 +707,7 @@
       "model_id": "gpt-5.6-luna",
       "source_url": "https://developers.openai.com/api/docs/pricing",
       "pricing_notes_url": "https://developers.openai.com/api/docs/models/gpt-5.6-luna",
-      "as_of": "2026-07-31"
+      "as_of": "2026-09-07"
     },
     {
       "id": "gpt-5.5-long",
@@ -227,7 +717,7 @@
       "priority": 100,
       "basis": "official_model_list_price",
       "condition": {
-        "min_input_side_tokens": 272000
+        "min_input_side_tokens": 272001
       },
       "rates": {
         "input": 10.0,
@@ -237,7 +727,7 @@
       "reasoning_policy": "included_in_output",
       "cache_write_assumption": "treat_as_input",
       "confidence": "estimated",
-      "notes": "At 272000 full input-side tokens, the long-context rate applies to the entire request.",
+      "notes": "Above 272000 full input-side tokens, the long-context rate applies to the entire request.",
       "model_id": "gpt-5.5",
       "source_url": "https://developers.openai.com/api/docs/pricing",
       "pricing_notes_url": "https://developers.openai.com/api/docs/models/gpt-5.5",
@@ -272,7 +762,7 @@
       "priority": 100,
       "basis": "official_model_list_price",
       "condition": {
-        "min_input_side_tokens": 272000
+        "min_input_side_tokens": 272001
       },
       "rates": {
         "input": 5.0,
@@ -282,7 +772,7 @@
       "reasoning_policy": "included_in_output",
       "cache_write_assumption": "treat_as_input",
       "confidence": "estimated",
-      "notes": "At 272000 full input-side tokens, the long-context rate applies to the entire request.",
+      "notes": "Above 272000 full input-side tokens, the long-context rate applies to the entire request.",
       "model_id": "gpt-5.4",
       "source_url": "https://developers.openai.com/api/docs/pricing",
       "pricing_notes_url": "https://developers.openai.com/api/docs/models/gpt-5.4",
@@ -405,6 +895,103 @@
       "model_id": "gpt-4.1"
     },
     {
+      "id": "claude-opus-5-5-fast",
+      "model_patterns": [
+        "claude-opus-5-5-fast",
+        "claude-opus-5.5-fast"
+      ],
+      "priority": 110,
+      "basis": "official_model_list_price",
+      "rates": {
+        "input": 8.0,
+        "cache_write_5m": 10.0,
+        "cache_write_1h": 16.0,
+        "cache_read": 0.4,
+        "output": 40.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "5m_if_unknown",
+      "confidence": "estimated",
+      "notes": "Fast mode (Claude API research preview). The adapter appends -fast when usage.speed is fast; prompt caching multipliers apply on top of fast pricing.",
+      "model_id": "claude-opus-5-5",
+      "source_url": "https://claude.com/pricing#api",
+      "pricing_notes_url": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "as_of": "2026-10-05"
+    },
+    {
+      "id": "claude-opus-5-fast",
+      "model_patterns": [
+        "claude-opus-5-fast"
+      ],
+      "priority": 110,
+      "basis": "official_model_list_price",
+      "rates": {
+        "input": 10.0,
+        "cache_write_5m": 12.5,
+        "cache_write_1h": 20.0,
+        "cache_read": 1.0,
+        "output": 50.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "5m_if_unknown",
+      "confidence": "estimated",
+      "notes": "Fast mode (Claude API research preview). The adapter appends -fast when usage.speed is fast; prompt caching multipliers apply on top of fast pricing.",
+      "model_id": "claude-opus-5",
+      "source_url": "https://claude.com/pricing#api",
+      "pricing_notes_url": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "as_of": "2026-10-05"
+    },
+    {
+      "id": "claude-opus-4.8-fast",
+      "model_patterns": [
+        "claude-opus-4-8-fast",
+        "claude-opus-4.8-fast"
+      ],
+      "priority": 110,
+      "basis": "official_model_list_price",
+      "rates": {
+        "input": 10.0,
+        "cache_write_5m": 12.5,
+        "cache_write_1h": 20.0,
+        "cache_read": 1.0,
+        "output": 50.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "5m_if_unknown",
+      "confidence": "estimated",
+      "notes": "Fast mode (Claude API research preview). Higher priority than claude-opus-4 so the -fast suffix is not priced at the standard rate.",
+      "model_id": "claude-opus-4-8",
+      "source_url": "https://claude.com/pricing#api",
+      "pricing_notes_url": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "as_of": "2026-10-05"
+    },
+    {
+      "id": "claude-opus-5-5",
+      "model_patterns": [
+        "claude-opus-5-5",
+        "claude-opus-5.5",
+        "anthropic/claude-opus-5-5",
+        "anthropic/claude-opus-5.5"
+      ],
+      "priority": 100,
+      "basis": "official_model_list_price",
+      "rates": {
+        "input": 4.0,
+        "cache_write_5m": 5.0,
+        "cache_write_1h": 8.0,
+        "cache_read": 0.2,
+        "output": 20.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "5m_if_unknown",
+      "confidence": "estimated",
+      "notes": "Standard API pricing. Cache reads are 0.05x input on Claude Opus 5.5. Cache writes are priced per TTL: events with an explicit 1-hour split use cache_write_1h, the remainder uses cache_write_5m; events without a split assume 5-minute writes. Fast mode uses the claude-opus-5-5-fast rule.",
+      "model_id": "claude-opus-5-5",
+      "source_url": "https://claude.com/pricing#api",
+      "pricing_notes_url": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "as_of": "2026-10-05"
+    },
+    {
       "id": "claude-opus-5",
       "model_patterns": [
         "claude-opus-5",
@@ -415,59 +1002,97 @@
       "rates": {
         "input": 5.0,
         "cache_write_5m": 6.25,
+        "cache_write_1h": 10.0,
         "cache_read": 0.5,
         "output": 25.0
       },
       "reasoning_policy": "included_in_output",
       "cache_write_assumption": "5m_if_unknown",
       "confidence": "estimated",
-      "notes": "Standard API pricing. Prompt cache creation uses the official 5-minute write rate because usage events do not carry cache TTL; Fast mode is intentionally excluded.",
+      "notes": "Standard API pricing. Cache writes are priced per TTL: events with an explicit 1-hour split use cache_write_1h, the remainder uses cache_write_5m; events without a split assume 5-minute writes. Fast mode uses the claude-opus-5-fast rule.",
       "model_id": "claude-opus-5",
       "source_url": "https://claude.com/pricing#api",
       "pricing_notes_url": "https://platform.claude.com/docs/en/about-claude/pricing",
-      "as_of": "2026-07-29"
+      "as_of": "2026-10-05"
     },
     {
-      "id": "claude-sonnet-5-intro",
+      "id": "claude-sonnet-5",
       "model_patterns": [
-        "claude-sonnet-5"
+        "claude-sonnet-5",
+        "anthropic/claude-sonnet-5"
       ],
       "priority": 100,
-      "basis": "user_provided_official_summary",
-      "effective_to": "2026-08-31",
+      "basis": "official_model_list_price",
       "rates": {
         "input": 2.0,
-        "cached_input": 0.2,
+        "cache_write_5m": 2.5,
+        "cache_write_1h": 4.0,
+        "cache_read": 0.2,
         "output": 10.0
       },
       "reasoning_policy": "included_in_output",
-      "cache_write_assumption": "treat_as_input",
+      "cache_write_assumption": "5m_if_unknown",
       "confidence": "estimated",
-      "notes": "Intro pricing through 2026-08-31. No long-context uplift. Cache creation uses the input rate because a cache-write TTL rate was not supplied.",
+      "notes": "Standard API pricing. The launch price of 2 / 10 USD became the standard price; the previously announced 2026-09-01 increase to 3 / 15 did not occur. Cache writes are priced per TTL: events with an explicit 1-hour split use cache_write_1h, the remainder uses cache_write_5m; events without a split assume 5-minute writes.",
       "model_id": "claude-sonnet-5",
-      "source_url": "https://www.anthropic.com/pricing",
-      "as_of": "2026-07-25"
+      "source_url": "https://claude.com/pricing#api",
+      "pricing_notes_url": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "as_of": "2026-10-05"
     },
     {
-      "id": "claude-sonnet-5-standard",
+      "id": "claude-sonnet-5-5",
       "model_patterns": [
-        "claude-sonnet-5"
+        "claude-sonnet-5-5",
+        "claude-sonnet-5.5",
+        "anthropic/claude-sonnet-5-5",
+        "anthropic/claude-sonnet-5.5"
       ],
       "priority": 100,
-      "basis": "user_provided_official_summary",
-      "effective_from": "2026-09-01",
+      "basis": "official_model_list_price",
       "rates": {
-        "input": 3.0,
-        "cached_input": 0.3,
-        "output": 15.0
+        "input": 2.0,
+        "cache_write_5m": 2.5,
+        "cache_write_1h": 4.0,
+        "cache_read": 0.2,
+        "output": 10.0
       },
       "reasoning_policy": "included_in_output",
-      "cache_write_assumption": "treat_as_input",
+      "cache_write_assumption": "5m_if_unknown",
       "confidence": "estimated",
-      "notes": "Standard pricing from 2026-09-01. No long-context uplift. Cached input is estimated at 10% of input; cache creation uses the input rate pending an explicit TTL rate.",
-      "model_id": "claude-sonnet-5",
-      "source_url": "https://www.anthropic.com/pricing",
-      "as_of": "2026-07-25"
+      "notes": "Standard API pricing. Cache writes are priced per TTL: events with an explicit 1-hour split use cache_write_1h, the remainder uses cache_write_5m; events without a split assume 5-minute writes.",
+      "model_id": "claude-sonnet-5-5",
+      "source_url": "https://claude.com/pricing#api",
+      "pricing_notes_url": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "as_of": "2026-10-05"
+    },
+    {
+      "id": "claude-opus-4-legacy",
+      "model_patterns": [
+        "claude-opus-4",
+        "claude-opus-4-0",
+        "claude-opus-4-0-*",
+        "claude-opus-4-1",
+        "claude-opus-4-1-*",
+        "claude-opus-4.1",
+        "claude-opus-4-2025*"
+      ],
+      "priority": 20,
+      "basis": "official_model_list_price",
+      "rates": {
+        "input": 15.0,
+        "cache_write_5m": 18.75,
+        "cache_write_1h": 30.0,
+        "cache_read": 1.5,
+        "output": 75.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "5m_if_unknown",
+      "confidence": "estimated",
+      "notes": "Claude Opus 4.1 and Claude Opus 4 legacy pricing. Higher priority than claude-opus-4 so dated or 4.0/4.1 IDs are not priced at the Opus 4.5+ rate.",
+      "model_id": "claude-opus-4-1",
+      "source_url": "https://claude.com/pricing#api",
+      "pricing_notes_url": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "as_of": "2026-10-05"
     },
     {
       "id": "claude-opus-4",
@@ -531,14 +1156,44 @@
       "model_id": "claude-haiku-4.5"
     },
     {
+      "id": "claude-fable-5-1",
+      "model_patterns": [
+        "claude-fable-5-1",
+        "claude-fable-5.1",
+        "claude-fable-5-1-*",
+        "claude-mythos-5-1",
+        "claude-mythos-5.1",
+        "claude-mythos-5-1-*"
+      ],
+      "priority": 20,
+      "basis": "official_model_list_price",
+      "rates": {
+        "input": 10.0,
+        "cache_write_5m": 12.5,
+        "cache_write_1h": 20.0,
+        "cache_read": 0.25,
+        "output": 50.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "5m_if_unknown",
+      "confidence": "estimated",
+      "notes": "Claude Fable 5.1 / Claude Mythos 5.1 standard API pricing. Cache reads are 0.025x input. Higher priority than claude-fable-5 so claude-fable-5-1 is not matched by claude-fable-5-*. Cache writes are priced per TTL: events with an explicit 1-hour split use cache_write_1h, the remainder uses cache_write_5m; events without a split assume 5-minute writes.",
+      "model_id": "claude-fable-5-1",
+      "source_url": "https://claude.com/pricing#api",
+      "pricing_notes_url": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "as_of": "2026-10-05"
+    },
+    {
       "id": "claude-fable-5",
       "model_patterns": [
         "claude-fable-5",
         "claude-fable-5.*",
-        "claude-fable-5-*"
+        "claude-fable-5-*",
+        "claude-mythos-5",
+        "claude-mythos-5-*"
       ],
       "priority": 10,
-      "basis": "user_provided_list_price",
+      "basis": "official_model_list_price",
       "rates": {
         "input": 10.0,
         "cache_write_5m": 12.5,
@@ -549,8 +1204,11 @@
       "reasoning_policy": "included_in_output",
       "cache_write_assumption": "5m_if_unknown",
       "confidence": "estimated",
-      "notes": "User supplied 10 input / 50 output USD per 1M tokens; cache write/read use the same Claude multipliers as other Claude rules.",
-      "model_id": "claude-fable-5"
+      "notes": "Claude Fable 5 / Claude Mythos 5 standard API pricing. Cache writes are priced per TTL: events with an explicit 1-hour split use cache_write_1h, the remainder uses cache_write_5m; events without a split assume 5-minute writes.",
+      "model_id": "claude-fable-5",
+      "source_url": "https://claude.com/pricing#api",
+      "pricing_notes_url": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "as_of": "2026-10-05"
     },
     {
       "id": "kimi-k2.5",
@@ -630,6 +1288,108 @@
       "source_url": "https://docs.z.ai/guides/overview/pricing",
       "pricing_notes_url": "https://docs.z.ai/guides/llm/glm-5.2",
       "as_of": "2026-07-22"
+    },
+    {
+      "id": "glm-5.3",
+      "model_patterns": [
+        "glm-5.3"
+      ],
+      "priority": 30,
+      "basis": "user_provided_list_price",
+      "rates": {
+        "input": 1.4,
+        "cached_input": 0.26,
+        "output": 4.4
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "User supplied original list prices: input 1.40, cache read 0.26, output 4.40 USD per 1M tokens.",
+      "model_id": "glm-5.3",
+      "source_url": "https://docs.z.ai/guides/overview/pricing",
+      "as_of": "2026-09-03"
+    },
+    {
+      "id": "glm-5.3-flash",
+      "model_patterns": [
+        "glm-5.3-flash",
+        "ox-alpha"
+      ],
+      "priority": 30,
+      "basis": "user_provided_list_price",
+      "rates": {
+        "input": 0.15,
+        "cached_input": 0.03,
+        "output": 0.5
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "User supplied original list prices before the advertised 50% discount; ox-alpha is an alias of glm-5.3-flash.",
+      "model_id": "glm-5.3-flash",
+      "source_url": "https://docs.z.ai/guides/overview/pricing",
+      "as_of": "2026-09-03"
+    },
+    {
+      "id": "deepseek-v4-pro",
+      "model_patterns": [
+        "deepseek-v4-pro",
+        "deepseek-v4-pro-ga-260813"
+      ],
+      "priority": 30,
+      "basis": "user_provided_provider_peak_price",
+      "rates": {
+        "input": 1.32,
+        "cached_input": 0.044,
+        "output": 3.96
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "User directed AgentLedger to apply the provider peak price at all times; the dated GA model ID uses the same price.",
+      "model_id": "deepseek-v4-pro",
+      "source_url": "https://openrouter.ai/provider/deepseek",
+      "as_of": "2026-09-03"
+    },
+    {
+      "id": "origin-deepseek-v4-flash",
+      "model_patterns": [
+        "origin-deepseek-v4-flash",
+        "origin-deepseek-v4-flash-*"
+      ],
+      "priority": 30,
+      "basis": "user_provided_provider_peak_price",
+      "rates": {
+        "input": 0.44,
+        "cached_input": 0.015,
+        "output": 1.32
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "User-confirmed derivation from the gateway price table: the origin routing tier is 2x the zj tier (as with origin-deepseek-v4-pro), so input 3 CNY, cache hit 0.1 CNY, output 9 CNY per 1M tokens, divided by 6.8.",
+      "model_id": "origin-deepseek-v4-flash",
+      "as_of": "2026-09-24"
+    },
+    {
+      "id": "origin-deepseek-v4-1-flash",
+      "model_patterns": [
+        "origin-deepseek-v4-1-flash",
+        "origin-deepseek-v4-1-flash-*"
+      ],
+      "priority": 30,
+      "basis": "user_provided_provider_peak_price",
+      "rates": {
+        "input": 0.29,
+        "cached_input": 0.006,
+        "output": 1.18
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "User-provided gateway peak price: input 2 CNY, cache hit 0.04 CNY, output 8 CNY per 1M tokens, divided by 6.8.",
+      "model_id": "origin-deepseek-v4-1-flash",
+      "as_of": "2026-09-24"
     },
     {
       "id": "hy3",
@@ -722,7 +1482,8 @@
     {
       "id": "grok-4.6-long",
       "model_patterns": [
-        "grok-4.6"
+        "grok-4.6",
+        "grok-4.6-build"
       ],
       "priority": 100,
       "basis": "official_model_list_price",
@@ -745,7 +1506,8 @@
     {
       "id": "grok-4.6",
       "model_patterns": [
-        "grok-4.6"
+        "grok-4.6",
+        "grok-4.6-build"
       ],
       "priority": 30,
       "basis": "official_model_list_price",
@@ -870,6 +1632,26 @@
       "confidence": "partial",
       "notes": "Gemini cached storage duration is not available in usage_events.",
       "model_id": "gemini-3.1-pro"
+    },
+    {
+      "id": "gemini-3.8-flash",
+      "model_patterns": [
+        "gemini-3.8-flash",
+        "gemini-3.8-flash-*"
+      ],
+      "priority": 10,
+      "basis": "user_provided_list_price",
+      "rates": {
+        "input": 0.81,
+        "cached_input": 0.081,
+        "output": 4.03
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "User-provided gateway fixed price: input 5.48 CNY, cache hit 0.55 CNY, output 27.38 CNY per 1M tokens, divided by 6.8.",
+      "model_id": "gemini-3.8-flash",
+      "as_of": "2026-09-24"
     },
     {
       "id": "gemini-3-flash",

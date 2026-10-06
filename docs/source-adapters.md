@@ -12,6 +12,7 @@
 - 最后才用 `content_fallback`；它只保证完全相同内容重复 skip。
 - 完整 source JSON 只在解析期存在；不保存正文或 raw usage。
 - `raw_sha256` 是原始记录诊断 hash，不等于结构化 `content_sha256`。
+- JSONL 来源（Claude、Codex、Gemini、Copilot、Cursor、WorkBuddy）逐行读取，单行上限 64 MiB。超过上限的行只跳过该行，不缓存整行；行号照常计数，因此依赖行号的 identity 不变；同一文件其余记录照常导入，并输出 `skipped N oversized line(s)` parse warning。此前超长行会让整个文件解析失败。
 
 ## Claude Code
 
@@ -26,6 +27,8 @@ event_granularity = request
 Session 优先原生 session ID，回退到 Claude source-root-relative project/session path。事件优先 message ID，再用 request ID；message 内多 segment 通过 subkey 分开。optional/null 字段用结构化 JSON 类型判断，不把字符串匹配当 schema。
 
 Token 使用 `claude_usage_sum`，包括 input、output、cache creation、cache read。来源 cost 不落库。
+
+缓存写入的 TTL 拆分读取 `usage.cache_creation.ephemeral_1h_input_tokens` / `ephemeral_5m_input_tokens`，写入 `cache_creation_1h_tokens`；只有 5m 字段时 1h 记为 0，`cache_creation` 缺失或为空对象时为 `NULL`（未知），1h 超过 `cache_creation_input_tokens` 时截断到总量。TTL 不能由订阅/API、主对话/subagent 推断：同一订阅主对话在超出套餐额度后会从 1h 降为 5m，各模型的 subagent 行为也不同，因此必须逐事件读取。
 
 ## Codex
 
@@ -107,6 +110,24 @@ identity = root id + native session
 ```
 
 `rawUsage.prompt_tokens` 拆成非缓存 input、cache read、cache creation；completion 包含 reasoning，`total_tokens` 使用来源总量并由 `workbuddy_raw_usage_v1` 验证。`auto` 是路由状态，保存 `model_normalized=unknown`、fallback/policy-zero；credit、正文、URL、key 和完整 providerData 不落库。
+
+## ZCode
+
+```text
+channel = zcode
+source_product = zcode-cli-db
+parser_version = zcode-model-usage-v1
+event_granularity = request
+identity = model_usage.id + native session
+```
+
+只读 `~/.zcode/cli/db/db.sqlite` 的 `model_usage` 表（默认路径 `~/.zcode/cli/db`，可显式配置数据库文件或目录）。schema 探测 fail-closed：`model_usage`/`session` 缺列或缺表时整库拒绝，不做猜测式解析。
+
+Session 使用 `session_id`（join `session` 取 `path`，缺失回退 `directory` 作为 project path）；事件使用 `model_usage.id`，同一 `logical_request_id` 的多次 attempt 各自成事件，不折叠。`query_source`（main_turn/subagent/…）只保留在解析期 envelope，不参与 identity。
+
+Token 按 `zcode_model_usage_v1` 归一化：来源 `input_tokens` 包含 cache read 与 cache creation，拆成非缓存 input、cache read、cache creation；`output_tokens` 包含 reasoning；total 优先 `provider_total_tokens`，缺失回退 `computed_total_tokens`，两者不一致或与分项不守恒的行拒绝。全零 usage 行跳过；error/cancelled 但有真实 token 的调用导入。
+
+`model-io-*.jsonl`、`turn_usage`、`raw_usage_json`、`provider_metadata_json`、message 正文与 error 文本不读取也不落库；`provider_id` 列是路由 plan/account 而非模型厂商，事件 provider 由模型家族推导（glm→zai 等）。
 
 ## Parser contract 测试
 

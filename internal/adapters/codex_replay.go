@@ -1,7 +1,6 @@
 package adapters
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -441,8 +440,7 @@ func readCodexSessionMetadata(path string) (codexSessionMetadata, error) {
 		return codexSessionMetadata{}, err
 	}
 	defer f.Close()
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, codexScannerInitialBufferBytes), codexScannerMaxTokenBytes)
+	scanner := newJSONLLineReader(f)
 	if !scanner.Scan() {
 		return item, scanner.Err()
 	}
@@ -492,8 +490,7 @@ func readCodexReplayUsage(path string) ([]codexReplayUsage, error) {
 		return nil, err
 	}
 	defer f.Close()
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, codexScannerInitialBufferBytes), codexScannerMaxTokenBytes)
+	scanner := newJSONLLineReader(f)
 	var result []codexReplayUsage
 	state := codexReplayUsageState{}
 	for scanner.Scan() {
@@ -515,8 +512,7 @@ func detectCodexRewrittenBurst(path string) (int64, error) {
 	}
 	defer f.Close()
 
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, codexScannerInitialBufferBytes), codexScannerMaxTokenBytes)
+	scanner := newJSONLLineReader(f)
 	state := codexReplayUsageState{}
 	var first codexReplayUsage
 	hasFirst := false

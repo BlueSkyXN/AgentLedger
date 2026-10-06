@@ -21,7 +21,7 @@ AgentLedger 是本地优先的 AI Coding Agent usage analytics 工具：Go CLI �
 | `internal/analytics/` | 只读 SQL 聚合，供 API 和 Web 面板使用 | No | 根规则已覆盖；改 filter、breakdown、sort、limit 时同步检查 `internal/control/` 和 `web/` |
 | `internal/config/` | TOML config、默认路径、`~` 展开、agent 配置 | No | 根规则已覆盖；改配置字段时检查 docs 和 API config snapshot 兼容性 |
 | `internal/control/` | 本机 HTTP server、只读 `/api/v2/*`、静态面板托管、路径脱敏 | Yes | 修改 API endpoint、filter parsing、static serving、config/status/health response 前 |
-| `internal/db/` | SQLite schema v3、连接参数、event reconcile、merge/export/stat ops | Yes | 修改 schema、identity gate、export redaction、merge、reconcile 规则前 |
+| `internal/db/` | SQLite schema v4（v3 + 缓存 TTL 拆分列，含 v3 迁移）、连接参数、event reconcile、merge/export/stat ops | Yes | 修改 schema、identity gate、export redaction、merge、reconcile 规则前 |
 | `internal/fingerprint/` | 稳定 event fingerprint 与 raw JSON canonicalization | No | 根规则已覆盖；改 fingerprint 会影响去重和 merge，需同时检查 adapter/db 测试 |
 | `internal/model/` | 跨 package 共享 domain structs 和 token helper | No | 根规则已覆盖；字段变更会连带 adapter/db/report/API/Web 类型 |
 | `internal/report/` | CLI text/JSON reports 和即时 estimated cost | No | 根规则已覆盖；改 report filters、breakdown 或 pricing 时使用 allowlist 并检查 CLI 输出 |
@@ -70,9 +70,9 @@ Commands below are confirmed from `README.md`, `docs/development.md`, `go.mod`, 
 - Keep the repository local-first. Do not add network calls, telemetry, hosted services, remote sync, or external API dependencies unless the user explicitly asks and the privacy model is updated.
 - Treat local agent logs, SQLite databases, `.aldb` exports, raw source usage, session IDs, request IDs, message IDs, source file paths, project paths, screenshots, and panel exports as private user data.
 - Do not copy real local logs, real database rows, raw usage envelopes, private paths, tokens, or credentials into commits, docs, test snapshots, PR text, screenshots, or public examples.
-- v3 schema is intentionally small: `meta`, `import_runs`, `usage_events`. Do not reintroduce source-checkpoint/observation/conflict/device/merge/session ledger tables without an explicit schema design and regression plan.
+- The schema (v4; v3 plus the nullable `cache_creation_1h_tokens` column) is intentionally small: `meta`, `import_runs`, `usage_events`. Do not reintroduce source-checkpoint/observation/conflict/device/merge/session ledger tables without an explicit schema design and regression plan.
 - Token fields must come from explicit source usage envelopes or documented adapter-specific fallback. Do not infer token counts from text length, neighboring timestamps, file order, or UI display text.
-- v3 does not persist request timing, TTFT, TPS, request count, recorded cost, or raw usage envelopes. Do not recreate them through adapter metadata or derived queries.
+- The schema does not persist request timing, TTFT, TPS, request count, recorded cost, or raw usage envelopes. Do not recreate them through adapter metadata or derived queries.
 - SQL that uses user-controlled report/API dimensions, sort keys, or bucket names must use allowlists. Use query parameters for values; do not concatenate raw user input into SQL expressions.
 - `serve` is read-only in this release. Browser/API paths must not trigger `import`, `merge`, `vacuum`, `init --reset`, config writes, file writes, or source log mutation.
 - `serve` must remain loopback-only unless there is a clear product/security decision to add authentication and remote access.

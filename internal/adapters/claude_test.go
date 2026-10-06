@@ -276,3 +276,45 @@ func TestClaudeDiscoverPathsExpandLegacyRootToProjectsAndXDG(t *testing.T) {
 		t.Fatalf("unexpected normalized paths: %#v", paths)
 	}
 }
+
+func TestClaudeAdapterParsesCacheCreationTTLSplit(t *testing.T) {
+	path := writeClaudeUsageFile(t,
+		`{"type":"assistant","timestamp":"2026-01-02T03:04:05Z","requestId":"req-5m","sessionId":"s","message":{"id":"msg-5m","model":"claude-opus-5","usage":{"input_tokens":1,"output_tokens":2,"cache_creation_input_tokens":300,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":300,"ephemeral_1h_input_tokens":0}}}}`,
+		`{"type":"assistant","timestamp":"2026-01-02T03:04:06Z","requestId":"req-1h","sessionId":"s","message":{"id":"msg-1h","model":"claude-opus-5","usage":{"input_tokens":1,"output_tokens":2,"cache_creation_input_tokens":400,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":400}}}}`,
+		`{"type":"assistant","timestamp":"2026-01-02T03:04:07Z","requestId":"req-mixed","sessionId":"s","message":{"id":"msg-mixed","model":"claude-opus-5","usage":{"input_tokens":1,"output_tokens":2,"cache_creation_input_tokens":500,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":380,"ephemeral_1h_input_tokens":120}}}}`,
+		`{"type":"assistant","timestamp":"2026-01-02T03:04:08Z","requestId":"req-legacy","sessionId":"s","message":{"id":"msg-legacy","model":"claude-opus-5","usage":{"input_tokens":1,"output_tokens":2,"cache_creation_input_tokens":600,"cache_read_input_tokens":0}}}`,
+		`{"type":"assistant","timestamp":"2026-01-02T03:04:09Z","requestId":"req-over","sessionId":"s","message":{"id":"msg-over","model":"claude-opus-5","usage":{"input_tokens":1,"output_tokens":2,"cache_creation_input_tokens":50,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_1h_input_tokens":70}}}}`,
+		`{"type":"assistant","timestamp":"2026-01-02T03:04:10Z","requestId":"req-empty","sessionId":"s","message":{"id":"msg-empty","model":"claude-opus-5","usage":{"input_tokens":1,"output_tokens":2,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cache_creation":{}}}}`,
+	)
+
+	records, err := NewClaudeAdapter().ParseFile(path)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	want := map[string]*int64{
+		"msg-5m":     int64Ptr(0),
+		"msg-1h":     int64Ptr(400),
+		"msg-mixed":  int64Ptr(120),
+		"msg-legacy": nil,
+		"msg-over":   int64Ptr(50),
+		"msg-empty":  nil,
+	}
+	if len(records) != len(want) {
+		t.Fatalf("expected %d records, got %d", len(want), len(records))
+	}
+	for _, rec := range records {
+		expected, ok := want[rec.MessageID]
+		if !ok {
+			t.Fatalf("unexpected message %q", rec.MessageID)
+		}
+		got := rec.CacheCreation1hTokens
+		switch {
+		case expected == nil && got != nil:
+			t.Fatalf("%s: expected unknown 1h split, got %d", rec.MessageID, *got)
+		case expected != nil && got == nil:
+			t.Fatalf("%s: expected 1h split %d, got unknown", rec.MessageID, *expected)
+		case expected != nil && *got != *expected:
+			t.Fatalf("%s: expected 1h split %d, got %d", rec.MessageID, *expected, *got)
+		}
+	}
+}

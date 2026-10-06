@@ -1,7 +1,6 @@
 package adapters
 
 import (
-	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -327,8 +326,7 @@ func scanCodexDiagnosticFile(path string, diag *CodexDiagnostics) error {
 	}
 	defer f.Close()
 
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, codexScannerInitialBufferBytes), codexScannerMaxTokenBytes)
+	scanner := newJSONLLineReader(f)
 	for scanner.Scan() {
 		diag.Lines++
 		line := scanner.Bytes()
