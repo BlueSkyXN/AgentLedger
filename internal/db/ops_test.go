@@ -432,6 +432,40 @@ func TestValidateAccountingProfiles(t *testing.T) {
 		t.Fatalf("expected Gemini accounting rejection, got %v", err)
 	}
 
+	zcode := testEvent("zcode-accounting", "zcode-hash", 12)
+	zcode.Channel = "zcode"
+	zcode.SourceProduct = "zcode-cli-db"
+	zcode.TokenAccountingMethod = model.AccZCodeModelUsage
+	zcode.InputTokens = 4
+	zcode.OutputTokens = 5
+	zcode.ReasoningTokens = 2
+	zcode.CacheCreationTokens = 1
+	zcode.CacheReadTokens = 2
+	zcode.TotalTokens = 12
+	rawInput := int64(7)
+	sourceTotal := int64(12)
+	zcode.RawInputTokens = &rawInput
+	zcode.SourceTotalTokens = &sourceTotal
+	if err := ValidateEvent(zcode); err != nil {
+		t.Fatalf("valid ZCode accounting: %v", err)
+	}
+	zcode.TotalTokens = 13
+	if err := ValidateEvent(zcode); !IsRejectError(err) {
+		t.Fatalf("expected ZCode total rejection, got %v", err)
+	}
+	zcode.TotalTokens = 12
+	shiftedRawInput := int64(8)
+	zcode.RawInputTokens = &shiftedRawInput
+	if err := ValidateEvent(zcode); !IsRejectError(err) {
+		t.Fatalf("expected ZCode raw input rejection, got %v", err)
+	}
+	zcode.RawInputTokens = &rawInput
+	excessReasoning := int64(6)
+	zcode.ReasoningTokens = excessReasoning
+	if err := ValidateEvent(zcode); !IsRejectError(err) {
+		t.Fatalf("expected ZCode reasoning-above-output rejection, got %v", err)
+	}
+
 	codexPartial := testEvent("codex-partial", "codex-partial-hash", 10)
 	codexPartial.TokenAccountingMethod = model.AccCodexTotalDelta
 	codexPartial.InputTokens = 4

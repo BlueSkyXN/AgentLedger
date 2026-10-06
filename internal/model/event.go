@@ -13,6 +13,7 @@ const (
 	AccCopilotSessionMetrics    = "copilot_session_model_metrics"
 	AccGeminiUsage              = "gemini_usage"
 	AccWorkBuddyRawUsage        = "workbuddy_raw_usage"
+	AccZCodeModelUsage          = "zcode_model_usage"
 
 	ModelResolutionDirectEvent        = "direct_event"
 	ModelResolutionThreadSettings     = "thread_settings"

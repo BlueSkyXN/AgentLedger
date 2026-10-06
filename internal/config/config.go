@@ -41,6 +41,7 @@ type AgentsConfig struct {
 	Gemini    AgentConfig `toml:"gemini"`
 	Copilot   AgentConfig `toml:"copilot"`
 	WorkBuddy AgentConfig `toml:"workbuddy"`
+	ZCode     AgentConfig `toml:"zcode"`
 }
 
 type AgentConfig struct {
@@ -70,6 +71,7 @@ func Default() *Config {
 			Gemini:    AgentConfig{Enabled: true, Paths: []string{"~/.gemini"}},
 			Copilot:   AgentConfig{Enabled: true, Paths: []string{"~/.copilot/otel", "~/.copilot/session-state"}},
 			WorkBuddy: AgentConfig{Enabled: true, Paths: []string{"~/.workbuddy/projects"}},
+			ZCode:     AgentConfig{Enabled: true, Paths: []string{"~/.zcode/cli/db"}},
 		},
 	}
 }

@@ -43,6 +43,10 @@ paths = ["~/.copilot/otel", "~/.copilot/session-state"]
 enabled = true
 paths = ["~/.workbuddy/projects"]
 
+[agents.zcode]
+enabled = true
+paths = ["~/.zcode/cli/db"]
+
 ```
 
 ## 字段

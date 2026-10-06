@@ -139,6 +139,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			"copilot":   agentSnapshot(s.cfg.Agents.Copilot),
 			"gemini":    agentSnapshot(s.cfg.Agents.Gemini),
 			"workbuddy": agentSnapshot(s.cfg.Agents.WorkBuddy),
+			"zcode":     agentSnapshot(s.cfg.Agents.ZCode),
 		},
 		"privacy_note": "面板 API 只读，不返回对话正文、raw usage、设备信息或已记录金额。",
 	})

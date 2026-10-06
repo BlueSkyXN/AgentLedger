@@ -14,6 +14,7 @@
 - 配置级 pricing profile、即时 estimated cost、coverage、`policy_zero` 和稳定 unavailable error code。
 - 内置 pricing profile 增加 Grok 4.6 短上下文/长上下文估算规则。
 - 增加纯本地只读 Cursor Agent Exec adapter：导入显式 request usage、拆分 raw input/cache，并提供 `doctor cursor` 对账。
+- 增加纯本地只读 ZCode adapter：导入 `~/.zcode/cli/db/db.sqlite` 的 `model_usage` request usage，schema fail-closed，拆分 cache/reasoning 并验证 total 守恒；不读取正文、`model-io` 或 raw usage。
 - `/api/v2/analytics/timeseries` 支持 `cost=estimated|none`；Web Overview 的每日 Tokens 图默认 `cost=none`。
 - Web Overview 增加模型成本占比、计价覆盖，以及图表加载/失败状态。
 
@@ -28,6 +29,7 @@
 - 逐事件 timezone bucket 缓存 IANA location，避免重复 `LoadLocation`。
 
 ### Fixed
+
 
 - model ID 尾部括号（如 `gpt-5.6-sol(max)`）和明确的 1M context 标记（如 `gpt-5.6-sol[1m]`）会统一剥掉后再识别和计价，思考档位与 context 标记不再影响价格规则；`import` 会按同一规则改写已入库的 `model_normalized` 并重算 content hash。
 - Codex append-only 日志后补 `task_complete` 不再改写既有 event identity；Claude optional/null 字段不再让合法 usage 静默丢失。

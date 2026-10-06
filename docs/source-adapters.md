@@ -108,6 +108,24 @@ identity = root id + native session
 
 `rawUsage.prompt_tokens` 拆成非缓存 input、cache read、cache creation；completion 包含 reasoning，`total_tokens` 使用来源总量并由 `workbuddy_raw_usage_v1` 验证。`auto` 是路由状态，保存 `model_normalized=unknown`、fallback/policy-zero；credit、正文、URL、key 和完整 providerData 不落库。
 
+## ZCode
+
+```text
+channel = zcode
+source_product = zcode-cli-db
+parser_version = zcode-model-usage-v1
+event_granularity = request
+identity = model_usage.id + native session
+```
+
+只读 `~/.zcode/cli/db/db.sqlite` 的 `model_usage` 表（默认路径 `~/.zcode/cli/db`，可显式配置数据库文件或目录）。schema 探测 fail-closed：`model_usage`/`session` 缺列或缺表时整库拒绝，不做猜测式解析。
+
+Session 使用 `session_id`（join `session` 取 `path`，缺失回退 `directory` 作为 project path）；事件使用 `model_usage.id`，同一 `logical_request_id` 的多次 attempt 各自成事件，不折叠。`query_source`（main_turn/subagent/…）只保留在解析期 envelope，不参与 identity。
+
+Token 按 `zcode_model_usage_v1` 归一化：来源 `input_tokens` 包含 cache read 与 cache creation，拆成非缓存 input、cache read、cache creation；`output_tokens` 包含 reasoning；total 优先 `provider_total_tokens`，缺失回退 `computed_total_tokens`，两者不一致或与分项不守恒的行拒绝。全零 usage 行跳过；error/cancelled 但有真实 token 的调用导入。
+
+`model-io-*.jsonl`、`turn_usage`、`raw_usage_json`、`provider_metadata_json`、message 正文与 error 文本不读取也不落库；`provider_id` 列是路由 plan/account 而非模型厂商，事件 provider 由模型家族推导（glm→zai 等）。
+
 ## Parser contract 测试
 
 每个 adapter 使用 synthetic fixture 覆盖：identity precedence、稳定 Session、同 native ID 下 model/token/path 变化不改变 event ID、subkey 拆分、非法 timestamp/token、accounting 守恒、二次 import 幂等，以及 append-only 文件分阶段补 metadata 时不产生第二个 event。fixture 不包含真实 Session、路径或客户数据。

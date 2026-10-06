@@ -233,6 +233,17 @@ func validateAccountingProfile(event *model.UsageEvent) error {
 			return reject("accounting_reasoning_exceeds_output")
 		}
 		expected = event.InputTokens + event.OutputTokens + event.CacheCreationTokens + event.CacheReadTokens
+	case model.AccZCodeModelUsage:
+		if event.ReasoningTokens > event.OutputTokens {
+			return reject("accounting_reasoning_exceeds_output")
+		}
+		expected = event.InputTokens + event.OutputTokens + event.CacheCreationTokens + event.CacheReadTokens
+		if event.RawInputTokens == nil || event.SourceTotalTokens == nil ||
+			*event.RawInputTokens != event.InputTokens+event.CacheCreationTokens+event.CacheReadTokens ||
+			*event.SourceTotalTokens != expected ||
+			event.TotalTokens != expected {
+			return reject("accounting_total_mismatch")
+		}
 	default:
 		strict = false
 	}

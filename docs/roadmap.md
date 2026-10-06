@@ -2,7 +2,7 @@
 
 ## 当前 v3 已完成的主线
 
-- 五个本机日志 adapter 的 Session usage 归一化。
+- 七个本机日志 adapter 的 Session usage 归一化（Claude Code、Codex、Cursor、Copilot、Gemini CLI、WorkBuddy、ZCode）。
 - Schema v3 / identity v2、重复 import 幂等和跨设备 `.aldb` merge。
 - 日期、channel、source、provider、model、project、Session 和 token 分项。
 - CLI、只读 API v2、Web Session 分析页。
