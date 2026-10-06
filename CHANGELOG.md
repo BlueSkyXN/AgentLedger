@@ -34,6 +34,7 @@
 
 ### Fixed
 
+- JSONL 来源中单行超过读取上限（Claude/Gemini/Copilot/Cursor/WorkBuddy 原为 10 MiB，Codex 为 64 MiB）时，`bufio.Scanner` 报 `token too long` 并让整个文件解析失败、该文件的全部用量丢失；现在统一用有界的逐行读取器，上限 64 MiB，超长行只跳过该行并给出 parse warning，行号与 identity 不变，同一文件其余用量记录继续导入。
 - Claude 缓存写入此前全部按 5 分钟价估算，订阅主对话等 1 小时 TTL 写入（2× input）被低估 0.75× input；现在逐事件按真实 TTL 计价。
 - Claude Sonnet 5 价格改为官方标准价 $2 / $10（原定 2026-09-01 涨价到 $3 / $15 已取消），并补齐 5m/1h 缓存写入价；此前缓存写入按 input 价计。
 - Claude Opus 5 补齐 1 小时缓存写入价；Claude Fable 5.1 缓存读取改为官方 $0.25（此前被 `claude-fable-5-*` 按 Fable 5 的 $1 匹配）；`claude-opus-4-1`、`claude-opus-4-2025*` 不再被 Opus 4.5+ 规则按 $5 计价；`claude-opus-4-8-fast` 不再按标准价计价。

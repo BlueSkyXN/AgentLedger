@@ -1,7 +1,6 @@
 package adapters
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -28,11 +27,17 @@ func (a *GeminiAdapter) Discover(paths []string) ([]string, error) {
 }
 
 func (a *GeminiAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, error) {
+	records, _, err := a.ParseFileWithWarnings(path)
+	return records, err
+}
+
+func (a *GeminiAdapter) ParseFileWithWarnings(path string) ([]*fingerprint.ParsedRecord, []string, error) {
 	ext := strings.ToLower(filepath.Ext(path))
 	if ext == ".jsonl" {
 		return parseGeminiJSONL(path)
 	}
-	return parseGeminiJSON(path)
+	records, err := parseGeminiJSON(path)
+	return records, nil, err
 }
 
 func parseGeminiJSON(path string) ([]*fingerprint.ParsedRecord, error) {
@@ -63,16 +68,15 @@ func parseGeminiJSON(path string) ([]*fingerprint.ParsedRecord, error) {
 	return nil, nil
 }
 
-func parseGeminiJSONL(path string) ([]*fingerprint.ParsedRecord, error) {
+func parseGeminiJSONL(path string) ([]*fingerprint.ParsedRecord, []string, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open %s: %w", path, err)
+		return nil, nil, fmt.Errorf("failed to open %s: %w", path, err)
 	}
 	defer f.Close()
 
 	var records []*fingerprint.ParsedRecord
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 10*1024*1024), 10*1024*1024)
+	scanner := newJSONLLineReader(f)
 	lineNum := 0
 
 	for scanner.Scan() {
@@ -92,7 +96,7 @@ func parseGeminiJSONL(path string) ([]*fingerprint.ParsedRecord, error) {
 		}
 	}
 
-	return records, scanner.Err()
+	return records, oversizedLineWarnings(scanner.SkippedLines()), scanner.Err()
 }
 
 func parseGeminiObject(obj map[string]interface{}, path string, lineNum int) *fingerprint.ParsedRecord {

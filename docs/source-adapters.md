@@ -12,6 +12,7 @@
 - 最后才用 `content_fallback`；它只保证完全相同内容重复 skip。
 - 完整 source JSON 只在解析期存在；不保存正文或 raw usage。
 - `raw_sha256` 是原始记录诊断 hash，不等于结构化 `content_sha256`。
+- JSONL 来源（Claude、Codex、Gemini、Copilot、Cursor、WorkBuddy）逐行读取，单行上限 64 MiB。超过上限的行只跳过该行，不缓存整行；行号照常计数，因此依赖行号的 identity 不变；同一文件其余记录照常导入，并输出 `skipped N oversized line(s)` parse warning。此前超长行会让整个文件解析失败。
 
 ## Claude Code
 

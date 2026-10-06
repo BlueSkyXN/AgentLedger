@@ -1,7 +1,6 @@
 package adapters
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -85,8 +84,7 @@ func (a *WorkBuddyAdapter) ParseFileWithWarnings(path string) ([]*fingerprint.Pa
 
 	records := make([]*fingerprint.ParsedRecord, 0)
 	diagnostics := newWorkBuddyParseDiagnostics()
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 10*1024*1024), 10*1024*1024)
+	scanner := newJSONLLineReader(f)
 	lineNumber := 0
 	for scanner.Scan() {
 		lineNumber++
@@ -112,7 +110,7 @@ func (a *WorkBuddyAdapter) ParseFileWithWarnings(path string) ([]*fingerprint.Pa
 	if err := scanner.Err(); err != nil {
 		return nil, diagnostics.warnings(), fmt.Errorf("scan WorkBuddy source %s: %w", path, err)
 	}
-	return records, diagnostics.warnings(), nil
+	return records, append(diagnostics.warnings(), oversizedLineWarnings(scanner.SkippedLines())...), nil
 }
 
 func decodeWorkBuddyObject(line []byte) (map[string]interface{}, bool) {

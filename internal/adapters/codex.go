@@ -1,7 +1,6 @@
 package adapters
 
 import (
-	"bufio"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -18,8 +17,6 @@ const (
 	// CodexDuplicatePolicyCCUsageCompatible 复刻 ccusage 的单次 usage 口径：累计推进时
 	// 优先 last_token_usage，last 缺失时使用累计差值，累计未推进时忽略该行。
 	CodexDuplicatePolicyCCUsageCompatible = "ccusage_compatible"
-	codexScannerInitialBufferBytes        = 64 * 1024
-	codexScannerMaxTokenBytes             = 64 * 1024 * 1024
 )
 
 type CodexAdapter struct {
@@ -106,24 +103,28 @@ func normalizeCodexDiscoverPaths(paths []string) []string {
 }
 
 func (a *CodexAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, error) {
+	records, _, err := a.ParseFileWithWarnings(path)
+	return records, err
+}
+
+func (a *CodexAdapter) ParseFileWithWarnings(path string) ([]*fingerprint.ParsedRecord, []string, error) {
 	replayMatcher, err := a.replayMatcherFor(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	f, err := os.Open(path)
 	if err != nil {
 		if replayMatcher != nil {
 			a.replayStats.fileChanged++
-			return nil, &codexReplayQuarantineError{reason: "child file became unavailable after replay preparation"}
+			return nil, nil, &codexReplayQuarantineError{reason: "child file became unavailable after replay preparation"}
 		}
-		return nil, nil
+		return nil, nil, nil
 	}
 	defer f.Close()
 
 	var records []*fingerprint.ParsedRecord
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, codexScannerInitialBufferBytes), codexScannerMaxTokenBytes)
+	scanner := newJSONLLineReader(f)
 	lineNum := 0
 	defaultSessionID := extractCodexSession(path)
 	sessionPathID := extractCodexSessionPathID(path)
@@ -240,7 +241,7 @@ func (a *CodexAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, erro
 			if replayUsageStatus != codexReplayUsageComparable {
 				if !storedUsage.isZero() {
 					a.replayStats.unresolved++
-					return nil, &codexReplayQuarantineError{reason: "non-zero usage cannot be compared with the replay stream"}
+					return nil, nil, &codexReplayQuarantineError{reason: "non-zero usage cannot be compared with the replay stream"}
 				}
 				continue
 			}
@@ -249,7 +250,7 @@ func (a *CodexAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, erro
 				// A child is all-or-nothing: if its replay cannot be proven, do not
 				// return any records that may already have been accumulated.
 				a.replayStats.unresolved++
-				return nil, err
+				return nil, nil, err
 			}
 			if decision.skip {
 				a.recordReplaySkip(decision.method, storedUsage.totalTokens())
@@ -347,7 +348,7 @@ func (a *CodexAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, erro
 		lastUsageRecords[""] = rec
 	}
 
-	return records, scanner.Err()
+	return records, oversizedLineWarnings(scanner.SkippedLines()), scanner.Err()
 }
 
 func applyCodexBufferedModels(modelStates map[string]codexModelState, buffered []codexBufferedModelDeclaration, replayMatcher *codexReplayMatcher) {

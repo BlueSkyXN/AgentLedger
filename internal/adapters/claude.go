@@ -1,7 +1,6 @@
 package adapters
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -39,15 +38,19 @@ func (a *ClaudeAdapter) Discover(paths []string) ([]string, error) {
 }
 
 func (a *ClaudeAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, error) {
+	records, _, err := a.ParseFileWithWarnings(path)
+	return records, err
+}
+
+func (a *ClaudeAdapter) ParseFileWithWarnings(path string) ([]*fingerprint.ParsedRecord, []string, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open %s: %w", path, err)
+		return nil, nil, fmt.Errorf("failed to open %s: %w", path, err)
 	}
 	defer f.Close()
 
 	var records []*fingerprint.ParsedRecord
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 10*1024*1024), 10*1024*1024)
+	scanner := newJSONLLineReader(f)
 	lineNum := 0
 
 	for scanner.Scan() {
@@ -129,7 +132,7 @@ func (a *ClaudeAdapter) ParseFile(path string) ([]*fingerprint.ParsedRecord, err
 		records = append(records, rec)
 	}
 
-	return records, scanner.Err()
+	return records, oversizedLineWarnings(scanner.SkippedLines()), scanner.Err()
 }
 
 func (a *ClaudeAdapter) PostProcessRecords(records []*fingerprint.ParsedRecord) []*fingerprint.ParsedRecord {
