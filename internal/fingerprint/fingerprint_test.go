@@ -157,3 +157,43 @@ func TestComputeIdentityRequiresTimestampAndStableSession(t *testing.T) {
 		t.Fatal("expected absolute session path rejection")
 	}
 }
+
+func TestContentSHA256OmitsUnknownCacheCreation1hSplit(t *testing.T) {
+	base := ParsedRecord{
+		Agent: "claude", Provider: "anthropic", Model: "claude-opus-5", SourceProduct: "claude-code",
+		Granularity: "request", TimestampMs: 1_700_000_000_000,
+		InputTokens: 10, OutputTokens: 20, CacheCreationTokens: 300, CacheReadTokens: 400, TotalTokens: 730,
+		TokenAccountingMethod: "claude_usage_sum", AccountingProfile: "claude_usage_v1",
+	}
+	unknown, err := ComputeContentSHA256(&base)
+	if err != nil {
+		t.Fatalf("hash without split: %v", err)
+	}
+	// Golden value computed before cache_creation_1h_tokens existed: events
+	// without a TTL split must keep their stored content hash.
+	const golden = "30686ca5527061400dfbc8234874703ae2312cfe0e75ee958c6446c8c842f160"
+	if unknown != golden {
+		t.Fatalf("content hash without TTL split changed: got %s want %s", unknown, golden)
+	}
+
+	zero := int64(0)
+	withZero := base
+	withZero.CacheCreation1hTokens = &zero
+	known, err := ComputeContentSHA256(&withZero)
+	if err != nil {
+		t.Fatalf("hash with split: %v", err)
+	}
+	if known == unknown {
+		t.Fatal("a known 1h split of zero must hash differently from an unknown split")
+	}
+	split := int64(120)
+	withSplit := base
+	withSplit.CacheCreation1hTokens = &split
+	other, err := ComputeContentSHA256(&withSplit)
+	if err != nil {
+		t.Fatalf("hash with non-zero split: %v", err)
+	}
+	if other == known {
+		t.Fatal("different 1h splits must hash differently")
+	}
+}

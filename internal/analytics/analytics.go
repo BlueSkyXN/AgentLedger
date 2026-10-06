@@ -588,6 +588,16 @@ func estimateCosts(conn *sql.DB, filters Filters, labelExpr string) map[string]e
 	return estimateCostsWithPrefix(conn, filters, labelExpr, nil)
 }
 
+// usageEventsHasColumn reports whether usage_events has the named column. The
+// column name is a code constant, never user input.
+func usageEventsHasColumn(conn *sql.DB, column string) bool {
+	var count int
+	if err := conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('usage_events') WHERE name = ?`, column).Scan(&count); err != nil {
+		return false
+	}
+	return count > 0
+}
+
 func estimateCostsWithPrefix(conn *sql.DB, filters Filters, labelExpr string, prefixArgs []any) map[string]estimateResult {
 	results := make(map[string]estimateResult)
 	if strings.EqualFold(filters.CostMode, "none") {
@@ -598,10 +608,16 @@ func estimateCostsWithPrefix(conn *sql.DB, filters Filters, labelExpr string, pr
 		results[""] = estimateResult{pricing: info}
 		return results
 	}
+	// A legacy v3 database has no TTL split column; its cache writes are
+	// priced with the profile's cache_write_assumption.
+	cacheCreation1hExpr := "NULL"
+	if usageEventsHasColumn(conn, "cache_creation_1h_tokens") {
+		cacheCreation1hExpr = "cache_creation_1h_tokens"
+	}
 	query := `SELECT ` + labelExpr + ` AS label, timestamp_ms, channel, COALESCE(provider, ''),
         model_normalized, source_product, COALESCE(observability_level, ''),
         COALESCE(token_accounting_method, ''), COALESCE(accounting_profile, ''),
-        input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, reasoning_tokens, total_tokens
+        input_tokens, output_tokens, cache_creation_tokens, ` + cacheCreation1hExpr + `, cache_read_tokens, reasoning_tokens, total_tokens
         FROM usage_events WHERE 1=1`
 	args := append([]any{}, prefixArgs...)
 	query = addFilters(query, &args, filters, "timestamp_ms")
@@ -615,13 +631,18 @@ func estimateCostsWithPrefix(conn *sql.DB, filters Filters, labelExpr string, pr
 	for rows.Next() {
 		var label string
 		var event pricing.Event
+		var cacheCreation1h sql.NullInt64
 		if err := rows.Scan(&label, &event.TimestampMs, &event.Channel, &event.Provider,
 			&event.Model, &event.SourceProduct, &event.ObservabilityLevel,
 			&event.TokenAccountingMethod, &event.AccountingProfile,
-			&event.InputTokens, &event.OutputTokens, &event.CacheCreationTokens,
+			&event.InputTokens, &event.OutputTokens, &event.CacheCreationTokens, &cacheCreation1h,
 			&event.CacheReadTokens, &event.ReasoningTokens, &event.TotalTokens); err != nil {
 			results[""] = estimateResult{pricing: unavailablePricing("pricing_query_failed")}
 			return results
+		}
+		if cacheCreation1h.Valid {
+			value := cacheCreation1h.Int64
+			event.CacheCreation1hTokens = &value
 		}
 		estimate, err := estimator.Estimate(event)
 		if err != nil {

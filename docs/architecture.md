@@ -16,7 +16,7 @@ Claude/Codex/Copilot/Gemini/WorkBuddy logs
        fingerprint identity v2/content hash
                  │ UsageEvent
                  ▼
-      SQLite schema v3 transactional reconcile
+      SQLite schema v4 transactional reconcile
           │                     │
           ▼                     ▼
   CLI report/export/merge   read-only /api/v2
@@ -30,7 +30,7 @@ Claude/Codex/Copilot/Gemini/WorkBuddy logs
 - `internal/adapters`：发现和解析本机日志，或通过受限的本机 runtime collector 获取显式 usage，选择每个产品的权威 usage 粒度。
 - `internal/fingerprint`：生成稳定 Session/event identity 和结构化 content hash。
 - `internal/model`：跨 package 的 `UsageEvent`。
-- `internal/db`：schema v3、校验、reconcile、merge、统计与 IANA time bucket SQLite function。
+- `internal/db`：schema v4（含 v3→v4 迁移与 legacy v3 只读兼容）、校验、reconcile、merge、统计与 IANA time bucket SQLite function。
 - `internal/pricing`：只读 profile、provider/channel/model matching、即时估算与 coverage。
 - `internal/analytics`：API/Web 聚合、Session summary、分页和 filters。
 - `internal/report`：CLI 文本/JSON 报表。
@@ -59,7 +59,7 @@ SQLite 只保存 UTC epoch milliseconds。`agentledger_time_bucket(timestamp_ms,
 
 ## Pricing
 
-金额永不写库。查询按当前 profile 使用 provider、channel、model、日期和 token bucket 即时估算。未匹配模型为 unpriced/null；内置 `unknown` 规则是 `policy_zero`，不冒充官方免费。配置 profile 无效只让 pricing unavailable，不阻断用量查询；显式 CLI override 无效直接失败。
+金额永不写库。查询按当前 profile 使用 provider、channel、model、日期和 token bucket 即时估算。缓存写入有 TTL 拆分时，1 小时部分按 `cache_write_1h`、其余按 `cache_write_5m` 计价（规则若只有单一 `cache_creation`/`cache_write` 价则两部分同价；缺 `cache_write_1h` 时回退单价并标为 `partial`）；没有拆分时按 `cache_write_assumption` 选单一价格。未匹配模型为 unpriced/null；内置 `unknown` 规则是 `policy_zero`，不冒充官方免费。配置 profile 无效只让 pricing unavailable，不阻断用量查询；显式 CLI override 无效直接失败。
 
 ## 明确不包含
 

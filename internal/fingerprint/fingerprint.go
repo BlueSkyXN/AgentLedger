@@ -56,8 +56,11 @@ type ParsedRecord struct {
 
 	SourceTotalTokens *int64
 	RawInputTokens    *int64
-	IsSidechain       bool
-	UsageSpeed        string
+	// CacheCreation1hTokens is the 1-hour TTL share of CacheCreationTokens;
+	// nil means the source did not report a TTL split.
+	CacheCreation1hTokens *int64
+	IsSidechain           bool
+	UsageSpeed            string
 
 	SourceProduct         string
 	ObservabilityLevel    string
@@ -280,6 +283,11 @@ func ComputeContentSHA256(rec *ParsedRecord) (string, error) {
 		envelope["raw_input_tokens"] = *rec.RawInputTokens
 	} else {
 		envelope["raw_input_tokens"] = nil
+	}
+	// Only present when known so content hashes of events without a TTL
+	// split stay identical to those computed before the field existed.
+	if rec.CacheCreation1hTokens != nil {
+		envelope["cache_creation_1h_tokens"] = *rec.CacheCreation1hTokens
 	}
 	canonical, err := CanonicalJSONValue(envelope)
 	if err != nil {

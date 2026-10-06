@@ -53,7 +53,7 @@ Events skipped:  第一次有效事件数
 ./bin/agent-ledger merge device-a.aldb
 ```
 
-merge 只接受 schema v3 / identity v2，先做全量 preflight。冲突时整次 merge 零写入。
+merge 的目标库须为 schema v4，来源库接受 schema v4 或 legacy v3（identity v2），先做全量 preflight。冲突时整次 merge 零写入。
 
 ## 6. Web/API
 

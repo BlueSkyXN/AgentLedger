@@ -1,6 +1,6 @@
 # internal/db navigation card
 
-`internal/db/` owns SQLite schema v3, identity-version gate, event reconcile, import run bookkeeping, stats, export, and merge operations. Read this card before any schema, redaction, merge, or reconcile change. Key files: `schema.go`, `db.go`, `ops.go`, and matching tests.
+`internal/db/` owns SQLite schema v4 (v3 plus the nullable `cache_creation_1h_tokens` column; `db.Open` migrates v3, read-only paths still accept legacy v3), identity-version gate, event reconcile, import run bookkeeping, stats, export, and merge operations. Read this card before any schema, redaction, merge, or reconcile change. Key files: `schema.go`, `db.go`, `ops.go`, and matching tests.
 
 ## Why this is high-risk
 

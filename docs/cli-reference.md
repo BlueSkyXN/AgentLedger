@@ -7,7 +7,7 @@ agent-ledger init
 agent-ledger init --reset
 ```
 
-创建配置和 schema v3 数据库。`--reset` 删除当前配置指向的 DB/WAL/SHM，属于破坏性操作；对正式库执行前必须有 exact backup 和明确授权。
+创建配置和 schema v4 数据库；已有 schema v3 数据库会在事务内自动迁移到 v4。`--reset` 删除当前配置指向的 DB/WAL/SHM，属于破坏性操作；对正式库执行前必须有 exact backup 和明确授权。
 
 ## `import`
 
@@ -25,7 +25,7 @@ import 会重新读取稳定文件；本版不保存 file offset/checkpoint。�
 
 ## `verify`
 
-通过普通只读 SQLite 连接执行 `PRAGMA integrity_check`。它验证物理 SQLite 完整性，不等于 schema v3 业务查询已验收；还需运行 `status`、report 和 API smoke。
+通过普通只读 SQLite 连接执行 `PRAGMA integrity_check`。它验证物理 SQLite 完整性，不等于 schema 业务查询已验收；还需运行 `status`、report 和 API smoke。
 
 ## `report`
 
@@ -65,7 +65,7 @@ report sessions
 agent-ledger export -o device-a.aldb
 ```
 
-输出可移植 schema v3 SQLite。默认 redacted export 清空 `project_path`、`source_file` 和 import warning，但保持 event/session/content identity 与 token totals。
+输出可移植 SQLite，schema 版本与源库一致（v4，或尚未迁移的 legacy v3）。默认 redacted export 清空 `project_path`、`source_file` 和 import warning，但保持 event/session/content identity 与 token totals。
 
 ## `merge`
 
@@ -73,7 +73,7 @@ agent-ledger export -o device-a.aldb
 agent-ledger merge device-a.aldb
 ```
 
-只接受 schema v3 / identity v2。merge 不复制 incoming `import_runs`；先全量 preflight，任一冲突整事务零写入。成功输出 inserted/updated/skipped，重复 merge 应全部 skipped。
+目标库必须是 schema v4（v3 目标库需先运行一次 `import` 或 `init` 迁移）；来源库接受 schema v4 或 legacy v3，均要求 identity v2。legacy v3 来源的事件没有缓存 TTL 拆分，不会覆盖目标库中已知的拆分。merge 不复制 incoming `import_runs`；先全量 preflight，任一冲突整事务零写入。成功输出 inserted/updated/skipped，重复 merge 应全部 skipped。
 
 ## `vacuum`
 

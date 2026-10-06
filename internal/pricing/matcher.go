@@ -21,6 +21,9 @@ type Event struct {
 	InputTokens           int64
 	OutputTokens          int64
 	CacheCreationTokens   int64
+	// CacheCreation1hTokens is the 1-hour TTL share of CacheCreationTokens;
+	// nil means the TTL split is unknown and cache_write_assumption applies.
+	CacheCreation1hTokens *int64
 	CacheReadTokens       int64
 	ReasoningTokens       int64
 	TotalTokens           int64

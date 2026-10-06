@@ -1,14 +1,19 @@
-# Data Model — schema v3
+# Data Model — schema v4
 
-AgentLedger v3 只保留 `meta`、`import_runs`、`usage_events` 三张表。`db.OpenReadOnly()` 只验证普通 SQLite 可读；`db.OpenReadOnlyV3()` 和 `db.OpenReadWriteV3()` 还要求 schema v3、identity v2 与完整必需列。
+AgentLedger 只保留 `meta`、`import_runs`、`usage_events` 三张表。schema v4 在 v3 基础上只给 `usage_events` 增加一列可空的 `cache_creation_1h_tokens`，表集合与 identity v2 不变。
 
-v3 不迁移 v2 行，不接受 v2 `.aldb` merge。已有数据通过原始日志 clean rebuild。
+- `db.Open()`（`import`、`init` 使用）遇到 schema v3 数据库时，在单个事务内执行 `ALTER TABLE ... ADD COLUMN` 并把 `schema_version` 改为 `4`；迁移前先校验完整的 v3 结构，不完整或含未知对象的库不会被升级。迁移后旧行的 `cache_creation_1h_tokens` 为 `NULL`，下一次 `import` 重新解析来源日志时补齐。
+- `db.OpenReadOnly()` 只验证普通 SQLite 可读；`db.OpenReadOnlyV3()`（`serve`、`report`、`status`、`export`、merge 来源库）接受 schema v4 与 legacy v3，legacy v3 的 TTL 拆分按未知读取，不写库。
+- `db.OpenReadWriteV3()`（merge 目标库、`vacuum`）只接受 schema v4；遇到 v3 时提示先运行一次 `import` 或 `init` 完成迁移。
+- 升级到 v4 后，旧版本 AgentLedger 因列校验无法再打开该数据库。
+
+v2 行不迁移，不接受 v2 `.aldb` merge。已有 v2 数据通过原始日志 clean rebuild。
 
 ## `meta`
 
 | key | value |
 |---|---|
-| `schema_version` | `3` |
+| `schema_version` | `4`（legacy `3` 仅只读兼容，`db.Open()` 会自动迁移） |
 | `identity_version` | `2` |
 | `created_at` | 数据库创建时间 |
 
@@ -88,12 +93,15 @@ cache_read_tokens
 total_tokens
 source_total_tokens
 raw_input_tokens
+cache_creation_1h_tokens
 token_accounting_method
 accounting_profile
 observability_level
 ```
 
 所有 token 字段非负。reasoning、cache、total 的包含关系由 adapter/accounting profile 验证，不使用一个跨产品通用求和公式；报表只汇总 canonical `total_tokens`，不汇总 `source_total_tokens`。
+
+`cache_creation_1h_tokens` 是 `cache_creation_tokens` 中 1 小时 TTL 缓存写入的部分，5 分钟部分为两者之差，不单独存储。`NULL` 表示来源没有提供 TTL 拆分（非 Claude 来源、Claude 旧记录或迁移后尚未重新 import 的行），`0` 表示已知全部为 5 分钟写入。约束为 `0 <= cache_creation_1h_tokens <= cache_creation_tokens`。该字段只在非 `NULL` 时进入 content hash，因此没有拆分的事件保持原有 `content_sha256`。reconcile 时 `NULL` 可被已知值补齐（`updated`），两个不同的已知值是 `token_conflict`；缺少拆分、其余事实相同的观测（旧 parser 或 legacy v3 来源库）按 `skipped` 处理，不会抹掉已知值。
 
 ### 导入时间
 
@@ -126,6 +134,7 @@ raw_usage_json
 - `event_id`、`content_sha256`、`channel`、`source_product`、`session_key` 非空。
 - identity version 固定为 2。
 - timestamp 必须大于 0，token 必须非负。
+- `cache_creation_1h_tokens` 为 `NULL` 或介于 0 与 `cache_creation_tokens` 之间。
 - 索引：`timestamp_ms`、`session_key`、`channel + timestamp_ms`、`source_product + timestamp_ms`、`model_normalized + timestamp_ms`。
 
 ## Reconcile 决策

@@ -7,7 +7,7 @@ AgentLedger v3 是本地优先的 AI Coding Agent Session usage 统计器。它�
 - 保留 `Adapter → UsageEvent → SQLite → CLI/API/Web` 主链。
 - 只保存结构化 usage facts；不保存对话正文、完整源对象、设备信息或金额。
 - 只统计事件日期以及日/周/月分桶；不提供 request duration、TTFT、TPS、Slow 或 request-count KPI。
-- 多设备通过 schema v3 `.aldb` 合并；不保存或展示设备维度。
+- 多设备通过 schema v4 `.aldb` 合并（也接受 legacy v3 来源库）；不保存或展示设备维度。
 - import 可以重复扫描日志，事件级 identity 保证重复导入不增加总量；本版不做文件 offset/checkpoint。
 - estimated cost 始终按当前 pricing profile 即时计算，数据库不保存金额。
 
@@ -65,11 +65,11 @@ report daily|weekly|monthly|models|channels|sources|providers|projects|sessions
 
 `--cost` 默认 `estimated`。显式 `--pricing` 文件无效时命令失败；配置中的默认 pricing 文件无效时，用量查询仍成功，但 cost 为 `null`，并返回 `pricing.status=unavailable`。
 
-## Schema v3 与去重
+## Schema v4 与去重
 
 数据库只包含：
 
-- `meta`：`schema_version=3`、`identity_version=2`、`created_at`。
+- `meta`：`schema_version=4`、`identity_version=2`、`created_at`。v4 只在 v3 基础上给 `usage_events` 增加可空列 `cache_creation_1h_tokens`；`import`/`init` 会自动把 v3 库迁移到 v4，只读命令可直接读取 v3 库。
 - `import_runs`：本次 import 的 inserted/updated/skipped/rejected 和脱敏 warning。
 - `usage_events`：事件 identity、Session、来源、模型、时间、token/accounting 与本机 source locator。
 

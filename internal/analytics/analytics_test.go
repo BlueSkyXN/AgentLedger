@@ -196,3 +196,38 @@ func insertAnalyticsEvent(t *testing.T, database *db.Database, id, session, chan
 func atUTC(year int, month time.Month, day, hour, minute int) int64 {
 	return time.Date(year, month, day, hour, minute, 0, 0, time.UTC).UnixMilli()
 }
+
+func TestEstimatedCostUsesCacheTTLSplit(t *testing.T) {
+	database := analyticsTestDatabase(t)
+	defer database.Close()
+	insertAnalyticsEvent(t, database, "split", "session", "claude", "claude-code", "anthropic", "claude-opus-4-8", 10, atUTC(2026, 3, 7, 12, 0), "")
+	if _, err := database.Conn().Exec(`UPDATE usage_events
+		SET input_tokens=0, cache_creation_tokens=1000000, cache_creation_1h_tokens=400000, total_tokens=1000000
+		WHERE event_id='split'`); err != nil {
+		t.Fatal(err)
+	}
+
+	cost := func() float64 {
+		t.Helper()
+		rows, err := BuildBreakdown(database.Conn(), "model", Filters{Timezone: "UTC", CostMode: "estimated"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rows) != 1 || rows[0].EstimatedCostUSD == nil {
+			t.Fatalf("unexpected rows: %+v", rows)
+		}
+		return *rows[0].EstimatedCostUSD
+	}
+	// 600k five-minute writes at 6.25 plus 400k one-hour writes at 10 per 1M.
+	if got := cost(); got != 7.75 {
+		t.Fatalf("split cost = %v, want 7.75", got)
+	}
+
+	// A legacy v3 layout has no split column; writes fall back to 5 minutes.
+	if _, err := database.Conn().Exec(`ALTER TABLE usage_events DROP COLUMN cache_creation_1h_tokens`); err != nil {
+		t.Fatal(err)
+	}
+	if got := cost(); got != 6.25 {
+		t.Fatalf("legacy cost = %v, want 6.25", got)
+	}
+}

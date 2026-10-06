@@ -24,6 +24,9 @@ var timeLocationCache sync.Map
 type Database struct {
 	conn *sql.DB
 	path string
+	// schemaVer is the validated schema version ("4", or legacy "3" on
+	// read-only paths); empty until validateReadOnlySchema succeeds.
+	schemaVer string
 }
 
 func init() {
@@ -110,7 +113,8 @@ func OpenReadOnly(path string) (*Database, error) {
 	return db, nil
 }
 
-// OpenReadOnlyV3 opens an existing current-v3 database without creating or migrating it.
+// OpenReadOnlyV3 opens an existing identity-v2 database (schema v4, or legacy
+// v3 whose cache TTL split reads as unknown) without creating or migrating it.
 func OpenReadOnlyV3(path string) (*Database, error) {
 	db, err := OpenReadOnly(path)
 	if err != nil {
@@ -123,9 +127,10 @@ func OpenReadOnlyV3(path string) (*Database, error) {
 	return db, nil
 }
 
-// OpenReadWriteV3 opens an existing complete v3 database without creating,
-// initializing, or migrating it. It is for narrowly-scoped maintenance that
-// must not trigger startup schema maintenance.
+// OpenReadWriteV3 opens an existing complete current-schema (v4) database
+// without creating, initializing, or migrating it. It is for narrowly-scoped
+// maintenance that must not trigger startup schema maintenance; a legacy v3
+// database is rejected with a hint to migrate it through import or init.
 func OpenReadWriteV3(path string) (*Database, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -159,6 +164,10 @@ func OpenReadWriteV3(path string) (*Database, error) {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 	if err := db.validateReadOnlySchema(); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("failed to validate database: %w", err)
+	}
+	if err := db.requireCurrentSchema(); err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("failed to validate database: %w", err)
 	}

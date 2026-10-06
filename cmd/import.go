@@ -453,6 +453,7 @@ func importParsedRecords(database *db.Database, adapterName string, records []*f
 			ModelIsFallback:       modelIsFallback,
 			SourceTotalTokens:     rec.SourceTotalTokens,
 			RawInputTokens:        rec.RawInputTokens,
+			CacheCreation1hTokens: rec.CacheCreation1hTokens,
 			TokenAccountingMethod: accountingMethod,
 			AccountingProfile:     rec.AccountingProfile,
 			TimestampMs:           rec.TimestampMs,

@@ -44,8 +44,8 @@ func TestStatusReportsV3FactsOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(output, "Schema version:    3") {
-		t.Fatalf("status missing v3 schema: %s", output)
+	if !strings.Contains(output, "Schema version:    "+db.SchemaVersion) {
+		t.Fatalf("status missing current schema version: %s", output)
 	}
 	for _, removed := range []string{"Recorded cost", "request", "TTFT", "TPS", "duration"} {
 		if strings.Contains(output, removed) {

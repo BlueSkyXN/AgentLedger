@@ -1138,3 +1138,111 @@ func TestDefaultProfileClaudeRulesPriceBothCacheWriteTTLs(t *testing.T) {
 		t.Fatal("expected claude rules in the default profile")
 	}
 }
+
+func TestEstimatePricesCacheWritesByTTLSplit(t *testing.T) {
+	profile, err := LoadDefaultProfile()
+	if err != nil {
+		t.Fatalf("load default profile: %v", err)
+	}
+	estimator, err := NewEstimator(profile)
+	if err != nil {
+		t.Fatalf("estimator: %v", err)
+	}
+	split := func(value int64) *int64 { return &value }
+
+	tests := []struct {
+		name           string
+		event          Event
+		wantMicroUSD   int64
+		wantConfidence string
+	}{
+		{
+			// No split: the claude rule assumes 5-minute writes (6.25 / 1M).
+			name:           "unknown split assumes five minute writes",
+			event:          Event{Model: "claude-opus-4-8", CacheCreationTokens: 1_000_000},
+			wantMicroUSD:   6_250_000,
+			wantConfidence: "estimated",
+		},
+		{
+			name:           "all one hour writes",
+			event:          Event{Model: "claude-opus-4-8", CacheCreationTokens: 1_000_000, CacheCreation1hTokens: split(1_000_000)},
+			wantMicroUSD:   10_000_000,
+			wantConfidence: "estimated",
+		},
+		{
+			name:           "known zero split stays five minute",
+			event:          Event{Model: "claude-opus-4-8", CacheCreationTokens: 1_000_000, CacheCreation1hTokens: split(0)},
+			wantMicroUSD:   6_250_000,
+			wantConfidence: "estimated",
+		},
+		{
+			// 600k * 6.25 + 400k * 10 = 3.75 + 4.00
+			name:           "mixed split prices each share",
+			event:          Event{Model: "claude-opus-4-8", CacheCreationTokens: 1_000_000, CacheCreation1hTokens: split(400_000)},
+			wantMicroUSD:   7_750_000,
+			wantConfidence: "estimated",
+		},
+		{
+			// Opus 5.5: 1h write 8 / 1M plus input 4 / 1M.
+			name:           "opus 5.5 one hour writes",
+			event:          Event{Model: "claude-opus-5-5", InputTokens: 1_000_000, CacheCreationTokens: 1_000_000, CacheCreation1hTokens: split(1_000_000)},
+			wantMicroUSD:   12_000_000,
+			wantConfidence: "estimated",
+		},
+		{
+			name:           "oversized split is clamped to the cache write total",
+			event:          Event{Model: "claude-opus-4-8", CacheCreationTokens: 1_000_000, CacheCreation1hTokens: split(5_000_000)},
+			wantMicroUSD:   10_000_000,
+			wantConfidence: "estimated",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			estimate, err := estimator.Estimate(tt.event)
+			if err != nil {
+				t.Fatalf("estimate: %v", err)
+			}
+			if estimate.CostMicroUSD != tt.wantMicroUSD || estimate.Confidence != tt.wantConfidence || !estimate.Priced {
+				t.Fatalf("estimate = %+v, want cost=%d confidence=%s", estimate, tt.wantMicroUSD, tt.wantConfidence)
+			}
+		})
+	}
+}
+
+func TestEstimateSplitFallsBackWhenRuleLacksOneHourRate(t *testing.T) {
+	profile, err := DecodeProfile([]byte(`{
+	  "schema_version": 1,
+	  "id": "ttl-fallback",
+	  "currency": "USD",
+	  "unit": "usd_per_1m_tokens",
+	  "defaults": {"cache_write_assumption": "5m_if_unknown", "confidence": "estimated"},
+	  "rules": [
+	    {"id": "five-only", "model_patterns": ["five-only"], "rates": {"input": 1.0, "cache_write_5m": 1.25}},
+	    {"id": "flat-write", "model_patterns": ["flat-write"], "rates": {"input": 1.0, "cache_write": 3.0}}
+	  ]
+	}`))
+	if err != nil {
+		t.Fatalf("decode profile: %v", err)
+	}
+	estimator, err := NewEstimator(profile)
+	if err != nil {
+		t.Fatalf("estimator: %v", err)
+	}
+	oneHour := int64(1_000_000)
+
+	fallback, err := estimator.Estimate(Event{Model: "five-only", CacheCreationTokens: 1_000_000, CacheCreation1hTokens: &oneHour})
+	if err != nil {
+		t.Fatalf("estimate: %v", err)
+	}
+	if fallback.CostMicroUSD != 1_250_000 || fallback.Confidence != "partial" {
+		t.Fatalf("missing 1h rate should fall back to 5m and be partial: %+v", fallback)
+	}
+
+	flat, err := estimator.Estimate(Event{Model: "flat-write", CacheCreationTokens: 1_000_000, CacheCreation1hTokens: &oneHour})
+	if err != nil {
+		t.Fatalf("estimate: %v", err)
+	}
+	if flat.CostMicroUSD != 3_000_000 || flat.Confidence != "estimated" {
+		t.Fatalf("rule-wide cache_write rate should apply to both shares: %+v", flat)
+	}
+}

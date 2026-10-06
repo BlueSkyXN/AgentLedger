@@ -27,6 +27,8 @@ Session 优先原生 session ID，回退到 Claude source-root-relative project/
 
 Token 使用 `claude_usage_sum`，包括 input、output、cache creation、cache read。来源 cost 不落库。
 
+缓存写入的 TTL 拆分读取 `usage.cache_creation.ephemeral_1h_input_tokens` / `ephemeral_5m_input_tokens`，写入 `cache_creation_1h_tokens`；只有 5m 字段时 1h 记为 0，`cache_creation` 缺失或为空对象时为 `NULL`（未知），1h 超过 `cache_creation_input_tokens` 时截断到总量。TTL 不能由订阅/API、主对话/subagent 推断：同一订阅主对话在超出套餐额度后会从 1h 降为 5m，各模型的 subagent 行为也不同，因此必须逐事件读取。
+
 ## Codex
 
 ```text

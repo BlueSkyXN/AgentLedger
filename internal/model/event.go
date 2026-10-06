@@ -61,6 +61,9 @@ type UsageEvent struct {
 	CacheCreationTokens int64 `json:"cache_creation_tokens" db:"cache_creation_tokens"`
 	CacheReadTokens     int64 `json:"cache_read_tokens" db:"cache_read_tokens"`
 	TotalTokens         int64 `json:"total_tokens" db:"total_tokens"`
+	// CacheCreation1hTokens is the 1-hour TTL share of CacheCreationTokens when
+	// the source reports a TTL split; nil means the split is unknown.
+	CacheCreation1hTokens *int64 `json:"cache_creation_1h_tokens" db:"cache_creation_1h_tokens"`
 
 	SourceTotalTokens     *int64 `json:"source_total_tokens" db:"source_total_tokens"`
 	RawInputTokens        *int64 `json:"raw_input_tokens" db:"raw_input_tokens"`

@@ -171,6 +171,9 @@ func ValidateEvent(event *model.UsageEvent) error {
 	if event.RawInputTokens != nil && *event.RawInputTokens < 0 {
 		return reject("negative_raw_input")
 	}
+	if event.CacheCreation1hTokens != nil && (*event.CacheCreation1hTokens < 0 || *event.CacheCreation1hTokens > event.CacheCreationTokens) {
+		return reject("invalid_cache_ttl_split")
+	}
 	if event.TotalTokens < maxTokenBucket(event) {
 		return reject("accounting_total_below_bucket")
 	}
@@ -324,7 +327,7 @@ func reconcile(existing, incoming *model.UsageEvent) (*model.UsageEvent, string,
 	if existing.EventGranularity != incoming.EventGranularity {
 		return nil, ReconcileRejected, reject("granularity_conflict")
 	}
-	if !sameTokenUsage(existing, incoming) || optionalIntConflict(existing.SourceTotalTokens, incoming.SourceTotalTokens) || optionalIntConflict(existing.RawInputTokens, incoming.RawInputTokens) {
+	if !sameTokenUsage(existing, incoming) || optionalIntConflict(existing.SourceTotalTokens, incoming.SourceTotalTokens) || optionalIntConflict(existing.RawInputTokens, incoming.RawInputTokens) || optionalIntConflict(existing.CacheCreation1hTokens, incoming.CacheCreation1hTokens) {
 		return nil, ReconcileRejected, reject("token_conflict")
 	}
 	if knownConflict(existing.TokenAccountingMethod, incoming.TokenAccountingMethod) || knownConflict(existing.AccountingProfile, incoming.AccountingProfile) {
@@ -363,6 +366,9 @@ func reconcile(existing, incoming *model.UsageEvent) (*model.UsageEvent, string,
 	contentChanged = fillString(&canonical.AccountingProfile, incoming.AccountingProfile) || contentChanged
 	contentChanged = fillOptionalInt(&canonical.SourceTotalTokens, incoming.SourceTotalTokens) || contentChanged
 	contentChanged = fillOptionalInt(&canonical.RawInputTokens, incoming.RawInputTokens) || contentChanged
+	// A TTL split learned from a newer parser fills an unknown (NULL) value;
+	// a disagreeing known value is rejected above as token_conflict.
+	contentChanged = fillOptionalInt(&canonical.CacheCreation1hTokens, incoming.CacheCreation1hTokens) || contentChanged
 	contentChanged = fillString(&canonical.ObservabilityLevel, incoming.ObservabilityLevel) || contentChanged
 
 	metadataChanged = fillString(&canonical.ParserVersion, incoming.ParserVersion) || metadataChanged
@@ -385,6 +391,11 @@ func reconcile(existing, incoming *model.UsageEvent) (*model.UsageEvent, string,
 		}
 		// A weaker model observation cannot downgrade stronger direct evidence.
 		if incomingModelRank < existingModelRank {
+			return existing, ReconcileSkipped, nil
+		}
+		// An observation without the cache TTL split (older parser or a legacy
+		// v3 database) is the same fact with less detail, not a conflict.
+		if lacksOnlyKnownCacheTTLSplit(existing, incoming) {
 			return existing, ReconcileSkipped, nil
 		}
 		return nil, ReconcileRejected, reject("content_conflict")
@@ -417,6 +428,16 @@ func knownConflict(left, right string) bool {
 		return false
 	}
 	return !strings.EqualFold(left, right)
+}
+
+func lacksOnlyKnownCacheTTLSplit(existing, incoming *model.UsageEvent) bool {
+	if incoming.CacheCreation1hTokens != nil || existing.CacheCreation1hTokens == nil {
+		return false
+	}
+	enriched := *incoming
+	enriched.CacheCreation1hTokens = existing.CacheCreation1hTokens
+	hash, err := contentSHA256ForEvent(&enriched)
+	return err == nil && hash == existing.ContentSHA256
 }
 
 func optionalIntConflict(left, right *int64) bool {
@@ -460,6 +481,9 @@ func fillOptionalInt(target **int64, candidate *int64) bool {
 	return true
 }
 
+// eventColumns selects every usage_events column in scanEvent order. A legacy
+// v3 database has no cache_creation_1h_tokens column, so readers of such a
+// database select NULL in its place (see eventColumnsFor).
 const eventColumns = `
     event_id, identity_version, identity_strategy, identity_scope, content_sha256,
     COALESCE(parser_version, ''), event_granularity,
@@ -470,8 +494,16 @@ const eventColumns = `
     COALESCE(source_file, ''), COALESCE(line_number, 0), COALESCE(raw_sha256, ''),
     input_tokens, output_tokens, reasoning_tokens, cache_creation_tokens, cache_read_tokens, total_tokens,
     source_total_tokens, raw_input_tokens, COALESCE(token_accounting_method, ''),
-    COALESCE(accounting_profile, ''), COALESCE(observability_level, ''), imported_at_ms, updated_at_ms
+    COALESCE(accounting_profile, ''), COALESCE(observability_level, ''), imported_at_ms, updated_at_ms,
+    cache_creation_1h_tokens
 `
+
+func eventColumnsFor(hasCacheCreation1h bool) string {
+	if hasCacheCreation1h {
+		return eventColumns
+	}
+	return strings.Replace(eventColumns, "cache_creation_1h_tokens", "NULL AS cache_creation_1h_tokens", 1)
+}
 
 type eventScanner interface {
 	Scan(dest ...any) error
@@ -480,7 +512,7 @@ type eventScanner interface {
 func scanEvent(scanner eventScanner) (*model.UsageEvent, error) {
 	event := &model.UsageEvent{}
 	var fallback int
-	var sourceTotal, rawInput sql.NullInt64
+	var sourceTotal, rawInput, cacheCreation1h sql.NullInt64
 	err := scanner.Scan(
 		&event.EventID, &event.IdentityVersion, &event.IdentityStrategy, &event.IdentityScope, &event.ContentSHA256,
 		&event.ParserVersion, &event.EventGranularity,
@@ -492,6 +524,7 @@ func scanEvent(scanner eventScanner) (*model.UsageEvent, error) {
 		&event.InputTokens, &event.OutputTokens, &event.ReasoningTokens, &event.CacheCreationTokens, &event.CacheReadTokens, &event.TotalTokens,
 		&sourceTotal, &rawInput, &event.TokenAccountingMethod,
 		&event.AccountingProfile, &event.ObservabilityLevel, &event.ImportedAtMs, &event.UpdatedAtMs,
+		&cacheCreation1h,
 	)
 	if err != nil {
 		return nil, err
@@ -499,6 +532,7 @@ func scanEvent(scanner eventScanner) (*model.UsageEvent, error) {
 	event.ModelIsFallback = fallback != 0
 	event.SourceTotalTokens = nullInt64Ptr(sourceTotal)
 	event.RawInputTokens = nullInt64Ptr(rawInput)
+	event.CacheCreation1hTokens = nullInt64Ptr(cacheCreation1h)
 	return event, nil
 }
 
@@ -510,8 +544,8 @@ func selectEvent(queryer interface {
 
 func listEvents(queryer interface {
 	Query(query string, args ...any) (*sql.Rows, error)
-}) ([]*model.UsageEvent, error) {
-	rows, err := queryer.Query(`SELECT ` + eventColumns + ` FROM usage_events ORDER BY event_id`)
+}, hasCacheCreation1h bool) ([]*model.UsageEvent, error) {
+	rows, err := queryer.Query(`SELECT ` + eventColumnsFor(hasCacheCreation1h) + ` FROM usage_events ORDER BY event_id`)
 	if err != nil {
 		return nil, err
 	}
@@ -584,8 +618,8 @@ func insertEvent(exec interface {
             message_id, request_id, source_file, line_number, raw_sha256,
             input_tokens, output_tokens, reasoning_tokens, cache_creation_tokens, cache_read_tokens, total_tokens,
             source_total_tokens, raw_input_tokens, token_accounting_method, accounting_profile, observability_level,
-            imported_at_ms, updated_at_ms
-        ) VALUES (`+placeholders(38)+`)
+            imported_at_ms, updated_at_ms, cache_creation_1h_tokens
+        ) VALUES (`+placeholders(39)+`)
     `, eventArgs(event)...)
 	return err
 }
@@ -604,7 +638,7 @@ func updateEvent(exec interface {
             message_id=?, request_id=?, source_file=?, line_number=?, raw_sha256=?,
             input_tokens=?, output_tokens=?, reasoning_tokens=?, cache_creation_tokens=?, cache_read_tokens=?, total_tokens=?,
             source_total_tokens=?, raw_input_tokens=?, token_accounting_method=?, accounting_profile=?, observability_level=?,
-            imported_at_ms=?, updated_at_ms=?
+            imported_at_ms=?, updated_at_ms=?, cache_creation_1h_tokens=?
         WHERE event_id=?
     `, args...)
 	return err
@@ -619,7 +653,7 @@ func eventArgs(event *model.UsageEvent) []any {
 		nullIfEmpty(event.MessageID), nullIfEmpty(event.RequestID), nullIfEmpty(event.SourceFile), nullableLine(event.LineNumber), nullIfEmpty(event.RawSHA256),
 		event.InputTokens, event.OutputTokens, event.ReasoningTokens, event.CacheCreationTokens, event.CacheReadTokens, event.TotalTokens,
 		nullableInt64(event.SourceTotalTokens), nullableInt64(event.RawInputTokens), nullIfEmpty(event.TokenAccountingMethod), nullIfEmpty(event.AccountingProfile), nullIfEmpty(event.ObservabilityLevel),
-		event.ImportedAtMs, event.UpdatedAtMs,
+		event.ImportedAtMs, event.UpdatedAtMs, nullableInt64(event.CacheCreation1hTokens),
 	}
 }
 
@@ -665,7 +699,8 @@ type mergeAction struct {
 	event  *model.UsageEvent
 }
 
-// MergeFrom accepts only v3/identity-v2 databases. It performs the complete
+// MergeFrom accepts identity-v2 databases with schema v4 or legacy v3; a v3
+// source contributes events whose cache TTL split is unknown. It performs the complete
 // reconcile preflight before its first destination write; any conflict rolls
 // back the transaction and leaves destination events unchanged.
 func (d *Database) MergeFrom(incomingPath string) (result MergeResult, err error) {
@@ -686,7 +721,7 @@ func (d *Database) MergeFrom(incomingPath string) (result MergeResult, err error
 		return result, fmt.Errorf("incoming database is not AgentLedger v3 identity v2: %w", err)
 	}
 	defer incomingDB.Close()
-	incomingEvents, err := listEvents(incomingDB.conn)
+	incomingEvents, err := listEvents(incomingDB.conn, incomingDB.hasCacheCreation1hColumn())
 	if err != nil {
 		return result, err
 	}
@@ -701,7 +736,7 @@ func (d *Database) MergeFrom(incomingPath string) (result MergeResult, err error
 		}
 	}()
 
-	existingEvents, err := listEvents(tx)
+	existingEvents, err := listEvents(tx, true)
 	if err != nil {
 		return result, err
 	}
@@ -734,7 +769,8 @@ func (d *Database) MergeFrom(incomingPath string) (result MergeResult, err error
 			}
 			continue
 		}
-		canonical, status, decisionErr := reconcile(virtual[incoming.EventID], incoming)
+		existing := virtual[incoming.EventID]
+		canonical, status, decisionErr := reconcile(existing, incoming)
 		if decisionErr != nil {
 			var rejected *RejectError
 			if errors.As(decisionErr, &rejected) {
@@ -818,7 +854,7 @@ func slicesSort(values []string) {
 
 func (d *Database) GetStats() (map[string]interface{}, error) {
 	stats := map[string]interface{}{
-		"schema_version":   SchemaVersion,
+		"schema_version":   firstNonEmptyString(d.schemaVer, SchemaVersion),
 		"identity_version": IdentityVersion,
 	}
 	queries := []struct {
@@ -838,6 +874,15 @@ func (d *Database) GetStats() (map[string]interface{}, error) {
 		stats[item.key] = value
 	}
 	return stats, nil
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func nullIfEmpty(value string) any {

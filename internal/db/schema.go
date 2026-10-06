@@ -9,8 +9,12 @@ import (
 )
 
 const (
-	SchemaVersion   = "3"
+	SchemaVersion   = "4"
 	IdentityVersion = "2"
+
+	// legacySchemaVersionV3 databases lack cache_creation_1h_tokens. Read-only
+	// paths accept them (the split reads as unknown); db.Open migrates them.
+	legacySchemaVersionV3 = "3"
 )
 
 var ErrIncompatibleSchema = errors.New("incompatible database schema")
@@ -20,6 +24,8 @@ type requiredTableSchema struct {
 	columns []string
 }
 
+// v3RequiredTableSchemas is the legacy v3 layout. currentRequiredTableSchemas
+// adds the v4 cache TTL split column; table set and identity are unchanged.
 var v3RequiredTableSchemas = []requiredTableSchema{
 	{name: "meta", columns: []string{"key", "value"}},
 	{name: "import_runs", columns: []string{
@@ -38,13 +44,42 @@ var v3RequiredTableSchemas = []requiredTableSchema{
 	}},
 }
 
+var currentRequiredTableSchemas = withExtraColumns(v3RequiredTableSchemas, "usage_events", "cache_creation_1h_tokens")
+
+func withExtraColumns(base []requiredTableSchema, table string, extra ...string) []requiredTableSchema {
+	result := make([]requiredTableSchema, len(base))
+	for index, item := range base {
+		columns := append([]string{}, item.columns...)
+		if item.name == table {
+			columns = append(columns, extra...)
+		}
+		result[index] = requiredTableSchema{name: item.name, columns: columns}
+	}
+	return result
+}
+
+func requiredTableSchemasFor(version string) ([]requiredTableSchema, bool) {
+	switch version {
+	case SchemaVersion:
+		return currentRequiredTableSchemas, true
+	case legacySchemaVersionV3:
+		return v3RequiredTableSchemas, true
+	default:
+		return nil, false
+	}
+}
+
+// cacheCreation1hColumnSQL is shared by the v4 CREATE TABLE and the v3->v4
+// migration so both layouts enforce the same constraint.
+const cacheCreation1hColumnSQL = `cache_creation_1h_tokens INTEGER CHECK (cache_creation_1h_tokens IS NULL OR (cache_creation_1h_tokens >= 0 AND cache_creation_1h_tokens <= cache_creation_tokens))`
+
 const schemaSQLite = `
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
 
-INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', '3');
+INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', '4');
 INSERT OR REPLACE INTO meta (key, value) VALUES ('identity_version', '2');
 INSERT OR IGNORE INTO meta (key, value) VALUES ('created_at', datetime('now'));
 
@@ -99,6 +134,7 @@ CREATE TABLE IF NOT EXISTS usage_events (
     total_tokens          INTEGER NOT NULL DEFAULT 0 CHECK (total_tokens >= 0),
     source_total_tokens   INTEGER CHECK (source_total_tokens IS NULL OR source_total_tokens >= 0),
     raw_input_tokens      INTEGER CHECK (raw_input_tokens IS NULL OR raw_input_tokens >= 0),
+    ` + cacheCreation1hColumnSQL + `,
     token_accounting_method TEXT,
     accounting_profile     TEXT,
     observability_level    TEXT,
@@ -119,7 +155,7 @@ func (d *Database) initSchema() error {
 	if err != nil {
 		return err
 	}
-	if exists && version != SchemaVersion {
+	if exists && version != SchemaVersion && version != legacySchemaVersionV3 {
 		return incompatibleVersionError(version)
 	}
 	if exists {
@@ -131,10 +167,38 @@ func (d *Database) initSchema() error {
 			return fmt.Errorf("%w: identity version %s is not compatible with AgentLedger v3 identity version %s; rebuild from source logs", ErrIncompatibleSchema, identity, IdentityVersion)
 		}
 	}
+	if exists && version == legacySchemaVersionV3 {
+		if err := d.migrateV3ToV4(); err != nil {
+			return err
+		}
+	}
 	if _, err := d.conn.Exec(schemaSQLite); err != nil {
 		return err
 	}
 	return d.validateReadOnlySchema()
+}
+
+// migrateV3ToV4 adds the nullable cache TTL split column in one transaction.
+// Existing rows keep NULL (unknown split) until a later import refills them.
+// The v3 layout is validated first so a partial or foreign database is never
+// upgraded into something that merely looks current.
+func (d *Database) migrateV3ToV4() error {
+	if err := d.validateSchemaLayout(legacySchemaVersionV3); err != nil {
+		return err
+	}
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`ALTER TABLE usage_events ADD COLUMN ` + cacheCreation1hColumnSQL); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("failed to migrate database schema v3 to v4: %w", err)
+	}
+	if _, err := tx.Exec(`UPDATE meta SET value = ? WHERE key = 'schema_version'`, SchemaVersion); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("failed to record database schema v4: %w", err)
+	}
+	return tx.Commit()
 }
 
 func (d *Database) schemaVersion() (string, bool, error) {
@@ -166,6 +230,9 @@ func (d *Database) metaValue(key string) (string, bool, error) {
 	return value, true, nil
 }
 
+// validateReadOnlySchema accepts the current v4 layout and the legacy v3
+// layout (identity v2 in both). It records the detected version so readers can
+// substitute NULL for columns that a v3 database does not have.
 func (d *Database) validateReadOnlySchema() error {
 	version, exists, err := d.schemaVersion()
 	if err != nil {
@@ -174,7 +241,7 @@ func (d *Database) validateReadOnlySchema() error {
 	if !exists {
 		return fmt.Errorf("%w: database is not initialized; run `agent-ledger init` or `agent-ledger import` first", ErrIncompatibleSchema)
 	}
-	if version != SchemaVersion {
+	if _, ok := requiredTableSchemasFor(version); !ok {
 		return incompatibleVersionError(version)
 	}
 	identity, _, err := d.identityVersion()
@@ -184,14 +251,40 @@ func (d *Database) validateReadOnlySchema() error {
 	if identity != IdentityVersion {
 		return fmt.Errorf("%w: identity version %s is not compatible with AgentLedger v3 identity version %s; rebuild from source logs", ErrIncompatibleSchema, identity, IdentityVersion)
 	}
+	if err := d.validateSchemaLayout(version); err != nil {
+		return err
+	}
+	d.schemaVer = version
+	return nil
+}
 
-	for _, table := range v3RequiredTableSchemas {
+// requireCurrentSchema rejects a valid legacy v3 database on paths that write
+// without running schema maintenance (merge destination, vacuum).
+func (d *Database) requireCurrentSchema() error {
+	if d.schemaVer == SchemaVersion {
+		return nil
+	}
+	return fmt.Errorf("%w: database schema version %s must be upgraded to v%s first; run `agent-ledger import` or `agent-ledger init` once to migrate it", ErrIncompatibleSchema, strconv.Quote(d.schemaVer), SchemaVersion)
+}
+
+// hasCacheCreation1hColumn reports whether usage_events stores the cache TTL
+// split; it is false only for a legacy v3 database opened read-only.
+func (d *Database) hasCacheCreation1hColumn() bool {
+	return d.schemaVer != legacySchemaVersionV3
+}
+
+func (d *Database) validateSchemaLayout(version string) error {
+	tables, ok := requiredTableSchemasFor(version)
+	if !ok {
+		return incompatibleVersionError(version)
+	}
+	for _, table := range tables {
 		exists, err := d.tableExists(table.name)
 		if err != nil {
 			return err
 		}
 		if !exists {
-			return fmt.Errorf("%w: database is missing required table %s; rebuild the v3 database from source logs", ErrIncompatibleSchema, table.name)
+			return fmt.Errorf("%w: database is missing required table %s; rebuild the database from source logs", ErrIncompatibleSchema, table.name)
 		}
 		if err := d.validateRequiredColumns(table); err != nil {
 			return err
@@ -201,8 +294,8 @@ func (d *Database) validateReadOnlySchema() error {
 }
 
 func (d *Database) validateApplicationObjects() error {
-	allowedTables := make(map[string]struct{}, len(v3RequiredTableSchemas))
-	for _, table := range v3RequiredTableSchemas {
+	allowedTables := make(map[string]struct{}, len(currentRequiredTableSchemas))
+	for _, table := range currentRequiredTableSchemas {
 		allowedTables[table.name] = struct{}{}
 	}
 	rows, err := d.conn.Query(`SELECT type, name FROM sqlite_master
