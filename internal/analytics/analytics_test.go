@@ -10,6 +10,36 @@ import (
 	"github.com/BlueSkyXN/AgentLedger/internal/model"
 )
 
+func TestModelBreakdownMergesCaseAndOrdersByTokens(t *testing.T) {
+	database := analyticsTestDatabase(t)
+	defer database.Close()
+	insertAnalyticsEvent(t, database, "lc-upper", "s1", "codex", "codex-cli", "openai", "LongCat-2.0", 300, atUTC(2026, 3, 7, 12, 0), "")
+	insertAnalyticsEvent(t, database, "lc-lower", "s1", "codex", "codex-cli", "openai", "longcat-2.0", 200, atUTC(2026, 3, 7, 13, 0), "")
+	insertAnalyticsEvent(t, database, "big", "s2", "codex", "codex-cli", "openai", "model-big", 1000, atUTC(2026, 3, 7, 14, 0), "")
+
+	rows, err := BuildBreakdown(database.Conn(), "model", Filters{Timezone: "UTC", CostMode: "estimated"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("case-variant model IDs must merge into one row: %+v", rows)
+	}
+	if rows[0].Label != "model-big" || rows[0].TotalTokens != 1000 {
+		t.Fatalf("breakdown must order rows by total tokens desc: %+v", rows)
+	}
+	if rows[1].Label != "LongCat-2.0" || rows[1].TotalTokens != 500 || rows[1].Events != 2 {
+		t.Fatalf("case-variant rows must aggregate under the dominant spelling: %+v", rows)
+	}
+
+	filtered, err := BuildBreakdown(database.Conn(), "model", Filters{Timezone: "UTC", CostMode: "estimated", Model: "LONGCAT-2.0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(filtered) != 1 || filtered[0].Label != "LongCat-2.0" || filtered[0].Events != 2 {
+		t.Fatalf("model filter must be case-insensitive and keep the display spelling: %+v", filtered)
+	}
+}
+
 func TestSummaryFiltersAndUnavailablePricing(t *testing.T) {
 	database := analyticsTestDatabase(t)
 	defer database.Close()

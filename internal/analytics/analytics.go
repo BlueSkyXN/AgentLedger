@@ -3,6 +3,7 @@ package analytics
 import (
 	"database/sql"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -229,11 +230,58 @@ func BuildBreakdown(conn *sql.DB, by string, filters Filters) ([]MetricRow, erro
 	if err != nil {
 		return nil, err
 	}
+	// Timeseries rows must stay in chronological label order, so breakdown
+	// orders here: consumers chart the leading rows as "top" dimensions.
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].TotalTokens != rows[j].TotalTokens {
+			return rows[i].TotalTokens > rows[j].TotalTokens
+		}
+		return rows[i].Label < rows[j].Label
+	})
 	estimates := estimateCosts(conn, filters, labelExpr)
 	for index := range rows {
 		attachEstimate(&rows[index].EstimatedCostUSD, &rows[index].Pricing, estimateForLabel(estimates, rows[index].Label))
 	}
+	if by == "model" {
+		// Estimates are matched on the lowercase group key; remap to the
+		// dominant original spelling only after costs are attached.
+		display, err := modelDisplayLabels(conn)
+		if err != nil {
+			return nil, err
+		}
+		for index := range rows {
+			if label, ok := display[rows[index].Label]; ok {
+				rows[index].Label = label
+			}
+		}
+	}
 	return rows, nil
+}
+
+// modelDisplayLabels maps each case-insensitive model key to the original
+// spelling used by most events, so merged rows keep a familiar display name.
+func modelDisplayLabels(conn *sql.DB) (map[string]string, error) {
+	rows, err := conn.Query(`SELECT lower(model_normalized) AS key, model_normalized AS label,
+        COUNT(*) AS event_count, SUM(total_tokens) AS token_total
+        FROM usage_events GROUP BY key, label
+        ORDER BY event_count DESC, token_total DESC, label ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	display := make(map[string]string)
+	for rows.Next() {
+		var key, label string
+		var eventCount int64
+		var tokenTotal int64
+		if err := rows.Scan(&key, &label, &eventCount, &tokenTotal); err != nil {
+			return nil, err
+		}
+		if _, exists := display[key]; !exists {
+			display[key] = label
+		}
+	}
+	return display, rows.Err()
 }
 
 func groupedRows(conn *sql.DB, labelExpr string, filters Filters, prefixArgs []any) ([]MetricRow, error) {
@@ -440,8 +488,17 @@ func BuildFilterOptions(conn *sql.DB) (*FilterOptions, error) {
 	if options.Providers, err = distinctStrings(conn, `provider`); err != nil {
 		return nil, err
 	}
-	if options.Models, err = distinctStrings(conn, `model_normalized`); err != nil {
+	if options.Models, err = distinctStrings(conn, `lower(model_normalized)`); err != nil {
 		return nil, err
+	}
+	modelDisplay, err := modelDisplayLabels(conn)
+	if err != nil {
+		return nil, err
+	}
+	for index, key := range options.Models {
+		if label, ok := modelDisplay[key]; ok {
+			options.Models[index] = label
+		}
 	}
 	if options.Sessions, err = distinctStrings(conn, `session_key`); err != nil {
 		return nil, err
@@ -479,7 +536,9 @@ func breakdownExpr(by string) (string, error) {
 	case "provider":
 		return `COALESCE(NULLIF(provider, ''), 'unknown')`, nil
 	case "model":
-		return `model_normalized`, nil
+		// Model IDs are stored with source casing (e.g. LongCat-2.0 vs
+		// longcat-2.0); group case-insensitively so one model stays one row.
+		return `lower(model_normalized)`, nil
 	case "session":
 		return `session_key`, nil
 	case "project":
@@ -511,8 +570,8 @@ func addFilters(query string, args *[]any, filters Filters, timestampExpr string
 		*args = append(*args, filters.Provider)
 	}
 	if filters.Model != "" {
-		query += ` AND model_normalized = ?`
-		*args = append(*args, filters.Model)
+		query += ` AND lower(model_normalized) = ?`
+		*args = append(*args, strings.ToLower(filters.Model))
 	}
 	if filters.Session != "" {
 		query += ` AND (session_key = ? OR session_id = ?)`
