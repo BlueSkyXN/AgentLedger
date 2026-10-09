@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "id": "agentledger-pricing-2026-10-05",
+  "id": "agentledger-pricing-2026-10-09",
   "currency": "USD",
   "unit": "usd_per_1m_tokens",
-  "checked_at": "2026-10-05",
+  "checked_at": "2026-10-09",
   "defaults": {
     "unknown_model_policy": "zero",
     "reasoning_policy": "included_in_output",
@@ -15,7 +15,7 @@
       "provider": "openai",
       "name": "OpenAI API pricing",
       "url": "https://developers.openai.com/api/docs/pricing",
-      "checked_at": "2026-09-23"
+      "checked_at": "2026-10-09"
     },
     {
       "provider": "zai",
@@ -40,6 +40,24 @@
       "name": "OpenRouter Tencent Cloud Hy3 provider pricing",
       "url": "https://openrouter.ai/tencent/hy3",
       "checked_at": "2026-07-29"
+    },
+    {
+      "provider": "tencent",
+      "name": "OpenRouter Tencent Cloud Hy4-preview provider pricing",
+      "url": "https://openrouter.ai/tencent/hy4-preview",
+      "checked_at": "2026-10-09"
+    },
+    {
+      "provider": "deepseek",
+      "name": "DeepSeek API official pricing",
+      "url": "https://api-docs.deepseek.com/quick_start/pricing",
+      "checked_at": "2026-10-09"
+    },
+    {
+      "provider": "meituan",
+      "name": "LongCat API pricing",
+      "url": "https://longcat.chat/platform/docs/zh/pricing/longcat-2.0",
+      "checked_at": "2026-10-09"
     },
     {
       "provider": "xai",
@@ -84,6 +102,26 @@
       "notes": "Events without a source model ID use a local zero-value policy. This is not an official free model price and does not count as priced coverage.",
       "model_id": "unknown",
       "as_of": "2026-07-25"
+    },
+    {
+      "id": "codex-auto-review",
+      "model_patterns": [
+        "codex-auto-review"
+      ],
+      "priority": 1000,
+      "basis": "unknown_model_zero_policy",
+      "rates": {
+        "input": 0,
+        "cached_input": 0,
+        "cache_write": 0,
+        "output": 0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "policy",
+      "notes": "OpenAI-internal Codex auto-review pseudo-model with no public rate card; tracked at zero by local policy rather than counted as missing pricing.",
+      "model_id": "codex-auto-review",
+      "as_of": "2026-10-09"
     },
     {
       "id": "gpt-6-astra-fast-long",
@@ -188,6 +226,109 @@
       "source_url": "https://developers.openai.com/api/docs/pricing",
       "pricing_notes_url": "https://developers.openai.com/api/docs/models/gpt-6-astra",
       "as_of": "2026-09-07"
+    },
+    {
+      "id": "gpt-6.1-sol-fast-long",
+      "model_patterns": [
+        "gpt-6.1-sol"
+      ],
+      "priority": 400,
+      "basis": "official_model_list_price",
+      "condition": {
+        "min_input_side_tokens": 272001,
+        "service_tier": [
+          "fast*",
+          "priority*"
+        ]
+      },
+      "rates": {
+        "input": 8.0,
+        "cached_input": 0.2,
+        "cache_write": 10.0,
+        "output": 30.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Fast mode long-context rate (Priority processing was renamed Fast mode on 2026-07-30). Matched only when the event carries a fast or priority service tier; Codex preserves explicit service tier in the accounting profile; sources without tier evidence use standard matching.",
+      "model_id": "gpt-6.1-sol",
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/guides/fast-mode",
+      "as_of": "2026-10-09"
+    },
+    {
+      "id": "gpt-6.1-sol-fast",
+      "model_patterns": [
+        "gpt-6.1-sol"
+      ],
+      "priority": 300,
+      "basis": "official_model_list_price",
+      "condition": {
+        "service_tier": [
+          "fast*",
+          "priority*"
+        ]
+      },
+      "rates": {
+        "input": 4.0,
+        "cached_input": 0.2,
+        "cache_write": 5.0,
+        "output": 20.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Fast mode standard rate (Priority processing was renamed Fast mode on 2026-07-30). Matched only when the event carries a fast or priority service tier; Codex preserves explicit service tier in the accounting profile; sources without tier evidence use standard matching.",
+      "model_id": "gpt-6.1-sol",
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/guides/fast-mode",
+      "as_of": "2026-10-09"
+    },
+    {
+      "id": "gpt-6.1-sol-long",
+      "model_patterns": [
+        "gpt-6.1-sol"
+      ],
+      "priority": 100,
+      "basis": "official_model_list_price",
+      "condition": {
+        "min_input_side_tokens": 272001
+      },
+      "rates": {
+        "input": 4.0,
+        "cached_input": 0.2,
+        "cache_write": 5.0,
+        "output": 15.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Above 272000 full input-side tokens, the long-context rate applies to the entire request (2x input/cache, 1.5x output).",
+      "model_id": "gpt-6.1-sol",
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+      "as_of": "2026-10-09"
+    },
+    {
+      "id": "gpt-6.1-sol",
+      "model_patterns": [
+        "gpt-6.1-sol"
+      ],
+      "priority": 30,
+      "basis": "official_model_list_price",
+      "rates": {
+        "input": 2.0,
+        "cached_input": 0.1,
+        "cache_write": 2.5,
+        "output": 10.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "model_id": "gpt-6.1-sol",
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+      "as_of": "2026-10-09"
     },
     {
       "id": "gpt-6-sol-fast-long",
@@ -399,7 +540,9 @@
       "id": "gpt-5.6-sol-fast-long",
       "model_patterns": [
         "gpt-5.6-sol",
-        "gpt-5.6"
+        "gpt-5.6",
+        "gpt-daybreak-blue-latest",
+        "gpt-daybreak-blue-latest-*"
       ],
       "priority": 400,
       "basis": "official_model_list_price",
@@ -429,7 +572,9 @@
       "id": "gpt-5.6-sol-fast",
       "model_patterns": [
         "gpt-5.6-sol",
-        "gpt-5.6"
+        "gpt-5.6",
+        "gpt-daybreak-blue-latest",
+        "gpt-daybreak-blue-latest-*"
       ],
       "priority": 300,
       "basis": "official_model_list_price",
@@ -458,7 +603,9 @@
       "id": "gpt-5.6-sol-long",
       "model_patterns": [
         "gpt-5.6-sol",
-        "gpt-5.6"
+        "gpt-5.6",
+        "gpt-daybreak-blue-latest",
+        "gpt-daybreak-blue-latest-*"
       ],
       "priority": 100,
       "basis": "official_model_list_price",
@@ -484,7 +631,9 @@
       "id": "gpt-5.6-sol",
       "model_patterns": [
         "gpt-5.6-sol",
-        "gpt-5.6"
+        "gpt-5.6",
+        "gpt-daybreak-blue-latest",
+        "gpt-daybreak-blue-latest-*"
       ],
       "priority": 30,
       "basis": "official_model_list_price",
@@ -500,7 +649,7 @@
       "model_id": "gpt-5.6-sol",
       "source_url": "https://developers.openai.com/api/docs/pricing",
       "pricing_notes_url": "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
-      "notes": "User-supplied Standard promotional pricing is available at least through 2026-11-21; the start date and post-promotion rates are not supplied. Fast mode uses the gpt-5.6-sol-fast and gpt-5.6-sol-fast-long rules.",
+      "notes": "User-supplied Standard promotional pricing is available at least through 2026-11-21; the start date and post-promotion rates are not supplied. Fast mode uses the gpt-5.6-sol-fast and gpt-5.6-sol-fast-long rules. gpt-daybreak-blue-latest is a user-confirmed alias currently routing to gpt-5.6-sol (2026-10-09); OpenAI model docs do not publish this alias, and it may repoint to another base model later, so events after a future switch may need a separate rule.",
       "as_of": "2026-09-07"
     },
     {
@@ -1249,6 +1398,25 @@
       "model_id": "doubao-seed-2.0-pro"
     },
     {
+      "id": "doubao-seed-2.1-pro",
+      "model_patterns": [
+        "doubao-seed-2.1-pro",
+        "doubao-seed-2.1-pro-*"
+      ],
+      "priority": 10,
+      "basis": "user_provided_list_price",
+      "rates": {
+        "input": "15/17",
+        "cached_input": "3/17",
+        "output": "75/17"
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "User supplied CNY prices divided by 6.8: input 6 CNY, cache hit 1.2 CNY, output 30 CNY per 1M tokens (Volcano Ark standard online-inference tier; the separate low-priority tier is not applied).",
+      "model_id": "doubao-seed-2.1-pro"
+    },
+    {
       "id": "grok-composer-2.5-fast",
       "model_patterns": [
         "grok-composer-2.5-fast",
@@ -1268,9 +1436,32 @@
       "model_id": "grok-composer-2.5-fast"
     },
     {
+      "id": "longcat-2.0",
+      "model_patterns": [
+        "longcat-2.0",
+        "longcat-2.0-*"
+      ],
+      "priority": 30,
+      "basis": "official_model_list_price",
+      "rates": {
+        "input": 0.3,
+        "cached_input": 0.006,
+        "output": 1.2
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Platform launch-promo price: CNY 2 input / 0.04 cache hit / 8 output per 1M tokens with the platform's own USD quote 0.30/0.006/1.20. 1M context is a single flat tier (no long-context uplift); no cache-write price is published, so cache writes fall back to the input rate.",
+      "model_id": "longcat-2.0",
+      "source_url": "https://longcat.chat/platform/docs/zh/pricing/longcat-2.0",
+      "as_of": "2026-10-09"
+    },
+    {
       "id": "glm-5.2",
       "model_patterns": [
-        "glm-5.2"
+        "glm-5.2",
+        "glm-5.2-x",
+        "glm-5.2-x-*"
       ],
       "priority": 30,
       "basis": "official_model_list_price",
@@ -1283,7 +1474,7 @@
       "reasoning_policy": "included_in_output",
       "cache_write_assumption": "treat_as_input",
       "confidence": "estimated",
-      "notes": "The source lists cache-write storage as temporarily free; explicit zero is intentional.",
+      "notes": "The source lists cache-write storage as temporarily free; explicit zero is intentional. glm-5.2-x is not separately listed on the pricing page and is priced at glm-5.2 rates as an alias assumption.",
       "model_id": "glm-5.2",
       "source_url": "https://docs.z.ai/guides/overview/pricing",
       "pricing_notes_url": "https://docs.z.ai/guides/llm/glm-5.2",
@@ -1292,7 +1483,8 @@
     {
       "id": "glm-5.3",
       "model_patterns": [
-        "glm-5.3"
+        "glm-5.3",
+        "glm-5.3-1m"
       ],
       "priority": 30,
       "basis": "user_provided_list_price",
@@ -1304,7 +1496,7 @@
       "reasoning_policy": "included_in_output",
       "cache_write_assumption": "treat_as_input",
       "confidence": "estimated",
-      "notes": "User supplied original list prices: input 1.40, cache read 0.26, output 4.40 USD per 1M tokens.",
+      "notes": "User supplied original list prices: input 1.40, cache read 0.26, output 4.40 USD per 1M tokens. The dash-form 1M-context alias glm-5.3-1m uses the same rates; the official page lists no separate 1M-context price.",
       "model_id": "glm-5.3",
       "source_url": "https://docs.z.ai/guides/overview/pricing",
       "as_of": "2026-09-03"
@@ -1392,6 +1584,50 @@
       "as_of": "2026-09-24"
     },
     {
+      "id": "deepseek-flash",
+      "model_patterns": [
+        "deepseek-flash",
+        "deepseek-flash-*",
+        "deepseek-v4.1-flash",
+        "deepseek-v4.1-flash-*"
+      ],
+      "priority": 30,
+      "basis": "official_model_list_price",
+      "rates": {
+        "input": 0.3,
+        "cached_input": 0.006,
+        "output": 1.2
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Official peak rates (cache-miss input 0.30, cache-hit input 0.006, output 1.20); off-peak windows (weekdays 01:00-04:00 and 06:00-10:00 UTC) are exactly half, which the schema cannot express, so peak applies at all times as a conservative upper bound. 1M context is a single flat tier; the provider has no cache-write concept, so cache writes fall back to the input rate. deepseek-v4.1-flash is the previous name of the same model.",
+      "model_id": "deepseek-flash",
+      "source_url": "https://api-docs.deepseek.com/quick_start/pricing",
+      "as_of": "2026-10-09"
+    },
+    {
+      "id": "deepseek-v4-flash",
+      "model_patterns": [
+        "deepseek-v4-flash",
+        "deepseek-v4-flash-*"
+      ],
+      "priority": 30,
+      "basis": "official_model_list_price",
+      "rates": {
+        "input": 0.3,
+        "cached_input": 0.006,
+        "output": 1.2
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Retired model name that the provider now routes to deepseek-flash at flash prices; dated variants (202605, ga-260731) carry the same rates. Peak applies at all times as with deepseek-flash. Open question: ga-260731 events arrive via the workbuddy channel and may map to a Tencent-hosted DeepSeek SKU reportedly priced 0.44/0.014/1.32 peak (unverified; equals the origin- gateway tier 3/0.1/9 CNY / 6.8); confirm the actual provider SKU before switching this rule.",
+      "model_id": "deepseek-flash",
+      "source_url": "https://api-docs.deepseek.com/quick_start/pricing",
+      "as_of": "2026-10-09"
+    },
+    {
       "id": "hy3",
       "model_patterns": [
         "hy3",
@@ -1411,6 +1647,28 @@
       "model_id": "hy3",
       "source_url": "https://openrouter.ai/tencent/hy3",
       "as_of": "2026-07-29"
+    },
+    {
+      "id": "hy4-preview",
+      "model_patterns": [
+        "hy4-preview",
+        "hy4-preview-*",
+        "tencent/hy4-preview"
+      ],
+      "priority": 30,
+      "basis": "provider_list_price",
+      "rates": {
+        "input": 0.834,
+        "cached_input": 0.042,
+        "output": 2.501
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Tencent Cloud direct listing on OpenRouter (the Tencent Cloud pricing page does not list hy4 yet): 0.834 input / 0.042 cache read / 2.501 output USD per 1M tokens. 1M context is a single flat tier; no cache-write price is published, so cache writes fall back to the input rate.",
+      "model_id": "hy4-preview",
+      "source_url": "https://openrouter.ai/tencent/hy4-preview",
+      "as_of": "2026-10-09"
     },
     {
       "id": "kimi-k3",

@@ -14,7 +14,7 @@ func TestDefaultProfileLoads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load default profile: %v", err)
 	}
-	if profile.ID != "agentledger-pricing-2026-10-05" || profile.CheckedAt != "2026-10-05" || len(profile.Rules) == 0 {
+	if profile.ID != "agentledger-pricing-2026-10-09" || profile.CheckedAt != "2026-10-09" || len(profile.Rules) == 0 {
 		t.Fatalf("unexpected profile: %+v", profile)
 	}
 }
