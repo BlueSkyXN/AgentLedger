@@ -435,7 +435,7 @@ func readCodexSessionMetadata(path string) (codexSessionMetadata, error) {
 		return codexSessionMetadata{}, err
 	}
 	item := codexSessionMetadata{path: path, identity: identity}
-	f, err := os.Open(path)
+	f, err := openCodexRolloutFile(path)
 	if err != nil {
 		return codexSessionMetadata{}, err
 	}
@@ -485,7 +485,7 @@ func codexSessionPathRank(path string) int {
 }
 
 func readCodexReplayUsage(path string) ([]codexReplayUsage, error) {
-	f, err := os.Open(path)
+	f, err := openCodexRolloutFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -506,7 +506,7 @@ func readCodexReplayUsage(path string) ([]codexReplayUsage, error) {
 }
 
 func detectCodexRewrittenBurst(path string) (int64, error) {
-	f, err := os.Open(path)
+	f, err := openCodexRolloutFile(path)
 	if err != nil {
 		return 0, err
 	}

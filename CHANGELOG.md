@@ -21,6 +21,7 @@
 - Schema v4：`usage_events` 增加可空列 `cache_creation_1h_tokens`，记录 Claude 缓存写入中 1 小时 TTL 的部分（来自 `usage.cache_creation.ephemeral_1h_input_tokens`）。`import`/`init` 在事务内把 v3 库自动迁移到 v4，旧行为 `NULL` 并在下次 import 时补齐；只读命令与 merge 来源库仍可直接读取 legacy v3；merge 目标库与 `vacuum` 要求 v4。升级后旧版本无法打开该数据库。
 - 缓存写入按 TTL 分档估算：有拆分时 1 小时部分按 `cache_write_1h`、其余按 `cache_write_5m` 计价；没有拆分时沿用 `cache_write_assumption`。
 - 内置 pricing profile 增加 Claude Opus 5.5、Sonnet 5.5、Fable 5.1 / Mythos 5.1、Opus 4.1 / 4 legacy 以及 Opus 5.5 / 5 / 4.8 fast mode 规则（`-fast` 模型后缀）。
+- Codex adapter 支持 `local_thread_store_compression` 产生的 `.jsonl.zst` rollout：发现层接受并按未压缩孪生去重，读取层经 `klauspost/compress/zstd` 流式解压（保留超长行跳过与行号诊断），session 兜底身份剥完整 `.jsonl.zst` 后缀，压缩前后身份不变；replay 与 diagnostics 读取同一打开路径。
 
 ### Changed
 

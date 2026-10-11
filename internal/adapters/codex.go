@@ -86,10 +86,11 @@ func (a *CodexAdapter) Discover(paths []string) ([]string, error) {
 	if len(paths) == 0 {
 		paths = []string{"~/.codex/sessions", "~/.codex/archived_sessions"}
 	}
-	files, err := DiscoverFiles(normalizeCodexDiscoverPaths(paths), []string{".jsonl"})
+	files, err := DiscoverFiles(normalizeCodexDiscoverPaths(paths), []string{".jsonl", ".zst"})
 	if err != nil {
 		return nil, err
 	}
+	files = filterCodexRolloutFiles(files)
 	sort.SliceStable(files, func(i, j int) bool { return codexSessionPathRank(files[i]) < codexSessionPathRank(files[j]) })
 	seen := make(map[string]bool)
 	result := make([]string, 0, len(files))
@@ -98,6 +99,11 @@ func (a *CodexAdapter) Discover(paths []string) ([]string, error) {
 		for dir := filepath.Dir(file); dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
 			if base := filepath.Base(dir); base == "sessions" || base == "archived_sessions" {
 				relative, _ := filepath.Rel(dir, file)
+				// 压缩转写期间同基名的 .jsonl 与 .jsonl.zst 可能共存，去重 key
+				// 归一到未压缩文件名，避免同一 session 被解析两次。
+				if strings.HasSuffix(strings.ToLower(filepath.Base(relative)), ".jsonl.zst") {
+					relative = relative[:len(relative)-len(".zst")]
+				}
 				key = filepath.Join(filepath.Dir(dir), relative)
 				break
 			}
@@ -158,7 +164,7 @@ func (a *CodexAdapter) ParseFileWithWarnings(path string) ([]*fingerprint.Parsed
 		return nil, nil, err
 	}
 
-	f, err := os.Open(path)
+	f, err := openCodexRolloutFile(path)
 	if err != nil {
 		if replayMatcher != nil {
 			a.replayStats.fileChanged++
@@ -766,8 +772,7 @@ func isCodexTaskComplete(obj map[string]interface{}) bool {
 }
 
 func extractCodexSession(path string) string {
-	base := filepath.Base(path)
-	return strings.TrimSuffix(base, filepath.Ext(base))
+	return trimCodexRolloutStem(filepath.Base(path))
 }
 
 func extractCodexSessionPathID(path string) string {
@@ -781,7 +786,7 @@ func extractCodexSessionPathID(path string) string {
 			break
 		}
 		rel := filepath.Join(parts[i+1:]...)
-		rel = strings.TrimSuffix(rel, filepath.Ext(rel))
+		rel = trimCodexRolloutStem(rel)
 		if part == "archived_sessions" {
 			return filepath.ToSlash(filepath.Join("archived_sessions", rel))
 		}

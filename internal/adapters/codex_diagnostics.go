@@ -1,13 +1,12 @@
 package adapters
 
 import (
-
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/BlueSkyXN/AgentLedger/internal/fingerprint"
-	"os"
 	"sort"
+
+	"github.com/BlueSkyXN/AgentLedger/internal/fingerprint"
 )
 
 type CodexDiagnostics struct {
@@ -321,7 +320,7 @@ func importDiagnosticByCode(diagnostics []ImportDiagnostic, code string) (Import
 }
 
 func scanCodexDiagnosticFile(path string, diag *CodexDiagnostics) error {
-	f, err := os.Open(path)
+	f, err := openCodexRolloutFile(path)
 	if err != nil {
 		return nil
 	}

@@ -46,7 +46,7 @@ Session 优先原生 session ID，回退到 `sessions`/`archived_sessions` root-
 
 `ledger` 对累计 `total_token_usage` 做 per-session reset-aware delta；`ccusage_compatible` 优先 `last_token_usage`，缺失时用累计 delta。source total 是权威 `total_tokens`；缓存 input 从 raw input 分离，reasoning 可能包含在 output 中。当累计 counter 局部回退导致已知分项不能完整解释 source total 时，保留 source total、把分项限制在 total 内并标记 `observability_level=partial`，不会把分项缺口伪造成某个 token bucket。该情况按 `codex_accounting_partial` diagnostic 汇总。replay matcher 继续 fail-closed。
 
-默认发现 `sessions` 与同级 `archived_sessions`；同一 Codex home 下相同相对路径优先活动副本，不跨不同 home 按路径去重。
+默认发现 `sessions` 与同级 `archived_sessions`；同一 Codex home 下相同相对路径优先活动副本，不跨不同 home 按路径去重。Codex `local_thread_store_compression` 冷压缩产生的 `<name>.jsonl.zst` 同样被发现和流式解压（zstd，多帧兼容），session 兜底身份剥掉完整 `.jsonl.zst` 后缀，压缩前后同一 session 身份不变；同基名 `.jsonl` 与 `.jsonl.zst` 共存时按未压缩副本去重，损坏的压缩流按普通 parse error 隔离。
 
 独立压缩调用通过 `token_usage_record.payload.response_id` 与 `compacted.payload.compaction_response_id` 配对，支持两种记录顺序；仅补计尚未被相邻普通累计观测覆盖的用量。不配对的请求记录不额外计入，配对 response ID 采用全局 request identity，复制到子会话不会重复统计。压缩记录不推进普通累计基线，也不覆盖当前主请求模型。
 
