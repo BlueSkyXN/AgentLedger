@@ -1,14 +1,14 @@
 # AgentLedger
 
-AgentLedger v3 是本地优先的 AI Coding Agent Session usage 统计器。它从 Claude Code、Codex、Cursor、GitHub Copilot、Gemini CLI、WorkBuddy 和 ZCode 的本机日志中提取日期、Session、通道、来源形态、provider、模型、project 与 token 分项，写入 SQLite，并通过 CLI、只读 HTTP API 和 React 面板查询。
+AgentLedger v3 是本地优先的 AI Coding Agent Session 用量统计工具。它从 Claude Code、Codex、Cursor、GitHub Copilot、Gemini CLI、WorkBuddy 和 ZCode 的本机日志中提取日期、Session、通道、来源形态、provider、模型、project 与 token 分项，写入 SQLite，并通过 CLI、只读 HTTP API 和 React 面板查询。
 
 ## 产品边界
 
 - 保留 `Adapter → UsageEvent → SQLite → CLI/API/Web` 主链。
 - 只保存结构化 usage facts；不保存对话正文、完整源对象、设备信息或金额。
-- 只统计事件日期以及日/周/月分桶；不提供 request duration、TTFT、TPS、Slow 或 request-count KPI。
+- 只统计事件日期以及日/周/月分桶；不提供 request duration、TTFT、TPS、Slow（`report slow`）或 request-count KPI。
 - 多设备通过 schema v4 `.aldb` 合并（也接受 legacy v3 来源库）；不保存或展示设备维度。
-- import 可以重复扫描日志，事件级 identity 保证重复导入不增加总量；本版不做文件 offset/checkpoint。
+- import 可以重复扫描日志，事件级 identity 保证重复导入不增加总量；不做文件 offset/checkpoint。
 - estimated cost 始终按当前 pricing profile 即时计算，数据库不保存金额。
 
 ## 快速开始
@@ -87,7 +87,7 @@ hash("event:v2", source_product, identity_scope,
      native_event_id, identity_subkey)
 ```
 
-同 event ID 的处理固定为：
+同一 event ID 重复出现时，处理固定为：
 
 | 情况 | 结果 |
 |---|---|
@@ -156,7 +156,7 @@ cd ..
 ./bin/agent-ledger serve
 ```
 
-面板保留 Overview、Trends、Models、Channels、Sources、Projects、Sessions、Imports、Settings。Sessions 是主要分析页；estimated cost 明确标注为按当前 profile 即时估算。
+面板包含九个页面：Overview、Trends、Models、Channels、Sources、Projects、Sessions、Imports、Settings。Sessions 是主要分析页；estimated cost 明确标注为按当前 profile 即时估算。
 
 ## 隐私与导出
 

@@ -152,7 +152,7 @@ raw_usage_json
 | 已知 accounting method/profile 冲突 | reject |
 | merge 输入的 event/session hash 格式或 content hash 不自洽 | reject |
 
-跨 event ID 的语义去重只接受 `channel=codex`、`source_product=codex-cli`、`identity_strategy=session_record`（或带非空 `turn_id` 的 legacy `session_turn`：早期 Codex parser 用 `task_complete` 的 turn ID 作为该条用量的 identity，现在同一条记录解析为 `session_record`）、`identity_scope=session`、request 粒度且非零的记录；双方均不能带 native request/message ID，accounting method 必须为 `codex_total_delta`，并提供正数 `source_total_tokens` 与已知 `raw_input_tokens`。匹配比较 Session key、Session ID、Session path ID、turn ID，以及从完整持久化事实重算的 content hash（含 timestamp、模型证据、provider、observability、全部 token 分项、来源累计总量、TTL 和 accounting）。源文件位置、raw hash 与导入时间不参与比较。
+跨 event ID 的语义去重只接受 `channel=codex`、`source_product=codex-cli`、`identity_strategy=session_record` 或带非空 `turn_id` 的 legacy `session_turn`、`identity_scope=session`、request 粒度且非零的记录。其中 legacy `session_turn` 指早期 Codex parser 用 `task_complete` 的 turn ID 作为该条用量 identity 的记录，同一条用量现在解析为 `session_record`。双方均不能带 native request/message ID，accounting method 必须为 `codex_total_delta`，并提供正数 `source_total_tokens` 与已知 `raw_input_tokens`。匹配比较 Session key、Session ID、Session path ID、turn ID，以及从完整持久化事实重算的 content hash（含 timestamp、模型证据、provider、observability、全部 token 分项、来源累计总量、TTL 和 accounting）。源文件位置、raw hash 与导入时间不参与比较。
 
 不同原生事件/消息/请求 ID 不会因同一毫秒和相同 token 被合并，其他来源与非累计样本也不适用此 fallback。跨 ID 的 TTL 或累计值不同，或不满足上述证据条件时，不猜测为同一事件，保留独立记录；同 ID 仍按正常 reconcile 补齐或拒绝冲突，不绕过 `timestamp_conflict`。此规则不重写旧 event ID，也不清理已经存在的重复行。
 

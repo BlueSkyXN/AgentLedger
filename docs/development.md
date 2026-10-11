@@ -89,7 +89,7 @@ cd ..
 go run . serve
 ```
 
-`serve` 第一版是只读面板。不要在没有明确产品决策前新增浏览器触发 `import`、`merge`、`vacuum` 或配置修改的 API。
+`serve` 目前是只读面板。不要在没有明确产品决策前新增浏览器触发 `import`、`merge`、`vacuum` 或配置修改的 API。
 
 涉及导入、合并或报表 SQL 时，建议使用临时数据库和样例日志，不要直接覆盖真实用户数据库。优先通过临时 `AGENT_LEDGER_DATA_DIR` 隔离 AgentLedger 数据目录，也可以配合测试 fixture 隔离源日志。
 

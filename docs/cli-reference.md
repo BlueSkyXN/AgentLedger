@@ -57,7 +57,7 @@ report sessions
 | `--pricing` | 显式 pricing profile override；无效则命令失败。 |
 | `--json` | JSON 输出。 |
 
-不存在 `report slow`、recorded/both cost、slow sort/limit。
+不存在 `report slow`、`--cost recorded/both`、slow sort/limit。
 
 ## `export`
 

@@ -1,12 +1,12 @@
 # AgentLedger v3 文档
 
-AgentLedger v3 是本地 Session usage 统计器，不是审计账本、远程同步服务或设备管理系统。
+AgentLedger v3 是本地 Session 用量统计工具，不是审计账本、远程同步服务或设备管理系统。
 
 1. [Quickstart](quickstart.md)：构建、初始化、导入、报表和面板。
 2. [User Guide](user-guide.md)：日常使用路径和结果解释。
 3. [Configuration](configuration.md)：当前有效配置字段。
 4. [Source Adapters](source-adapters.md)：七个本机日志来源的 usage、Session、identity 与 accounting 口径。
-5. [Data Model](data-model.md)：schema v4 三表（v3 + 缓存 TTL 拆分列）、identity v2 与 reconcile。
+5. [Data Model](data-model.md)：schema v4 三表（在 v3 基础上新增缓存 TTL 拆分列）、identity v2 与 reconcile。
 6. [Architecture](architecture.md)：模块边界和数据流。
 7. [CLI Reference](cli-reference.md)：全部命令、flags 和退出语义。
 8. [Reports and Merge](reports-and-merge.md)：报表、即时价格与 `.aldb` merge。

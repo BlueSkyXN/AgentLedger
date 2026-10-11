@@ -57,7 +57,7 @@ content_sha256 可由当前持久化 usage facts 重算
 
 不合并 incoming `import_runs`，也不创建 `merge_runs` 或 conflict table。
 
-v3 行没有持久化生成 `event_id` 的完整 native identity tuple，因此 merge gate 能验证 hash encoding 和结构化 content 自洽，但不把 `.aldb` 当作对抗恶意伪造的签名容器。只合并由受信任 AgentLedger 实例生成和保管的本地 `.aldb`；若要从行内完整重算 event identity，需要另行升级 schema 并重建数据库。
+当前 schema 的行没有持久化生成 `event_id` 的完整 native identity tuple，因此 merge gate 能验证 hash encoding 和结构化 content 自洽，但不把 `.aldb` 当作对抗恶意伪造的签名容器。只合并由受信任 AgentLedger 实例生成和保管的本地 `.aldb`；若要从行内完整重算 event identity，需要另行升级 schema 并重建数据库。
 
 ## Redacted roundtrip
 

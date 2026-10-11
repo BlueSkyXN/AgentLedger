@@ -78,4 +78,4 @@ agents.trae-work-cn
 agents.*.experimental
 ```
 
-旧 TOML 中未知键不会恢复相应功能。保存 v3 config 时不会再次写出这些键。
+旧 TOML 中的未知键不会让已移除的功能回来。保存 v3 config 时不会再次写出这些键。

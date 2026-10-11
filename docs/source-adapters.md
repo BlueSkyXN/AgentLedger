@@ -26,7 +26,7 @@ event_granularity = request
 
 Session 优先原生 session ID，回退到 Claude source-root-relative project/session path。事件优先 message ID，再用 request ID；message 内多 segment 通过 subkey 分开。optional/null 字段用结构化 JSON 类型判断，不把字符串匹配当 schema。
 
-Token 使用 `claude_usage_sum`，包括 input、output、cache creation、cache read。来源 cost 不落库。缺 request ID 时按 Session、message ID 与来源 timestamp 去重，并把 timestamp 写入 identity subkey；相同时间的重复写入保留较完整用量，sidechain 重放只在对应 Session 内匹配。旧 `claude-v1` 无 request ID 记录按原始 timestamp 升级 identity，避免再次导入产生重复；已被旧逻辑丢掉的调用需要从保留的源日志补回。
+Token 使用 `claude_usage_sum`，包括 input、output、cache creation、cache read。来源 cost 不落库。缺 request ID 时按 Session、message ID 与来源 timestamp 去重，并把 timestamp 写入 identity subkey；同一时刻重复写入时，保留分项更完整的一条；sidechain 重放只在对应 Session 内匹配。旧 `claude-v1` 无 request ID 记录按原始 timestamp 升级 identity，避免再次导入产生重复；已被旧逻辑丢掉的调用需要从保留的源日志补回。
 
 `usage.iterations` 中的 `advisor_message` 按自己的模型和 token 分项形成独立事件，使用 iteration 位置作为稳定子标识；普通 `message` iteration 不再次累计。嵌套 AgentProgress 包装同样支持，顾问缓存 TTL 分项独立读取。
 
