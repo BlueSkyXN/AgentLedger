@@ -46,7 +46,7 @@ export AGENT_LEDGER_DATA_DIR="$PWD/local/experiments/usage-v3"
 ./bin/agent-ledger import
 ```
 
-源 manifest 未变化时，第二次必须 added=0、updated=0、rejected=0，skipped=第一次有效事件数。
+源 manifest 未变化时，第二次必须 added=0、updated=0、rejected=0，skipped=首次导入的有效事件数。
 
 ## 4. 差异报告
 

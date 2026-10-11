@@ -77,7 +77,7 @@ agent-ledger merge device-a.aldb
 
 ## `vacuum`
 
-对已经存在且完整的 v3 数据库执行 SQLite `VACUUM`。它会重写 DB 文件；执行前停止 writer 和 serve，并保留可恢复备份。
+对已经存在且完整的 schema v4 数据库执行 SQLite `VACUUM`；legacy v3 库会被拒绝并提示先经 `import` 或 `init` 迁移。它会重写 DB 文件；执行前停止 writer 和 serve，并保留可恢复备份。
 
 ## `serve`
 

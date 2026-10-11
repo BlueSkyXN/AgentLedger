@@ -40,9 +40,9 @@ cost 不落库。每次查询用当前 profile 和事件的 provider、channel�
 输入必须：
 
 ```text
-meta.schema_version = 3
+meta.schema_version = 3 或 4
 meta.identity_version = 2
-完整 v3 三表和 usage_events 必需列
+完整三表和 usage_events 必需列
 event_id/session_key 为 lowercase 64-hex SHA-256 encoding
 content_sha256 可由当前持久化 usage facts 重算
 ```

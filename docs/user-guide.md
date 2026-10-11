@@ -10,7 +10,7 @@ agent-ledger report daily
 agent-ledger report sessions
 ```
 
-`doctor` 先确认有效 config 和 source roots。不要在已有 import 仍运行时启动第二轮；import 静默并不代表卡死，可先检查进程与最新 `import_runs`。
+`doctor` 先确认有效 config 和 source roots。不要在已有 import 仍运行时启动第二轮；import 长时间无输出不代表卡死，可先检查进程与最新 `import_runs`。
 
 ## 如何理解 import 结果
 
@@ -40,7 +40,7 @@ agent-ledger export -o laptop.aldb
 agent-ledger merge laptop.aldb
 ```
 
-完全重叠事件 skip；允许补充的事实 update；任何冲突导致整次 merge rollback。AgentLedger 不保存“来自哪台设备”。
+完全重叠的事件 skip；只允许补充事实的 update；任一冲突使整次 merge rollback。AgentLedger 不保存“来自哪台设备”。
 
 ## 筛选
 

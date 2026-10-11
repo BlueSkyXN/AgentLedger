@@ -122,11 +122,9 @@ duplicate_policy = "ledger"
 [agents.cursor]
 enabled = true
 paths = ["~/Library/Application Support/Cursor/logs", "~/Library/Application Support/Cursor Private Inference/logs", "~/.config/Cursor/logs", "~/AppData/Roaming/Cursor/logs"]
-
 ```
 
 `reports.timezone` 使用 IANA timezone 对每条历史事件分桶，DST 日期不会按“当前 offset”回算。
-
 
 ## API v2
 
@@ -145,7 +143,7 @@ GET /api/v2/events?limit=200&offset=0
 GET /api/v2/import-runs
 ```
 
-`timeseries` 可选 `cost=estimated|none`，默认 `estimated`；只绘制事件和 Tokens 的图表应使用 `cost=none`，避免无用的逐事件计价。`/api/v1/*` 不提供兼容层并返回 404。`/sessions` 和 `/events` 返回 `{items, limit, offset, total}`。
+`timeseries` 可选 `cost=estimated|none`，默认 `estimated`；只展示事件数和 Tokens 的图表应使用 `cost=none`，避免不必要的逐事件计价。`/api/v1/*` 不提供兼容层并返回 404。`/sessions` 和 `/events` 返回 `{items, limit, offset, total}`。
 
 ## Web
 

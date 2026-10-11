@@ -16,6 +16,7 @@ module github.com/BlueSkyXN/AgentLedger
 - `github.com/BurntSushi/toml`: config file encoding/decoding
 - `github.com/mattn/go-sqlite3`: SQLite driver
 - `github.com/oklog/ulid/v2`: import run id
+- `github.com/klauspost/compress`: zstd 流式解压（Codex `.jsonl.zst` rollout）
 
 由于 SQLite driver 使用 `github.com/mattn/go-sqlite3`，本地构建通常需要 `CGO_ENABLED=1` 和可用的 C toolchain。
 

@@ -28,7 +28,7 @@ AgentLedger 不主动联网、不上传 telemetry、不修改源 Session 日志�
 
 ## Read-only commands
 
-`status`、`report`、`serve` 通过严格 v3 只读入口打开，不创建或迁移数据库。`verify` 只做普通 SQLite integrity；`doctor` 缺 config 时只用内存默认值。
+`status`、`report`、`serve` 通过严格只读入口打开，不创建或迁移数据库。`verify` 只做普通 SQLite integrity；`doctor` 缺 config 时只用内存默认值。
 
 ## Writer concurrency
 

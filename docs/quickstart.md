@@ -27,13 +27,13 @@ export AGENT_LEDGER_DATA_DIR="$PWD/local/experiments/usage-v3"
 ./bin/agent-ledger status
 ```
 
-第二次无源变化导入应满足：
+源日志无变化时，第二次导入应满足：
 
 ```text
 Events added:    0
 Events updated:  0
 Events rejected: 0
-Events skipped:  第一次有效事件数
+Events skipped:  首次导入的有效事件数
 ```
 
 ## 4. 报表

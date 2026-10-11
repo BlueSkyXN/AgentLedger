@@ -7,7 +7,7 @@ AgentLedger v3 将本机 AI Coding Agent Session 日志转换为可重复导入�
 ## 数据流
 
 ```text
-Claude/Codex/Copilot/Gemini/WorkBuddy logs
+Claude/Codex/Cursor/Copilot/Gemini/WorkBuddy/ZCode logs
                          │
                          ▼
  Adapter discovery + accounting

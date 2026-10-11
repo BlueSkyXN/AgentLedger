@@ -99,7 +99,7 @@ accounting_profile
 observability_level
 ```
 
-所有 token 字段非负。reasoning、cache、total 的包含关系由 adapter/accounting profile 验证，不使用一个跨产品通用求和公式；报表只汇总 canonical `total_tokens`，不汇总 `source_total_tokens`。
+所有 token 字段非负。reasoning、cache、total 的包含关系由 adapter/accounting profile 验证，不使用跨产品的统一求和公式；报表只汇总 canonical `total_tokens`，不汇总 `source_total_tokens`。
 
 `cache_creation_1h_tokens` 是 `cache_creation_tokens` 中 1 小时 TTL 缓存写入的部分，5 分钟部分为两者之差，不单独存储。`NULL` 表示来源没有提供 TTL 拆分（非 Claude 来源、Claude 旧记录或迁移后尚未重新 import 的行），`0` 表示已知全部为 5 分钟写入。约束为 `0 <= cache_creation_1h_tokens <= cache_creation_tokens`。该字段只在非 `NULL` 时进入 content hash，因此没有拆分的事件保持原有 `content_sha256`。reconcile 时 `NULL` 可被已知值补齐（`updated`），两个不同的已知值是 `token_conflict`；缺少拆分、其余事实相同的观测（旧 parser 或 legacy v3 来源库）按 `skipped` 处理，不会抹掉已知值。
 
@@ -162,7 +162,7 @@ raw_usage_json
 
 schema v4 与 identity version 2 不变。import/merge 对以下可确定的旧 parser 表示做受限升级：
 
-- `claude-v1`、无 request ID、原生 message identity 且 event hash 符合旧算法的行，以原始 timestamp 生成 requestless 子标识；旧记录的 token 不猜测修改，重新解析可补回以前误合并的其他调用。
+- `claude-v1`、无 request ID、原生 message identity 且 event hash 符合旧算法的行，以原始 timestamp 生成 requestless 子标识；旧记录的 token 不做猜测性修改，重新解析可补回此前被误合并的其他调用。
 - `copilot-session-state-v1` 的 raw input、缓存和总量严格符合旧算法时，改为 input 包含 cache read/write、output 包含 reasoning 的新 profile，并重算 content hash。无法证明的记录保持冲突拒绝。
 - Codex `accounting_profile` 可从 `ledger` / `ccusage_compatible` 补齐为 `<原值>;service_tier=<规范化档位>`，不新增 schema 列。未知可补已知；已知不被缺失值覆盖，两个已知档位不一致仍拒绝。
 

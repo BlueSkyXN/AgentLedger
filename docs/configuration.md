@@ -53,17 +53,16 @@ paths = ["~/.zcode/cli/db"]
 
 | Key | 行为 |
 |---|---|
-| `database.path` | 当前 v3 SQLite；支持 `~` 展开。 |
+| `database.path` | 当前数据库文件；支持 `~` 展开。 |
 | `privacy.redact_paths_on_export` | 默认 export 是否清空 project/source path 与 import warning。 |
 | `import.gracing_minutes` | 最近修改文件的稳定性边界；并非 checkpoint。 |
 | `reports.timezone` | Go 可加载的 IANA timezone、`UTC` 或 `Local`；用于逐事件日期分桶和日期 filter。 |
-| `reports.pricing_path` | 空值使用内置 profile；非空值是默认 profile。无效时 usage 仍返回，pricing unavailable。 |
+| `reports.pricing_path` | 空值使用内置 profile；非空时作为默认 profile。文件无效时 usage 查询仍正常，pricing 报 unavailable。 |
 | `agents.*.enabled` | 是否扫描对应来源。 |
 | `agents.*.paths` | Adapter discovery roots，指向各来源本机日志目录。 |
 | `agents.codex.duplicate_policy` | `ledger` 或 `ccusage_compatible`；重建 candidate 时应与 v2 baseline 保持一致。 |
 
 Cursor adapter 只会从配置 root 下选择 `exthost/anysphere.cursor-agent-exec/Cursor Agent Exec*.log`，不会扫描 `Cursor Structured Logs`、对话 transcript 或 `state.vscdb`。
-
 
 CLI `--pricing` 优先于 `reports.pricing_path`，且显式文件无效会直接失败。
 
