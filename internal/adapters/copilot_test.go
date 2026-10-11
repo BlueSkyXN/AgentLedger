@@ -166,7 +166,7 @@ func TestCopilotSessionShutdownModelMetrics(t *testing.T) {
 		if rec.TokenAccountingMethod != model.AccCopilotSessionMetrics || rec.ObservabilityLevel != "session_summary" {
 			t.Fatalf("unexpected method=%s observability=%s", rec.TokenAccountingMethod, rec.ObservabilityLevel)
 		}
-		if rec.AccountingProfile != "input_includes_cache_read" || rec.SessionPathID != "session-123" {
+		if rec.AccountingProfile != model.CopilotSessionInclusiveProfile || rec.SessionPathID != "session-123" {
 			t.Fatalf("unexpected accounting_profile=%s session_path_id=%s", rec.AccountingProfile, rec.SessionPathID)
 		}
 		if rec.NativeEventID != "" || rec.IdentityKind != "record" || rec.IdentitySubkey == "" {
@@ -194,7 +194,7 @@ func TestCopilotSessionShutdownModelMetrics(t *testing.T) {
 			t.Fatalf("requests.cost should remain available in fingerprint envelope: %v", raw)
 		}
 		if rec.Model == "gpt-5.4" {
-			if rec.InputTokens != 700 || rec.OutputTokens != 200 || rec.CacheReadTokens != 300 || rec.CacheCreationTokens != 40 || rec.ReasoningTokens != 50 || rec.TotalTokens != 1290 {
+			if rec.InputTokens != 660 || rec.OutputTokens != 200 || rec.CacheReadTokens != 300 || rec.CacheCreationTokens != 40 || rec.ReasoningTokens != 50 || rec.TotalTokens != 1200 {
 				t.Fatalf("unexpected gpt tokens input=%d output=%d cacheRead=%d cacheWrite=%d reasoning=%d total=%d", rec.InputTokens, rec.OutputTokens, rec.CacheReadTokens, rec.CacheCreationTokens, rec.ReasoningTokens, rec.TotalTokens)
 			}
 			if rec.RawInputTokens == nil || *rec.RawInputTokens != 1000 {
@@ -202,7 +202,7 @@ func TestCopilotSessionShutdownModelMetrics(t *testing.T) {
 			}
 		}
 		if rec.Model == "claude-opus-4.6" {
-			if rec.InputTokens != 7 || rec.OutputTokens != 2 || rec.CacheReadTokens != 3 || rec.CacheCreationTokens != 4 || rec.ReasoningTokens != 0 || rec.TotalTokens != 16 {
+			if rec.InputTokens != 3 || rec.OutputTokens != 2 || rec.CacheReadTokens != 3 || rec.CacheCreationTokens != 4 || rec.ReasoningTokens != 0 || rec.TotalTokens != 12 {
 				t.Fatalf("unexpected claude tokens input=%d output=%d cacheRead=%d cacheWrite=%d reasoning=%d total=%d", rec.InputTokens, rec.OutputTokens, rec.CacheReadTokens, rec.CacheCreationTokens, rec.ReasoningTokens, rec.TotalTokens)
 			}
 		}
@@ -342,7 +342,7 @@ func TestCopilotSessionShutdownKeepsMultipleShutdownSegments(t *testing.T) {
 	for _, rec := range records {
 		total += rec.TotalTokens
 	}
-	if total != 55 {
+	if total != 35 {
 		t.Fatalf("unexpected segment total sum: %d", total)
 	}
 }
@@ -434,7 +434,7 @@ func TestCopilotSessionCacheReadClampsToRawInput(t *testing.T) {
 		t.Fatalf("expected 1 record, got %d", len(records))
 	}
 	rec := records[0]
-	if rec.InputTokens != 0 || rec.CacheReadTokens != 10 || rec.TotalTokens != 21 {
+	if rec.InputTokens != 0 || rec.CacheReadTokens != 10 || rec.TotalTokens != 12 {
 		t.Fatalf("unexpected clamp result input=%d cacheRead=%d total=%d", rec.InputTokens, rec.CacheReadTokens, rec.TotalTokens)
 	}
 	if rec.RawInputTokens == nil || *rec.RawInputTokens != 10 {
@@ -476,7 +476,7 @@ func TestCopilotDiscoverNoOtelFilesIsSilent(t *testing.T) {
 	}
 }
 
-func TestCopilotDiscoverPrefersOtelOverSessionStateWhenBothExist(t *testing.T) {
+func TestCopilotDiscoverKeepsBothSourcesForReconciliation(t *testing.T) {
 	root := filepath.Join(t.TempDir(), ".copilot")
 	sessionDir := filepath.Join(root, "session-state", "session-1")
 	if err := os.MkdirAll(filepath.Join(root, "otel"), 0o755); err != nil {
@@ -501,8 +501,8 @@ func TestCopilotDiscoverPrefersOtelOverSessionStateWhenBothExist(t *testing.T) {
 	for _, file := range files {
 		got[file] = true
 	}
-	if !got[otelFile] || got[sessionEvents] {
-		t.Fatalf("expected otel files to suppress session-state fallback, got %v", files)
+	if !got[otelFile] || !got[sessionEvents] {
+		t.Fatalf("expected both sources for usage-level reconciliation, got %v", files)
 	}
 }
 

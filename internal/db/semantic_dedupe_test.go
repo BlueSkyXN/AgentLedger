@@ -202,6 +202,65 @@ func TestSemanticDedupeImportAndMergeAreIdempotent(t *testing.T) {
 	}
 }
 
+// Codex parsers before turn metadata became non-identifying keyed the usage
+// row preceding task_complete by turn ID. Re-parsing the same source now yields
+// a session record for that observation and must not count it twice.
+func TestSemanticDedupeMatchesLegacyCodexTurnIdentity(t *testing.T) {
+	tests := []struct {
+		name         string
+		legacyTurn   string
+		incomingTurn string
+		duplicate    bool
+	}{
+		{name: "same turn", legacyTurn: "turn-1", incomingTurn: "turn-1", duplicate: true},
+		{name: "different turn", legacyTurn: "turn-1", incomingTurn: "turn-2"},
+		{name: "legacy without turn", incomingTurn: ""},
+	}
+	for _, test := range tests {
+		for _, mode := range []string{"import", "merge"} {
+			t.Run(test.name+"/"+mode, func(t *testing.T) {
+				database := openTestDatabase(t)
+				defer database.Close()
+				legacy := semanticCodexEvent(t, "legacy-turn")
+				legacy.IdentityStrategy, legacy.TurnID = "session_turn", test.legacyTurn
+				legacy.ContentSHA256 = mustContentSHA256(t, legacy)
+				if err := insertEvent(database.Conn(), legacy); err != nil {
+					t.Fatal(err)
+				}
+				incoming := semanticCodexEvent(t, "session-record")
+				incoming.TurnID = test.incomingTurn
+				incoming.ContentSHA256 = mustContentSHA256(t, incoming)
+				wantAdded := 1
+				if test.duplicate {
+					wantAdded = 0
+				}
+				if mode == "import" {
+					status, err := database.UpsertEvent(incoming)
+					want := ReconcileInserted
+					if test.duplicate {
+						want = ReconcileSkipped
+					}
+					if err != nil || status != want {
+						t.Fatalf("status=%s want=%s err=%v", status, want, err)
+					}
+				} else {
+					result, err := database.MergeFrom(semanticSource(t, incoming))
+					if err != nil || result.Added != wantAdded || result.Skipped != 1-wantAdded {
+						t.Fatalf("merge=%+v err=%v", result, err)
+					}
+				}
+				var count int
+				if err := database.Conn().QueryRow(`SELECT COUNT(*) FROM usage_events`).Scan(&count); err != nil {
+					t.Fatal(err)
+				}
+				if count != 1+wantAdded {
+					t.Fatalf("rows=%d want=%d", count, 1+wantAdded)
+				}
+			})
+		}
+	}
+}
+
 func TestMergeSemanticDedupeIncludesEarlierBatchRows(t *testing.T) {
 	database := openTestDatabase(t)
 	defer database.Close()

@@ -24,7 +24,7 @@ paths = ["~/.config/claude/projects", "~/.claude/projects"]
 
 [agents.codex]
 enabled = true
-paths = ["~/.codex/sessions"]
+paths = ["~/.codex/sessions", "~/.codex/archived_sessions"]
 duplicate_policy = "ledger"
 
 [agents.cursor]

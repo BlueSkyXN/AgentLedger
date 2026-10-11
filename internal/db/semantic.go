@@ -14,7 +14,7 @@ func semanticKeyForEvent(event *model.UsageEvent) (semanticEventKey, bool) {
 	// Equal per-request counters are not identity. Only Codex cumulative
 	// observations without native request/message IDs qualify for this fallback.
 	if event == nil || event.Channel != "codex" || event.SourceProduct != "codex-cli" ||
-		event.IdentityVersion != model.IdentityVersion || event.IdentityStrategy != "session_record" ||
+		event.IdentityVersion != model.IdentityVersion || !codexCumulativeIdentity(event) ||
 		event.IdentityScope != "session" || event.EventGranularity != "request" ||
 		event.RequestID != "" || event.MessageID != "" || event.TotalTokens <= 0 ||
 		event.TokenAccountingMethod != model.AccCodexTotalDelta ||
@@ -34,6 +34,21 @@ func semanticKeyForEvent(event *model.UsageEvent) (semanticEventKey, bool) {
 		turnID:        event.TurnID,
 		contentSHA256: hash,
 	}, true
+}
+
+// codexCumulativeIdentity accepts current session records and the legacy
+// session-turn identity that earlier Codex parsers derived from task_complete.
+// Both describe one cumulative token_count observation; only the event ID
+// recipe changed, so a turn-keyed row without its turn ID is not eligible.
+func codexCumulativeIdentity(event *model.UsageEvent) bool {
+	switch event.IdentityStrategy {
+	case "session_record":
+		return true
+	case "session_turn":
+		return event.TurnID != ""
+	default:
+		return false
+	}
 }
 
 type semanticEventIndex map[semanticEventKey]int

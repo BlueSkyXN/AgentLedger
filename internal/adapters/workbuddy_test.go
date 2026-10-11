@@ -128,7 +128,8 @@ func TestWorkBuddyAdapterSkipsInvalidUsage(t *testing.T) {
 		`{"id":"mismatch","timestamp":1710000000000,"sessionId":"session","cwd":"/private","providerData":{"model":"hy3","usage":{"requests":1},"rawUsage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":4}}}`,
 		`{"id":"negative","timestamp":1710000000000,"sessionId":"session","cwd":"/private","providerData":{"model":"hy3","usage":{"requests":1},"rawUsage":{"prompt_tokens":-1,"completion_tokens":1,"total_tokens":0}}}`,
 		`{"id":"cache-overflow","timestamp":1710000000000,"sessionId":"session","cwd":"/private","providerData":{"model":"hy3","usage":{"requests":1},"rawUsage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3,"prompt_tokens_details":{"cached_tokens":2},"prompt_cache_write_tokens":1}}}`,
-		`{"id":"reasoning-overflow","timestamp":1710000000000,"sessionId":"session","cwd":"/private","providerData":{"model":"hy3","usage":{"requests":1},"rawUsage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3,"completion_tokens_details":{"reasoning_tokens":2}}}}`,
+		`{"id":"negative-reasoning","timestamp":1710000000000,"sessionId":"session","cwd":"/private","providerData":{"model":"hy3","usage":{"requests":1},"rawUsage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3,"completion_tokens_details":{"reasoning_tokens":-1}}}}`,
+		`{"id":"separate-reasoning-mismatch","timestamp":1710000000000,"sessionId":"session","cwd":"/private","providerData":{"model":"gemini-3.8-flash","usage":{"requests":1},"rawUsage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":5,"reasoning_tokens":1}}}`,
 	}
 	lines := append([]string{"{not valid json"}, invalid...)
 	lines = append(lines, valid)
@@ -142,10 +143,36 @@ func TestWorkBuddyAdapterSkipsInvalidUsage(t *testing.T) {
 	if len(warnings) != 1 {
 		t.Fatalf("expected one aggregated diagnostic warning, got %#v", warnings)
 	}
-	for _, want := range []string{"skipped 8 invalid WorkBuddy line(s)", "invalid_json=1", "invalid_usage_multiplicity=1", "invalid_token_details=2", "invalid_token_totals=2", "missing_required_fields=2", "line 1 invalid_json", "3 more"} {
+	for _, want := range []string{"skipped 9 invalid WorkBuddy line(s)", "invalid_json=1", "invalid_usage_multiplicity=1", "invalid_token_details=2", "invalid_token_totals=3", "missing_required_fields=2", "line 1 invalid_json", "4 more"} {
 		if !strings.Contains(warnings[0], want) {
 			t.Fatalf("warning missing %q: %s", want, warnings[0])
 		}
+	}
+}
+
+func TestWorkBuddyAdapterReasoningOutsideOrBeyondCompletion(t *testing.T) {
+	path := writeWorkBuddyJSONL(t, strings.Join([]string{
+		`{"id":"separate","timestamp":1710000000000,"sessionId":"session","cwd":"/private","providerData":{"model":"gemini-3.8-flash","usage":{"requests":1},"rawUsage":{"prompt_tokens":100,"completion_tokens":8,"total_tokens":140,"reasoning_tokens":32,"prompt_tokens_details":{"cached_tokens":10}}}}`,
+		`{"id":"beyond","timestamp":1710000001000,"sessionId":"session","cwd":"/private","providerData":{"model":"hy4-preview","usage":{"requests":1},"rawUsage":{"prompt_tokens":100,"completion_tokens":67,"total_tokens":167,"prompt_tokens_details":{"cached_tokens":90},"prompt_cache_write_tokens":0,"completion_tokens_details":{"reasoning_tokens":68}}}}`,
+	}, "\n"))
+	records, warnings, err := NewWorkBuddyAdapter().ParseFileWithWarnings(path)
+	if err != nil || len(warnings) != 0 || len(records) != 2 {
+		t.Fatalf("records=%d warnings=%v err=%v", len(records), warnings, err)
+	}
+	separate := records[0]
+	if separate.InputTokens != 90 || separate.CacheReadTokens != 10 || separate.OutputTokens != 40 || separate.ReasoningTokens != 32 || separate.TotalTokens != 140 || *separate.SourceTotalTokens != 140 {
+		t.Fatalf("separate reasoning must be counted as output: %#v", separate)
+	}
+	// Cache write is absent, so the record is partial regardless of reasoning.
+	if separate.ObservabilityLevel != "partial" {
+		t.Fatalf("unexpected observability: %q", separate.ObservabilityLevel)
+	}
+	beyond := records[1]
+	if beyond.InputTokens != 10 || beyond.CacheReadTokens != 90 || beyond.OutputTokens != 67 || beyond.ReasoningTokens != 0 || beyond.TotalTokens != 167 || beyond.ObservabilityLevel != "partial" {
+		t.Fatalf("reasoning beyond completion must keep the total and drop the breakdown: %#v", beyond)
+	}
+	if strings.Contains(beyond.FingerprintJSON, "reasoning_tokens") {
+		t.Fatalf("inconsistent reasoning breakdown leaked into envelope: %s", beyond.FingerprintJSON)
 	}
 }
 

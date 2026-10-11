@@ -81,8 +81,17 @@ func (d *Database) FinishImportRunWithStatus(runID string, filesScanned, eventsA
 // UpsertEvent applies the same deterministic reconcile contract used by merge.
 // A rejected event is never written and returns status "rejected" plus a
 // *RejectError so import can count it and continue the rest of the run.
-func (d *Database) UpsertEvent(event *model.UsageEvent) (status string, err error) {
-	incoming := normalizedEvent(event)
+func (d *Database) UpsertEvent(event *model.UsageEvent) (string, error) {
+	return d.upsertEvent(event, nil)
+}
+
+// UpsertEventReplacing atomically replaces source records proven to be covered by a summary.
+func (d *Database) UpsertEventReplacing(event *model.UsageEvent, coveredIDs []string) (string, error) {
+	return d.upsertEvent(event, coveredIDs)
+}
+
+func (d *Database) upsertEvent(event *model.UsageEvent, coveredIDs []string) (status string, err error) {
+	incoming := canonicalParserEvent(normalizedEvent(event))
 	if err := ValidateEvent(incoming); err != nil {
 		return ReconcileRejected, err
 	}
@@ -97,6 +106,9 @@ func (d *Database) UpsertEvent(event *model.UsageEvent) (status string, err erro
 		}
 	}()
 
+	if err = migrateClaudeRequestlessEvent(tx, incoming); err != nil {
+		return ReconcileRejected, err
+	}
 	existing, err := selectEvent(tx, incoming.EventID)
 	if errors.Is(err, sql.ErrNoRows) {
 		existing = nil
@@ -133,6 +145,29 @@ func (d *Database) UpsertEvent(event *model.UsageEvent) (status string, err erro
 	}
 	if err != nil {
 		return "", err
+	}
+	for _, id := range coveredIDs {
+		if incoming.SourceProduct != "copilot-session-state" || id == incoming.EventID {
+			return ReconcileRejected, reject("invalid_source_replacement")
+		}
+		covered, lookupErr := selectEvent(tx, id)
+		if errors.Is(lookupErr, sql.ErrNoRows) {
+			continue
+		}
+		if lookupErr != nil {
+			return "", lookupErr
+		}
+		if covered.SourceProduct != "copilot-otel" || covered.Channel != "copilot" ||
+			covered.SessionID == "" || covered.SessionID != incoming.SessionID ||
+			covered.ModelNormalized != incoming.ModelNormalized || covered.TimestampMs > incoming.TimestampMs {
+			return ReconcileRejected, reject("invalid_source_replacement")
+		}
+		if _, err = tx.Exec(`DELETE FROM usage_events WHERE event_id = ?`, id); err != nil {
+			return "", err
+		}
+		if status == ReconcileSkipped {
+			status = ReconcileUpdated
+		}
 	}
 	if err = tx.Commit(); err != nil {
 		return "", err
@@ -235,7 +270,17 @@ func validateAccountingProfile(event *model.UsageEvent) error {
 			*event.SourceTotalTokens != event.TotalTokens {
 			return reject("accounting_total_mismatch")
 		}
-	case model.AccCopilotOtelParts, model.AccCopilotSessionMetrics:
+	case model.AccCopilotSessionMetrics:
+		expected = event.InputTokens + event.OutputTokens + event.CacheCreationTokens + event.CacheReadTokens
+		if event.AccountingProfile == model.CopilotSessionInclusiveProfile {
+			if event.ReasoningTokens > event.OutputTokens || event.RawInputTokens == nil ||
+				*event.RawInputTokens != event.InputTokens+event.CacheCreationTokens+event.CacheReadTokens {
+				return reject("accounting_total_mismatch")
+			}
+		} else {
+			expected += event.ReasoningTokens
+		}
+	case model.AccCopilotOtelParts:
 		expected = event.InputTokens + event.OutputTokens + event.ReasoningTokens + event.CacheCreationTokens + event.CacheReadTokens
 	case model.AccCopilotOtelTotalFallback:
 		strict = false
@@ -318,6 +363,10 @@ func normalizedEvent(event *model.UsageEvent) *model.UsageEvent {
 }
 
 func reconcile(existing, incoming *model.UsageEvent) (*model.UsageEvent, string, error) {
+	original := existing
+	existing = canonicalParserEvent(existing)
+	incoming = canonicalParserEvent(incoming)
+	upgraded := original != nil && (original.ParserVersion != existing.ParserVersion || original.ContentSHA256 != existing.ContentSHA256)
 	if existing == nil {
 		return incoming, ReconcileInserted, nil
 	}
@@ -340,7 +389,8 @@ func reconcile(existing, incoming *model.UsageEvent) (*model.UsageEvent, string,
 	if !sameTokenUsage(existing, incoming) || optionalIntConflict(existing.SourceTotalTokens, incoming.SourceTotalTokens) || optionalIntConflict(existing.RawInputTokens, incoming.RawInputTokens) || optionalIntConflict(existing.CacheCreation1hTokens, incoming.CacheCreation1hTokens) {
 		return nil, ReconcileRejected, reject("token_conflict")
 	}
-	if knownConflict(existing.TokenAccountingMethod, incoming.TokenAccountingMethod) || knownConflict(existing.AccountingProfile, incoming.AccountingProfile) {
+	tierEnrichment := compatibleCodexTierProfiles(existing, incoming)
+	if knownConflict(existing.TokenAccountingMethod, incoming.TokenAccountingMethod) || knownConflict(existing.AccountingProfile, incoming.AccountingProfile) && !tierEnrichment {
 		return nil, ReconcileRejected, reject("accounting_conflict")
 	}
 	if knownConflict(existing.Provider, incoming.Provider) {
@@ -356,7 +406,7 @@ func reconcile(existing, incoming *model.UsageEvent) (*model.UsageEvent, string,
 	}
 	canonical := *existing
 	contentChanged := false
-	metadataChanged := false
+	metadataChanged := upgraded
 	if incomingModelRank > existingModelRank {
 		canonical.ModelRaw = incoming.ModelRaw
 		canonical.ModelNormalized = incomingCanon
@@ -373,6 +423,10 @@ func reconcile(existing, incoming *model.UsageEvent) (*model.UsageEvent, string,
 	}
 	contentChanged = fillKnownString(&canonical.Provider, incoming.Provider) || contentChanged
 	contentChanged = fillString(&canonical.TokenAccountingMethod, incoming.TokenAccountingMethod) || contentChanged
+	if tierEnrichment && model.ServiceTierFromAccountingProfile(existing.Channel, existing.AccountingProfile) == "" {
+		canonical.AccountingProfile = incoming.AccountingProfile
+		contentChanged = true
+	}
 	contentChanged = fillString(&canonical.AccountingProfile, incoming.AccountingProfile) || contentChanged
 	contentChanged = fillOptionalInt(&canonical.SourceTotalTokens, incoming.SourceTotalTokens) || contentChanged
 	contentChanged = fillOptionalInt(&canonical.RawInputTokens, incoming.RawInputTokens) || contentChanged
@@ -405,6 +459,9 @@ func reconcile(existing, incoming *model.UsageEvent) (*model.UsageEvent, string,
 		}
 		// An observation without the cache TTL split (older parser or a legacy
 		// v3 database) is the same fact with less detail, not a conflict.
+		if tierEnrichment && model.ServiceTierFromAccountingProfile(incoming.Channel, incoming.AccountingProfile) == "" {
+			return existing, ReconcileSkipped, nil
+		}
 		if lacksOnlyKnownCacheTTLSplit(existing, incoming) {
 			return existing, ReconcileSkipped, nil
 		}
@@ -418,6 +475,20 @@ func reconcile(existing, incoming *model.UsageEvent) (*model.UsageEvent, string,
 	}
 	canonical.ContentSHA256 = contentSHA256
 	return &canonical, ReconcileUpdated, nil
+}
+
+func compatibleCodexTierProfiles(left, right *model.UsageEvent) bool {
+	if left.Channel != "codex" || right.Channel != "codex" {
+		return false
+	}
+	leftBase, _, _ := strings.Cut(left.AccountingProfile, ";service_tier=")
+	rightBase, _, _ := strings.Cut(right.AccountingProfile, ";service_tier=")
+	if leftBase != rightBase || leftBase != "ledger" && leftBase != "ccusage_compatible" {
+		return false
+	}
+	leftTier := model.ServiceTierFromAccountingProfile(left.Channel, left.AccountingProfile)
+	rightTier := model.ServiceTierFromAccountingProfile(right.Channel, right.AccountingProfile)
+	return leftTier == "" && left.AccountingProfile == leftBase && rightTier != "" || rightTier == "" && right.AccountingProfile == rightBase && leftTier != ""
 }
 
 func modelEvidenceRank(event *model.UsageEvent) int {
@@ -776,10 +847,22 @@ func (d *Database) MergeFrom(incomingPath string) (result MergeResult, err error
 		return result, err
 	}
 	virtual := make(map[string]*model.UsageEvent, len(existingEvents)+len(incomingEvents))
+	type identityUpgrade struct{ oldID, newID string }
+	var identityUpgrades []identityUpgrade
 	semanticIndex := make(semanticEventIndex)
 	for _, event := range existingEvents {
 		if validationErr := validateStoredEvent(event); validationErr != nil {
 			return result, fmt.Errorf("destination database contains an invalid event: %w", validationErr)
+		}
+		canonical := canonicalParserEvent(event)
+		if canonical.EventID != event.EventID {
+			identityUpgrades = append(identityUpgrades, identityUpgrade{event.EventID, canonical.EventID})
+			copy := *event
+			copy.EventID = canonical.EventID
+			event = &copy
+		}
+		if _, exists := virtual[event.EventID]; exists {
+			return result, reject("legacy_identity_collision")
 		}
 		virtual[event.EventID] = event
 		semanticIndex.add(event)
@@ -806,6 +889,7 @@ func (d *Database) MergeFrom(incomingPath string) (result MergeResult, err error
 			}
 			continue
 		}
+		incoming = canonicalParserEvent(incoming)
 		existing := virtual[incoming.EventID]
 		if existing == nil && semanticIndex.contains(incoming) {
 			actions = append(actions, mergeAction{status: ReconcileSkipped})
@@ -833,6 +917,11 @@ func (d *Database) MergeFrom(incomingPath string) (result MergeResult, err error
 		return result, &MergeConflictError{Conflicts: result.Conflicts}
 	}
 
+	for _, upgrade := range identityUpgrades {
+		if _, err = tx.Exec(`UPDATE usage_events SET event_id = ?, parser_version = 'claude-v2' WHERE event_id = ?`, upgrade.newID, upgrade.oldID); err != nil {
+			return result, err
+		}
+	}
 	for _, action := range actions {
 		switch action.status {
 		case ReconcileInserted:

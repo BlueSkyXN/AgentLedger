@@ -158,6 +158,17 @@ func workBuddyRecordFromObject(obj map[string]interface{}, path string, lineNumb
 	prompt, hasPrompt := strictWorkBuddyInt64(rawUsage, "prompt_tokens")
 	completion, hasCompletion := strictWorkBuddyInt64(rawUsage, "completion_tokens")
 	total, hasTotal := strictWorkBuddyInt64(rawUsage, "total_tokens")
+	// Some OpenAI-compatible Gemini routes report thinking as a top-level
+	// reasoning_tokens counter outside completion_tokens; the source total then
+	// equals prompt + completion + reasoning, and thinking is billed as output.
+	separateReasoning, hasSeparateReasoning := strictWorkBuddyInt64(rawUsage, "reasoning_tokens")
+	_, hasDetailReasoning := workBuddyDetailInt64(rawUsage, "completion_tokens_details", "reasoning_tokens")
+	if hasPrompt && hasCompletion && hasTotal && hasSeparateReasoning && !hasDetailReasoning &&
+		separateReasoning > 0 && completion >= 0 && total == prompt+completion+separateReasoning {
+		completion += separateReasoning
+	} else {
+		hasSeparateReasoning = false
+	}
 	if !hasPrompt || !hasCompletion || !hasTotal || prompt < 0 || completion < 0 || total <= 0 || total != prompt+completion {
 		return nil, "invalid_token_totals"
 	}
@@ -171,11 +182,20 @@ func workBuddyRecordFromObject(obj map[string]interface{}, path string, lineNumb
 		cacheWrite = 0
 	}
 	reasoning, hasReasoning := workBuddyDetailInt64(rawUsage, "completion_tokens_details", "reasoning_tokens")
+	if hasSeparateReasoning {
+		reasoning, hasReasoning = separateReasoning, true
+	}
 	if !hasReasoning {
 		reasoning = 0
 	}
-	if cacheRead < 0 || cacheWrite < 0 || cacheRead+cacheWrite > prompt || reasoning < 0 || reasoning > completion {
+	if cacheRead < 0 || cacheWrite < 0 || cacheRead+cacheWrite > prompt || reasoning < 0 {
 		return nil, "invalid_token_details"
+	}
+	// Reasoning is only a breakdown of output. A detail that exceeds the
+	// conserved completion count (seen as off-by-one/two from some routes) is
+	// treated as unknown instead of dropping the authoritative request total.
+	if reasoning > completion {
+		reasoning, hasReasoning = 0, false
 	}
 
 	requestModelID := getString(providerData, "requestModelId")

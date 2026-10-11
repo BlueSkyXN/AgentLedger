@@ -1,13 +1,13 @@
 package adapters
 
 import (
+
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/BlueSkyXN/AgentLedger/internal/fingerprint"
 	"os"
 	"sort"
-
-	"github.com/BlueSkyXN/AgentLedger/internal/fingerprint"
 )
 
 type CodexDiagnostics struct {
@@ -100,8 +100,7 @@ func analyzeCodexDiscoveredFiles(
 	if err != nil {
 		return nil, err
 	}
-	ledgerSeen := map[string]bool{}
-	ccusageSeen := map[string]bool{}
+	var ledgerAll, ccusageAll []*fingerprint.ParsedRecord
 	ledgerOutcomes := make([]codexReplayFileOutcome, 0, len(files))
 	ccusageOutcomes := make([]codexReplayFileOutcome, 0, len(files))
 	for _, file := range files {
@@ -122,7 +121,7 @@ func analyzeCodexDiscoveredFiles(
 		}
 		ledgerOutcomes = append(ledgerOutcomes, codexReplayOutcomeDelta(ledgerBefore, ledgerAdapter.ImportDiagnostics(), err))
 		if err == nil {
-			addCodexRecordStats(&diag.LedgerStats, ledgerRecords, ledgerSeen)
+			ledgerAll = append(ledgerAll, ledgerRecords...)
 		}
 
 		if betweenPolicies != nil {
@@ -139,7 +138,7 @@ func analyzeCodexDiscoveredFiles(
 		}
 		ccusageOutcomes = append(ccusageOutcomes, codexReplayOutcomeDelta(ccusageBefore, ccusageAdapter.ImportDiagnostics(), err))
 		if err == nil {
-			addCodexRecordStats(&diag.CCUsageCompatibleStats, ccusageRecords, ccusageSeen)
+			ccusageAll = append(ccusageAll, ccusageRecords...)
 		}
 		if err := validateCodexDiagnosticFile(snapshot, file); err != nil {
 			return nil, err
@@ -151,6 +150,8 @@ func analyzeCodexDiscoveredFiles(
 	if err := validateCodexReplayPolicyOutcomes(ledgerOutcomes, ccusageOutcomes); err != nil {
 		return nil, err
 	}
+	addCodexRecordStats(&diag.LedgerStats, ledgerAdapter.PostProcessRecords(ledgerAll), map[string]bool{})
+	addCodexRecordStats(&diag.CCUsageCompatibleStats, ccusageAdapter.PostProcessRecords(ccusageAll), map[string]bool{})
 	diag.ReplayDiagnostics = ledgerAdapter.ImportDiagnostics()
 	if err := validateCodexReplayDiagnostics(diag.ReplayDiagnostics, ccusageAdapter.ImportDiagnostics()); err != nil {
 		return nil, err

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/BlueSkyXN/AgentLedger/internal/fingerprint"
@@ -105,7 +106,7 @@ func (a *ClaudeAdapter) ParseFileWithWarnings(path string) ([]*fingerprint.Parse
 			IdentityKind:          identityKind,
 			IdentityScope:         "session",
 			IdentitySubkey:        claudeDedupeID(messageID, candidate.requestID),
-			ParserVersion:         "claude-v1",
+			ParserVersion:         "claude-v2",
 			Granularity:           "request",
 			TimestampMs:           parseTimestamp(candidate.timestamp),
 			SessionID:             sessionID,
@@ -129,60 +130,117 @@ func (a *ClaudeAdapter) ParseFileWithWarnings(path string) ([]*fingerprint.Parse
 			RawSHA256:       rawHash,
 		}
 
+		if rec.RequestID == "" && rec.NativeEventID != "" {
+			rec.IdentitySubkey = claudeRequestlessSubkey(rec.MessageID, rec.TimestampMs)
+		}
 		records = append(records, rec)
+		iterations, _ := candidate.usage["iterations"].([]interface{})
+		for index, value := range iterations {
+			usage, ok := value.(map[string]interface{})
+			if !ok || getString(usage, "type") != "advisor_message" || claudeUsageTotal(usage) == 0 {
+				continue
+			}
+			advisor := *rec
+			advisor.UsageSegment = "advisor:" + strconv.Itoa(index)
+			advisor.Model = normalizeClaudeModel(getString(usage, "model"), getString(usage, "speed"))
+			advisor.UsageSpeed = getString(usage, "speed")
+			advisor.InputTokens = getInt64(usage, "input_tokens")
+			advisor.OutputTokens = getInt64(usage, "output_tokens")
+			advisor.CacheReadTokens = getInt64(usage, "cache_read_input_tokens")
+			advisor.CacheCreationTokens = getInt64(usage, "cache_creation_input_tokens")
+			advisor.CacheCreation1hTokens = claudeCacheCreation1hTokens(usage)
+			if advisor.NativeEventID == "" {
+				advisor.IdentityKind = "record"
+				advisor.IdentitySubkey = stableRecordIdentitySubkey(lineNum, advisor.UsageSegment)
+			} else {
+				advisor.IdentitySubkey = claudeTuple(advisor.IdentitySubkey, advisor.UsageSegment)
+			}
+			records = append(records, &advisor)
+		}
 	}
 
 	return records, oversizedLineWarnings(scanner.SkippedLines()), scanner.Err()
 }
 
+type claudeRecordKey struct {
+	message, request, session, segment string
+	timestamp                          int64
+}
+
 func (a *ClaudeAdapter) PostProcessRecords(records []*fingerprint.ParsedRecord) []*fingerprint.ParsedRecord {
 	deduped := make([]*fingerprint.ParsedRecord, 0, len(records))
-	indexes := make(map[string][]int, len(records))
-
+	exact := make(map[claudeRecordKey]int, len(records))
+	routes := make(map[claudeRecordKey][]int)
+	sidechains := make(map[claudeRecordKey][]int)
 	for _, rec := range records {
 		if rec == nil {
 			continue
 		}
-		indexKey := ""
-		existingIndex := -1
-		if rec.MessageID != "" {
-			indexKey = claudeDedupeID(rec.MessageID, rec.RequestID)
-			for _, index := range indexes[indexKey] {
-				if claudeRecordsMatchDedupeKey(deduped[index], rec.MessageID, rec.RequestID) {
-					existingIndex = index
+		if rec.MessageID == "" {
+			deduped = append(deduped, rec)
+			continue
+		}
+		key := claudeRecordKey{message: rec.MessageID, request: rec.RequestID, segment: rec.UsageSegment}
+		session := firstNonEmpty(rec.NativeSessionID, rec.SessionID, rec.SessionPathID)
+		if rec.RequestID == "" {
+			key.session, key.timestamp = session, rec.TimestampMs
+		}
+		route := claudeRecordKey{message: rec.MessageID, session: session, segment: rec.UsageSegment}
+		index, found := exact[key]
+		if !found {
+			candidates := sidechains[route]
+			if rec.IsSidechain {
+				candidates = routes[route]
+			}
+			for _, candidate := range candidates {
+				existing := deduped[candidate]
+				if rec.IsSidechain || existing.IsSidechain {
+					index, found = candidate, true
 					break
 				}
 			}
-			if existingIndex < 0 {
-				messageKey := claudeDedupeID(rec.MessageID, "")
-				for _, index := range indexes[messageKey] {
-					if claudeRecordsMatchSidechainDedupeKey(deduped[index], rec.MessageID, rec.IsSidechain) {
-						existingIndex = index
-						break
-					}
-				}
-			}
 		}
-
-		if existingIndex >= 0 {
-			if shouldReplaceClaudeRecord(rec, deduped[existingIndex]) {
-				deduped[existingIndex] = rec
-				if indexKey != "" {
-					addClaudeDedupeIndex(indexes, indexKey, existingIndex)
-					addClaudeDedupeIndex(indexes, claudeDedupeID(rec.MessageID, ""), existingIndex)
-				}
+		if found {
+			if shouldReplaceClaudeRecord(rec, deduped[index]) {
+				deduped[index] = rec
 			}
-			continue
+		} else {
+			index = len(deduped)
+			deduped = append(deduped, rec)
 		}
-
-		index := len(deduped)
-		deduped = append(deduped, rec)
-		if indexKey != "" {
-			addClaudeDedupeIndex(indexes, indexKey, index)
-			addClaudeDedupeIndex(indexes, claudeDedupeID(rec.MessageID, ""), index)
+		exact[key] = index
+		if !found {
+			routes[route] = append(routes[route], index)
+			if rec.IsSidechain {
+				sidechains[route] = append(sidechains[route], index)
+			}
+		} else {
+			routes[route] = appendClaudeIndex(routes[route], index)
+			if rec.IsSidechain {
+				sidechains[route] = appendClaudeIndex(sidechains[route], index)
+			}
 		}
 	}
 	return deduped
+}
+
+func appendClaudeIndex(indexes []int, index int) []int {
+	for _, existing := range indexes {
+		if existing == index {
+			return indexes
+		}
+	}
+	return append(indexes, index)
+}
+
+func claudeTuple(parts ...string) string {
+	encoded, _ := json.Marshal(parts)
+	return string(encoded)
+}
+
+func claudeRequestlessSubkey(messageID string, timestamp int64) string {
+	// Some gateways reuse message IDs; the source timestamp distinguishes their responses.
+	return claudeTuple("requestless", messageID, strconv.FormatInt(timestamp, 10))
 }
 
 func claudeUsageFromObject(obj map[string]interface{}) (claudeUsageCandidate, bool) {
@@ -225,6 +283,7 @@ func claudeUsageFromObject(obj map[string]interface{}) (claudeUsageCandidate, bo
 		message:     msg,
 		usage:       usage,
 		timestamp:   wrapper["timestamp"],
+		sessionID:   firstNonEmpty(getString(wrapper, "sessionId"), getString(obj, "sessionId")),
 		requestID:   getString(wrapper, "requestId"),
 		messageID:   getString(msg, "id"),
 		model:       getString(msg, "model"),
@@ -285,14 +344,6 @@ func claudeDedupeID(messageID, requestID string) string {
 	return messageID + ":" + requestID
 }
 
-func claudeRecordsMatchDedupeKey(rec *fingerprint.ParsedRecord, messageID, requestID string) bool {
-	return rec != nil && rec.MessageID == messageID && rec.RequestID == requestID
-}
-
-func claudeRecordsMatchSidechainDedupeKey(rec *fingerprint.ParsedRecord, messageID string, candidateIsSidechain bool) bool {
-	return rec != nil && rec.MessageID == messageID && (candidateIsSidechain || rec.IsSidechain)
-}
-
 func shouldReplaceClaudeRecord(candidate, existing *fingerprint.ParsedRecord) bool {
 	if candidate.IsSidechain != existing.IsSidechain {
 		return existing.IsSidechain
@@ -310,15 +361,6 @@ func claudeRecordTotal(rec *fingerprint.ParsedRecord) int64 {
 		return rec.TotalTokens
 	}
 	return rec.InputTokens + rec.OutputTokens + rec.CacheCreationTokens + rec.CacheReadTokens
-}
-
-func addClaudeDedupeIndex(indexes map[string][]int, key string, index int) {
-	for _, existing := range indexes[key] {
-		if existing == index {
-			return
-		}
-	}
-	indexes[key] = append(indexes[key], index)
 }
 
 func normalizeClaudeDiscoverPaths(paths []string) []string {

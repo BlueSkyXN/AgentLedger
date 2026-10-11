@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/BlueSkyXN/AgentLedger/internal/fingerprint"
@@ -54,6 +55,12 @@ type codexBufferedModelDeclaration struct {
 	modelState codexModelState
 }
 
+type codexTierState struct {
+	tier      string
+	line      int
+	timestamp int64
+}
+
 func NewCodexAdapter() *CodexAdapter {
 	return NewCodexAdapterWithOptions(CodexOptions{})
 }
@@ -77,26 +84,64 @@ func normalizeCodexDuplicatePolicy(policy string) string {
 
 func (a *CodexAdapter) Discover(paths []string) ([]string, error) {
 	if len(paths) == 0 {
-		paths = []string{"~/.codex/sessions"}
+		paths = []string{"~/.codex/sessions", "~/.codex/archived_sessions"}
 	}
-	return DiscoverFiles(normalizeCodexDiscoverPaths(paths), []string{".jsonl"})
+	files, err := DiscoverFiles(normalizeCodexDiscoverPaths(paths), []string{".jsonl"})
+	if err != nil {
+		return nil, err
+	}
+	sort.SliceStable(files, func(i, j int) bool { return codexSessionPathRank(files[i]) < codexSessionPathRank(files[j]) })
+	seen := make(map[string]bool)
+	result := make([]string, 0, len(files))
+	for _, file := range files {
+		key := file
+		for dir := filepath.Dir(file); dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
+			if base := filepath.Base(dir); base == "sessions" || base == "archived_sessions" {
+				relative, _ := filepath.Rel(dir, file)
+				key = filepath.Join(filepath.Dir(dir), relative)
+				break
+			}
+		}
+		if !seen[key] {
+			seen[key] = true
+			result = append(result, file)
+		}
+	}
+	return result, nil
 }
 
 func normalizeCodexDiscoverPaths(paths []string) []string {
-	normalized := make([]string, 0, len(paths))
+	var normalized []string
 	seen := map[string]bool{}
-	for _, raw := range paths {
-		path := expandHome(raw)
-		base := filepath.Base(filepath.Clean(path))
-		if base != "sessions" && base != "archived_sessions" {
-			sessions := filepath.Join(path, "sessions")
-			if info, err := os.Stat(sessions); err == nil && info.IsDir() {
-				path = sessions
-			}
-		}
+	add := func(path string) {
 		if !seen[path] {
 			seen[path] = true
 			normalized = append(normalized, path)
+		}
+	}
+	for _, raw := range paths {
+		path := expandHome(raw)
+		switch filepath.Base(filepath.Clean(path)) {
+		case "sessions":
+			add(path)
+			archive := filepath.Join(filepath.Dir(path), "archived_sessions")
+			if info, err := os.Stat(archive); err == nil && info.IsDir() {
+				add(archive)
+			}
+		case "archived_sessions":
+			add(path)
+		default:
+			found := false
+			for _, name := range []string{"sessions", "archived_sessions"} {
+				child := filepath.Join(path, name)
+				if info, err := os.Stat(child); err == nil && info.IsDir() {
+					add(child)
+					found = true
+				}
+			}
+			if !found {
+				add(path)
+			}
 		}
 	}
 	return normalized
@@ -131,6 +176,10 @@ func (a *CodexAdapter) ParseFileWithWarnings(path string) ([]*fingerprint.Parsed
 	modelStates := map[string]codexModelState{}
 	previousTotals := map[string]codexUsageSnapshot{}
 	lastUsageRecords := map[string]*fingerprint.ParsedRecord{}
+	tierStates := make(map[string]codexTierState)
+	bufferedTiers := make(map[string]codexTierState)
+	serviceTier := ""
+	compactions := newCodexCompactions()
 	replayUsageState := codexReplayUsageState{}
 	var bufferedModels []codexBufferedModelDeclaration
 
@@ -148,6 +197,27 @@ func (a *CodexAdapter) ParseFileWithWarnings(path string) ([]*fingerprint.Parsed
 
 		entryType := getString(obj, "type")
 		contextSessionID := extractCodexExplicitSessionID(obj)
+		if getNestedString(obj, "payload", "type") == "thread_settings_applied" {
+			settings := getMap(getMap(obj, "payload"), "thread_settings")
+			if value, exists := settings["service_tier"]; exists {
+				text, _ := value.(string)
+				state := codexTierState{tier: model.NormalizeServiceTier(text), line: lineNum, timestamp: extractCodexTimestamp(obj)}
+				if replayMatcher.pending() {
+					bufferedTiers[contextSessionID] = state
+				} else {
+					tierStates[contextSessionID] = state
+				}
+			}
+		}
+		serviceTier = codexTierFor(tierStates, contextSessionID)
+		if entryType == "token_usage_record" || entryType == "compacted" {
+			state := modelStates[""]
+			if scoped, ok := modelStates[contextSessionID]; ok && scoped.line > state.line {
+				state = scoped
+			}
+			compactions.observe(obj, path, lineNum, defaultSessionID, sessionPathID, state, serviceTier, a.duplicatePolicy)
+			continue
+		}
 		if modelName := extractCodexThreadSettingsModel(obj); modelName != "" {
 			state := codexModelState{
 				model:      modelName,
@@ -227,6 +297,9 @@ func (a *CodexAdapter) ParseFileWithWarnings(path string) ([]*fingerprint.Parsed
 				previousTotals[sessionID] = sourceUsage
 			}
 		}
+		if sourceCumulative {
+			compactions.observeCumulative(sourceUsage, usage, sessionID)
+		}
 		usage, accountingPartial := usage.reconcileToSourceTotal()
 		rawInputTokens := usage.inputPtr()
 		storedUsage := usage.storageUsage()
@@ -259,6 +332,12 @@ func (a *CodexAdapter) ParseFileWithWarnings(path string) ([]*fingerprint.Parsed
 			if decision.transitioned {
 				applyCodexBufferedModels(modelStates, bufferedModels, replayMatcher)
 				bufferedModels = nil
+				for key, state := range bufferedTiers {
+					if !replayMatcher.replaySkipped || replayMatcher.replayTimestampValid && state.timestamp > 0 && state.timestamp-replayMatcher.lastReplayTimestamp > codexReplayBurstPauseMs {
+						tierStates[key] = state
+					}
+				}
+				bufferedTiers = nil
 			}
 		}
 
@@ -272,6 +351,7 @@ func (a *CodexAdapter) ParseFileWithWarnings(path string) ([]*fingerprint.Parsed
 			a.replayStats.accountingPartialTokens += storedUsage.totalTokens()
 		}
 
+		serviceTier = codexTierFor(tierStates, sessionID)
 		parsedModel := extractCodexModel(obj)
 		modelName := parsedModel
 		modelIsFallback := false
@@ -318,7 +398,7 @@ func (a *CodexAdapter) ParseFileWithWarnings(path string) ([]*fingerprint.Parsed
 			IdentityKind:          identityKind,
 			IdentityScope:         "session",
 			IdentitySubkey:        identitySubkey,
-			ParserVersion:         "codex-v1",
+			ParserVersion:         "codex-v2",
 			Granularity:           "request",
 			ModelResolution:       modelResolution,
 			TimestampMs:           extractCodexTimestamp(obj),
@@ -335,7 +415,8 @@ func (a *CodexAdapter) ParseFileWithWarnings(path string) ([]*fingerprint.Parsed
 			ObservabilityLevel:    observability,
 			ModelIsFallback:       modelIsFallback,
 			TokenAccountingMethod: method,
-			AccountingProfile:     a.duplicatePolicy,
+			AccountingProfile:     model.AccountingProfileWithTier(a.duplicatePolicy, serviceTier),
+			UsageSpeed:            serviceTier,
 			SourceProduct:         "codex-cli",
 			SessionPathID:         sessionPathID,
 			FingerprintJSON:       string(rawJSON),
@@ -348,7 +429,16 @@ func (a *CodexAdapter) ParseFileWithWarnings(path string) ([]*fingerprint.Parsed
 		lastUsageRecords[""] = rec
 	}
 
+	records = append(records, compactions.records()...)
 	return records, oversizedLineWarnings(scanner.SkippedLines()), scanner.Err()
+}
+
+func codexTierFor(states map[string]codexTierState, session string) string {
+	state := states[""]
+	if scoped, ok := states[session]; ok && scoped.line > state.line {
+		state = scoped
+	}
+	return state.tier
 }
 
 func applyCodexBufferedModels(modelStates map[string]codexModelState, buffered []codexBufferedModelDeclaration, replayMatcher *codexReplayMatcher) {

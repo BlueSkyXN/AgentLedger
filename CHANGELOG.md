@@ -34,6 +34,13 @@
 
 ### Fixed
 
+- Claude：无 request ID 时按会话、message ID 与来源 timestamp 区分调用，避免网关复用 ID 导致批量误合并或分次导入冲突；旧 identity 按受限规则升级。新增 `advisor_message` 独立模型用量，普通 iteration 不重复累计。
+- Copilot：空或局部 OTel 文件不再屏蔽全部 session-state；按会话/模型及 start/resume–shutdown 区间协调来源，并原子替换本轮确认被覆盖的已入库 OTel。session-state 正确拆分 cache read/write、避免 reasoning 再次累计和计价；仍按运行分段处理 shutdown，不套用未经来源确认的累计差分。
+- Gemini：支持聊天 JSON/JSONL `tokens` 与 `stats` / `result.stats`，保留原有 `usageMetadata`；同批重复消息及明细/汇总不叠加。
+- Codex：默认发现归档，活动副本优先；配对独立压缩 response ID 并补计未被普通累计覆盖的用量；来源 service tier 通过 accounting profile 保留到计价链路，schema v4 不扩列。默认 ledger 累计差分和 ZCode accounting 不变。
+
+- Codex 语义去重此前只认 `session_record`，早期 parser 以 `task_complete` turn ID 生成的 legacy `session_turn` 行不参与匹配；重新解析同一来源得到的 `session_record` 会被当成新事件再插入一次，造成重复计量。现在带非空 turn ID 的 legacy `session_turn` 行也参与同一受限匹配。
+- WorkBuddy：顶层 `reasoning_tokens` 不计入 completion 的 Gemini 请求（total = prompt + completion + reasoning）此前因总量不守恒被整条丢弃，现在 reasoning 并入 output；`completion_tokens_details.reasoning_tokens` 比 completion 多 1–2 的请求此前也被丢弃，现在保留来源总量并把 reasoning 视为未知（`partial`）。
 - JSONL 来源中单行超过读取上限（Claude/Gemini/Copilot/Cursor/WorkBuddy 原为 10 MiB，Codex 为 64 MiB）时，`bufio.Scanner` 报 `token too long` 并让整个文件解析失败、该文件的全部用量丢失；现在统一用有界的逐行读取器，上限 64 MiB，超长行只跳过该行并给出 parse warning，行号与 identity 不变，同一文件其余用量记录继续导入。
 - Claude 缓存写入此前全部按 5 分钟价估算，订阅主对话等 1 小时 TTL 写入（2× input）被低估 0.75× input；现在逐事件按真实 TTL 计价。
 - Claude Sonnet 5 价格改为官方标准价 $2 / $10（原定 2026-09-01 涨价到 $3 / $15 已取消），并补齐 5m/1h 缓存写入价；此前缓存写入按 input 价计。

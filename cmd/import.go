@@ -477,7 +477,13 @@ func importParsedRecords(database *db.Database, adapterName string, records []*f
 			UpdatedAtMs:           nowMs,
 		}
 
-		result, err := database.UpsertEvent(event)
+		var coveredIDs []string
+		for _, covered := range rec.SupersededRecords {
+			if _, id, _, _, err := fingerprint.ComputeIdentity(covered); err == nil {
+				coveredIDs = append(coveredIDs, id)
+			}
+		}
+		result, err := database.UpsertEventReplacing(event, coveredIDs)
 		if err != nil {
 			if db.IsRejectError(err) || result == db.ReconcileRejected {
 				rejected++

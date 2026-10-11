@@ -62,6 +62,9 @@ func (e *Estimator) Profile() *Profile {
 }
 
 func (e *Estimator) Resolve(ev Event) Match {
+	if ev.ServiceTier == "" {
+		ev.ServiceTier = model.ServiceTierFromAccountingProfile(ev.Channel, ev.AccountingProfile)
+	}
 	model := strings.ToLower(strings.TrimSpace(ev.Model))
 	if model == "" || model == "unknown" && !strings.EqualFold(e.profile.Defaults.UnknownModelPolicy, "zero") {
 		return Match{Confidence: "missing", Resolution: ResolutionMissingModel, MissingReason: "missing_model"}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/BlueSkyXN/AgentLedger/internal/fingerprint"
@@ -36,11 +37,6 @@ func (a *CopilotAdapter) Discover(paths []string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(otelFiles) > 0 && len(groups.sessionState) > 0 {
-		files := append(otelFiles, otherFiles...)
-		return uniqueExistingFiles(filterCopilotDiscoverFiles(files)), nil
-	}
-
 	sessionFiles, err := DiscoverFiles(groups.sessionState, []string{".jsonl"})
 	if err != nil {
 		return nil, err
@@ -142,6 +138,7 @@ type copilotSessionContext struct {
 	SessionID     string
 	SessionPathID string
 	ProjectPath   string
+	StartMs       int64
 }
 
 func (ctx *copilotSessionContext) observe(obj map[string]interface{}, path string) {
@@ -154,10 +151,18 @@ func (ctx *copilotSessionContext) observe(obj map[string]interface{}, path strin
 	}
 	switch getString(obj, "type") {
 	case "session.start", "session.resume":
+		ctx.StartMs = parseTimestamp(obj["timestamp"])
+		if ctx.StartMs == 0 {
+			ctx.StartMs = parseTimestamp(data["startTime"])
+		}
 		if sessionID := getString(data, "sessionId"); sessionID != "" {
 			ctx.SessionID = sessionID
 		}
 		ctx.observeContext(getMap(data, "context"))
+	case "session.shutdown":
+		if timestamp := parseTimestamp(obj["timestamp"]); timestamp > 0 {
+			ctx.StartMs = timestamp
+		}
 	case "session.context_changed":
 		ctx.observeContext(data)
 	}
@@ -223,6 +228,66 @@ func (a *CopilotAdapter) ParseFileWithWarnings(path string) ([]*fingerprint.Pars
 	return records, oversizedLineWarnings(scanner.SkippedLines()), nil
 }
 
+func (a *CopilotAdapter) PostProcessRecords(records []*fingerprint.ParsedRecord) []*fingerprint.ParsedRecord {
+	type sourceKey struct{ session, model string }
+	keyFor := func(rec *fingerprint.ParsedRecord) sourceKey {
+		modelName, _, _ := NormalizeModelName(rec.Model)
+		return sourceKey{firstNonEmpty(rec.NativeSessionID, rec.SessionID, rec.SessionPathID), modelName}
+	}
+	summaries := make(map[sourceKey][]*fingerprint.ParsedRecord)
+	unique := make(map[string]*fingerprint.ParsedRecord)
+	var deduped []*fingerprint.ParsedRecord
+	for _, rec := range records {
+		if rec == nil || rec.TotalTokens <= 0 {
+			continue
+		}
+		_, id, _, _, err := fingerprint.ComputeIdentity(rec)
+		if err != nil {
+			deduped = append(deduped, rec)
+			continue
+		}
+		if existing := unique[id]; existing != nil {
+			if existing.CoverageStartMs == 0 {
+				existing.CoverageStartMs = rec.CoverageStartMs
+			}
+			if rec.TotalTokens > existing.TotalTokens {
+				start := existing.CoverageStartMs
+				*existing = *rec
+				existing.CoverageStartMs = start
+			}
+			continue
+		}
+		unique[id] = rec
+		deduped = append(deduped, rec)
+		if rec.SourceProduct == "copilot-session-state" && rec.RawInputTokens != nil && rec.ReasoningTokens <= rec.OutputTokens {
+			key := keyFor(rec)
+			if key.session != "" && key.model != "" {
+				summaries[key] = append(summaries[key], rec)
+			}
+		}
+	}
+	for key := range summaries {
+		sort.SliceStable(summaries[key], func(i, j int) bool { return summaries[key][i].TimestampMs < summaries[key][j].TimestampMs })
+	}
+	result := make([]*fingerprint.ParsedRecord, 0, len(deduped))
+	for _, rec := range deduped {
+		covered := false
+		if rec.SourceProduct == "copilot-otel" {
+			for _, summary := range summaries[keyFor(rec)] {
+				if rec.TimestampMs <= summary.TimestampMs && (summary.CoverageStartMs == 0 || rec.TimestampMs >= summary.CoverageStartMs) {
+					summary.SupersededRecords = append(summary.SupersededRecords, rec)
+					covered = true
+					break
+				}
+			}
+		}
+		if !covered {
+			result = append(result, rec)
+		}
+	}
+	return result
+}
+
 type copilotCandidate struct {
 	record    *fingerprint.ParsedRecord
 	eventType string
@@ -275,15 +340,17 @@ func copilotSessionMetricCandidatesFromObject(obj map[string]interface{}, rawHas
 		}
 		rawInput, hasInput := firstInt64Field(usage, "inputTokens", "input_tokens")
 		output, _ := firstInt64Field(usage, "outputTokens", "output_tokens")
-		cacheRead, hasCacheRead := firstInt64Field(usage, "cacheReadTokens", "cache_read_tokens")
+		cacheRead, _ := firstInt64Field(usage, "cacheReadTokens", "cache_read_tokens")
 		cacheWrite, _ := firstInt64Field(usage, "cacheWriteTokens", "cache_write_tokens", "cacheCreationTokens")
 		reasoning, _ := firstInt64Field(usage, "reasoningTokens", "reasoning_tokens")
-		input := rawInput
-		if hasInput && hasCacheRead {
-			cacheRead = minInt64(rawInput, cacheRead)
-			input = saturatingSub(rawInput, cacheRead)
+		if rawInput < 0 || output < 0 || cacheRead < 0 || cacheWrite < 0 || reasoning < 0 {
+			continue
 		}
-		total := input + output + cacheRead + cacheWrite + reasoning
+		cacheRead = minInt64(rawInput, cacheRead)
+		cacheWrite = minInt64(rawInput-cacheRead, cacheWrite)
+		reasoning = minInt64(output, reasoning)
+		input := rawInput - cacheRead - cacheWrite
+		total := rawInput + output
 		requests := getMap(metric, "requests")
 		if total == 0 {
 			continue
@@ -300,7 +367,7 @@ func copilotSessionMetricCandidatesFromObject(obj map[string]interface{}, rawHas
 			IdentityKind:          identityKind,
 			IdentityScope:         "session",
 			IdentitySubkey:        identitySubkeyPrefix + modelName,
-			ParserVersion:         "copilot-session-state-v1",
+			ParserVersion:         "copilot-session-state-v2",
 			Granularity:           "session_model",
 			TimestampMs:           timestampMs,
 			SessionID:             sessionID,
@@ -315,11 +382,15 @@ func copilotSessionMetricCandidatesFromObject(obj map[string]interface{}, rawHas
 			SourceProduct:         "copilot-session-state",
 			ObservabilityLevel:    "session_summary",
 			TokenAccountingMethod: ledgermodel.AccCopilotSessionMetrics,
-			AccountingProfile:     "input_includes_cache_read",
+			AccountingProfile:     ledgermodel.CopilotSessionInclusiveProfile,
+			CoverageStartMs:       context.StartMs,
 			FingerprintJSON:       fingerprintJSON,
 			SourceFile:            path,
 			LineNumber:            lineNum,
 			RawSHA256:             rawHash,
+		}
+		if record.CoverageStartMs == 0 {
+			record.CoverageStartMs = parseTimestamp(data["sessionStartTime"])
 		}
 		if hasInput {
 			record.RawInputTokens = int64Ptr(rawInput)

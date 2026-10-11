@@ -131,9 +131,12 @@ func outputTokensForPricing(ev Event, rule *Rule, profile *Profile) int64 {
 			return ev.ReasoningTokens
 		}
 		return ev.OutputTokens
-	case model.AccCopilotOtelParts, model.AccCopilotOtelTotalFallback, model.AccCopilotSessionMetrics:
-		// Copilot reports reasoning as a separate bucket rather than including it
-		// in output_tokens; model pricing charges it at the output rate.
+	case model.AccCopilotSessionMetrics:
+		if ev.AccountingProfile == model.CopilotSessionInclusiveProfile {
+			return ev.OutputTokens
+		}
+		return ev.OutputTokens + ev.ReasoningTokens
+	case model.AccCopilotOtelParts, model.AccCopilotOtelTotalFallback:
 		return ev.OutputTokens + ev.ReasoningTokens
 	case model.AccWorkBuddyRawUsage:
 		// WorkBuddy completion_tokens already includes reasoning_tokens.

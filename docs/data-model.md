@@ -152,11 +152,21 @@ raw_usage_json
 | 已知 accounting method/profile 冲突 | reject |
 | merge 输入的 event/session hash 格式或 content hash 不自洽 | reject |
 
-跨 event ID 的语义去重只接受 `channel=codex`、`source_product=codex-cli`、`identity_strategy=session_record`、`identity_scope=session`、request 粒度且非零的记录；双方均不能带 native request/message ID，accounting method 必须为 `codex_total_delta`，并提供正数 `source_total_tokens` 与已知 `raw_input_tokens`。匹配比较 Session key、Session ID、Session path ID、turn ID，以及从完整持久化事实重算的 content hash（含 timestamp、模型证据、provider、observability、全部 token 分项、来源累计总量、TTL 和 accounting）。源文件位置、raw hash 与导入时间不参与比较。
+跨 event ID 的语义去重只接受 `channel=codex`、`source_product=codex-cli`、`identity_strategy=session_record`（或带非空 `turn_id` 的 legacy `session_turn`：早期 Codex parser 用 `task_complete` 的 turn ID 作为该条用量的 identity，现在同一条记录解析为 `session_record`）、`identity_scope=session`、request 粒度且非零的记录；双方均不能带 native request/message ID，accounting method 必须为 `codex_total_delta`，并提供正数 `source_total_tokens` 与已知 `raw_input_tokens`。匹配比较 Session key、Session ID、Session path ID、turn ID，以及从完整持久化事实重算的 content hash（含 timestamp、模型证据、provider、observability、全部 token 分项、来源累计总量、TTL 和 accounting）。源文件位置、raw hash 与导入时间不参与比较。
 
 不同原生事件/消息/请求 ID 不会因同一毫秒和相同 token 被合并，其他来源与非累计样本也不适用此 fallback。跨 ID 的 TTL 或累计值不同，或不满足上述证据条件时，不猜测为同一事件，保留独立记录；同 ID 仍按正常 reconcile 补齐或拒绝冲突，不绕过 `timestamp_conflict`。此规则不重写旧 event ID，也不清理已经存在的重复行。
 
 拒绝不新增行、不覆盖原行。merge 在 preflight 的虚拟状态中同步维护语义索引，包含本批次已接受的新增/更新；所有校验与去重完成后才写入，任一拒绝会回滚整次 merge。
+
+## 已知 parser 规则升级
+
+schema v4 与 identity version 2 不变。import/merge 对以下可确定的旧 parser 表示做受限升级：
+
+- `claude-v1`、无 request ID、原生 message identity 且 event hash 符合旧算法的行，以原始 timestamp 生成 requestless 子标识；旧记录的 token 不猜测修改，重新解析可补回以前误合并的其他调用。
+- `copilot-session-state-v1` 的 raw input、缓存和总量严格符合旧算法时，改为 input 包含 cache read/write、output 包含 reasoning 的新 profile，并重算 content hash。无法证明的记录保持冲突拒绝。
+- Codex `accounting_profile` 可从 `ledger` / `ccusage_compatible` 补齐为 `<原值>;service_tier=<规范化档位>`，不新增 schema 列。未知可补已知；已知不被缺失值覆盖，两个已知档位不一致仍拒绝。
+
+merge 的 identity 升级在全部 preflight 通过后才写入，拒绝仍整批回滚。默认脱敏规则不变。Copilot import 只替换本轮明确选中、同会话/模型且被 shutdown 覆盖的 OTel event ID，不基于目录存在与否删除历史。
 
 ## Session summary
 

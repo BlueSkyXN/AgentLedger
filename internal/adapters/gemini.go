@@ -52,20 +52,16 @@ func parseGeminiJSON(path string) ([]*fingerprint.ParsedRecord, error) {
 		if err2 := json.Unmarshal(data, &arr); err2 != nil {
 			return nil, nil
 		}
-		var records []*fingerprint.ParsedRecord
+		state := geminiParseState{}
 		for i, item := range arr {
-			if rec := parseGeminiObject(item, path, i+1); rec != nil {
-				records = append(records, rec)
-			}
+			state.consume(item, path, i+1)
 		}
-		return records, nil
+		return state.records, nil
 	}
 
-	rec := parseGeminiObject(obj, path, 1)
-	if rec != nil {
-		return []*fingerprint.ParsedRecord{rec}, nil
-	}
-	return nil, nil
+	state := geminiParseState{}
+	state.consume(obj, path, 1)
+	return state.records, nil
 }
 
 func parseGeminiJSONL(path string) ([]*fingerprint.ParsedRecord, []string, error) {
@@ -75,7 +71,7 @@ func parseGeminiJSONL(path string) ([]*fingerprint.ParsedRecord, []string, error
 	}
 	defer f.Close()
 
-	var records []*fingerprint.ParsedRecord
+	state := geminiParseState{}
 	scanner := newJSONLLineReader(f)
 	lineNum := 0
 
@@ -91,12 +87,10 @@ func parseGeminiJSONL(path string) ([]*fingerprint.ParsedRecord, []string, error
 			continue
 		}
 
-		if rec := parseGeminiObject(obj, path, lineNum); rec != nil {
-			records = append(records, rec)
-		}
+		state.consume(obj, path, lineNum)
 	}
 
-	return records, oversizedLineWarnings(scanner.SkippedLines()), scanner.Err()
+	return state.records, oversizedLineWarnings(scanner.SkippedLines()), scanner.Err()
 }
 
 func parseGeminiObject(obj map[string]interface{}, path string, lineNum int) *fingerprint.ParsedRecord {

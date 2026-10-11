@@ -9,6 +9,7 @@ import (
 	"io"
 	"path"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -61,6 +62,9 @@ type ParsedRecord struct {
 	CacheCreation1hTokens *int64
 	IsSidechain           bool
 	UsageSpeed            string
+	UsageSegment          string
+	CoverageStartMs       int64
+	SupersededRecords     []*ParsedRecord
 
 	SourceProduct         string
 	ObservabilityLevel    string
@@ -203,6 +207,15 @@ func ComputeIdentity(rec *ParsedRecord) (sessionKey, eventID string, strategy St
 	parts = append(parts, kind, nativeID, subkey)
 	eventID = hashIdentityTuple(parts...)
 	return sessionKey, eventID, strategy, contentSHA256, nil
+}
+
+func ClaudeRequestlessEventID(sessionKey, messageID string, timestamp int64) string {
+	subkey, _ := json.Marshal([]string{"requestless", messageID, strconv.FormatInt(timestamp, 10)})
+	return hashIdentityTuple("event:v2", "claude-code", "session", sessionKey, "message", messageID, string(subkey))
+}
+
+func ClaudeLegacyMessageEventID(sessionKey, messageID string) string {
+	return hashIdentityTuple("event:v2", "claude-code", "session", sessionKey, "message", messageID, messageID)
 }
 
 // hashIdentityTuple preserves component boundaries. Native identifiers and
