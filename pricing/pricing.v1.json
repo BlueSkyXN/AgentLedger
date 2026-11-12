@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "id": "agentledger-pricing-2026-10-10",
+  "id": "agentledger-pricing-2026-11-12",
   "currency": "USD",
   "unit": "usd_per_1m_tokens",
-  "checked_at": "2026-10-10",
+  "checked_at": "2026-11-12",
   "defaults": {
     "unknown_model_policy": "zero",
     "reasoning_policy": "included_in_output",
@@ -15,13 +15,13 @@
       "provider": "openai",
       "name": "OpenAI API pricing",
       "url": "https://developers.openai.com/api/docs/pricing",
-      "checked_at": "2026-10-09"
+      "checked_at": "2026-11-12"
     },
     {
       "provider": "zai",
       "name": "Z.AI model pricing",
       "url": "https://docs.z.ai/guides/overview/pricing",
-      "checked_at": "2026-09-03"
+      "checked_at": "2026-11-12"
     },
     {
       "provider": "deepseek",
@@ -33,7 +33,7 @@
       "provider": "kimi",
       "name": "Kimi model pricing",
       "url": "https://platform.kimi.ai/docs/pricing/chat",
-      "checked_at": "2026-07-23"
+      "checked_at": "2026-11-12"
     },
     {
       "provider": "tencent",
@@ -62,14 +62,14 @@
     {
       "provider": "xai",
       "name": "xAI Grok pricing",
-      "url": "https://docs.x.ai/docs/models#model-pricing",
-      "checked_at": "2026-08-13"
+      "url": "https://docs.x.ai/developers/pricing",
+      "checked_at": "2026-10-13"
     },
     {
       "provider": "anthropic",
       "name": "Anthropic Claude pricing",
       "url": "https://claude.com/pricing#api",
-      "checked_at": "2026-10-05"
+      "checked_at": "2026-11-12"
     },
     {
       "provider": "model_id",
@@ -80,6 +80,12 @@
       "provider": "user_supplied",
       "name": "User supplied model list prices and official-source summary for Claude, Kimi, Doubao, and Grok models",
       "checked_at": "2026-07-25"
+    },
+    {
+      "provider": "google",
+      "name": "Gemini API pricing",
+      "url": "https://aistudio.google.com/docs/pricing",
+      "checked_at": "2026-11-12"
     }
   ],
   "rules": [
@@ -329,6 +335,110 @@
       "source_url": "https://developers.openai.com/api/docs/pricing",
       "pricing_notes_url": "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
       "as_of": "2026-10-09"
+    },
+    {
+      "id": "gpt-6.1-terra-fast-long",
+      "model_patterns": [
+        "gpt-6.1-terra"
+      ],
+      "priority": 400,
+      "basis": "official_model_list_price",
+      "condition": {
+        "min_input_side_tokens": 272001,
+        "service_tier": [
+          "fast*",
+          "priority*"
+        ]
+      },
+      "rates": {
+        "input": 4.0,
+        "cached_input": 0.2,
+        "cache_write": 5.0,
+        "output": 15.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Fast mode rate (Priority processing was renamed Fast mode on 2026-07-30). Matched only when the event carries a fast or priority service tier; Codex preserves explicit service tier in the accounting profile; sources without tier evidence use standard matching. Above 272K input-side tokens the long-context rate applies to the entire request.",
+      "model_id": "gpt-6.1-terra",
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/guides/fast-mode",
+      "as_of": "2026-11-12"
+    },
+    {
+      "id": "gpt-6.1-terra-fast",
+      "model_patterns": [
+        "gpt-6.1-terra"
+      ],
+      "priority": 300,
+      "basis": "official_model_list_price",
+      "condition": {
+        "service_tier": [
+          "fast*",
+          "priority*"
+        ]
+      },
+      "rates": {
+        "input": 2.0,
+        "cached_input": 0.1,
+        "cache_write": 2.5,
+        "output": 10.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Fast mode rate (Priority processing was renamed Fast mode on 2026-07-30). Matched only when the event carries a fast or priority service tier; Codex preserves explicit service tier in the accounting profile; sources without tier evidence use standard matching.",
+      "model_id": "gpt-6.1-terra",
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/guides/fast-mode",
+      "as_of": "2026-11-12"
+    },
+    {
+      "id": "gpt-6.1-terra-long",
+      "model_patterns": [
+        "gpt-6.1-terra"
+      ],
+      "priority": 100,
+      "basis": "official_model_list_price",
+      "condition": {
+        "min_input_side_tokens": 272001
+      },
+      "rates": {
+        "input": 2.0,
+        "cached_input": 0.1,
+        "cache_write": 2.5,
+        "output": 7.5
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Above 272K input-side tokens, the long-context rate applies to the entire request (2x input/cache, 1.5x output). cache_write is the 30-minute prompt-cache write rate; the official page also lists a 12-hour write tier (2x the 30-minute rate) that usage events cannot distinguish, so 30 minutes is assumed.",
+      "model_id": "gpt-6.1-terra",
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/models/gpt-6.1-terra",
+      "as_of": "2026-11-12"
+    },
+    {
+      "id": "gpt-6.1-terra",
+      "model_patterns": [
+        "gpt-6.1-terra"
+      ],
+      "priority": 30,
+      "basis": "official_model_list_price",
+      "rates": {
+        "input": 1.0,
+        "cached_input": 0.05,
+        "cache_write": 1.25,
+        "output": 5.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "cache_write is the 30-minute prompt-cache write rate; the official page also lists a 12-hour write tier (2x the 30-minute rate) that usage events cannot distinguish, so 30 minutes is assumed. No ultrafast tier exists for this model.",
+      "model_id": "gpt-6.1-terra",
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/models/gpt-6.1-terra",
+      "as_of": "2026-11-12"
     },
     {
       "id": "gpt-6-sol-fast-long",
@@ -1305,6 +1415,59 @@
       "model_id": "claude-haiku-4.5"
     },
     {
+      "id": "claude-haiku-5-5-long",
+      "model_patterns": [
+        "claude-haiku-5-5",
+        "claude-haiku-5.5",
+        "anthropic/claude-haiku-5-5",
+        "anthropic/claude-haiku-5.5"
+      ],
+      "priority": 100,
+      "basis": "official_model_list_price",
+      "condition": {
+        "min_input_side_tokens": 100001
+      },
+      "rates": {
+        "input": 0.5,
+        "cache_write_5m": 0.625,
+        "cache_write_1h": 1.0,
+        "cache_read": 0.05,
+        "output": 2.5
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "5m_if_unknown",
+      "confidence": "estimated",
+      "notes": "Long prompt tier: above 100K input-side tokens the 5x rate applies to the entire request. Cache writes are priced per TTL: events with an explicit 1-hour split use cache_write_1h, the remainder uses cache_write_5m; events without a split assume 5-minute writes.",
+      "model_id": "claude-haiku-5.5",
+      "source_url": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "as_of": "2026-11-12"
+    },
+    {
+      "id": "claude-haiku-5-5",
+      "model_patterns": [
+        "claude-haiku-5-5",
+        "claude-haiku-5.5",
+        "anthropic/claude-haiku-5-5",
+        "anthropic/claude-haiku-5.5"
+      ],
+      "priority": 30,
+      "basis": "official_model_list_price",
+      "rates": {
+        "input": 0.1,
+        "cache_write_5m": 0.125,
+        "cache_write_1h": 0.2,
+        "cache_read": 0.01,
+        "output": 0.5
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "5m_if_unknown",
+      "confidence": "estimated",
+      "notes": "Short prompt tier, up to 100K input-side tokens. Cache writes are priced per TTL: events with an explicit 1-hour split use cache_write_1h, the remainder uses cache_write_5m; events without a split assume 5-minute writes.",
+      "model_id": "claude-haiku-5.5",
+      "source_url": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "as_of": "2026-11-12"
+    },
+    {
       "id": "claude-fable-5-1",
       "model_patterns": [
         "claude-fable-5-1",
@@ -1523,10 +1686,34 @@
       "as_of": "2026-09-03"
     },
     {
+      "id": "glm-5.3-flashx",
+      "model_patterns": [
+        "glm-5.3-flashx",
+        "glm-5.3-flashx-legal"
+      ],
+      "priority": 30,
+      "basis": "official_model_list_price",
+      "rates": {
+        "input": 0.37,
+        "cached_input": 0.075,
+        "cache_write": 0,
+        "output": 1.25
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Official Z.AI list price. glm-5.3-flashx-legal is the same price. Cache storage is listed as limited-time free, so cache writes are explicit zero; no context-length tier.",
+      "model_id": "glm-5.3-flashx",
+      "source_url": "https://docs.z.ai/guides/overview/pricing",
+      "as_of": "2026-11-12"
+    },
+    {
       "id": "deepseek-v4-pro",
       "model_patterns": [
         "deepseek-v4-pro",
-        "deepseek-v4-pro-ga-260813"
+        "deepseek-v4-pro-ga-260813",
+        "zj-deepseek-v4-pro",
+        "zj-deepseek-v4-pro-*"
       ],
       "priority": 30,
       "basis": "user_provided_provider_peak_price",
@@ -1538,7 +1725,7 @@
       "reasoning_policy": "included_in_output",
       "cache_write_assumption": "treat_as_input",
       "confidence": "estimated",
-      "notes": "User directed AgentLedger to apply the provider peak price at all times; the dated GA model ID uses the same price.",
+      "notes": "User directed AgentLedger to apply the provider peak price at all times; the dated GA model ID uses the same price. The zj- prefixed IDs are the same model as routed by the zcode gateway; the gateway resale price may differ from this provider peak price.",
       "model_id": "deepseek-v4-pro",
       "source_url": "https://openrouter.ai/provider/deepseek",
       "as_of": "2026-09-03"
@@ -1610,7 +1797,9 @@
       "id": "deepseek-v4-flash",
       "model_patterns": [
         "deepseek-v4-flash",
-        "deepseek-v4-flash-*"
+        "deepseek-v4-flash-*",
+        "zj-deepseek-v4-flash",
+        "zj-deepseek-v4-flash-*"
       ],
       "priority": 30,
       "basis": "official_model_list_price",
@@ -1622,7 +1811,7 @@
       "reasoning_policy": "included_in_output",
       "cache_write_assumption": "treat_as_input",
       "confidence": "estimated",
-      "notes": "Retired model name that the provider now routes to deepseek-flash at flash prices; dated variants (202605, ga-260731) carry the same rates. Peak applies at all times as with deepseek-flash. Open question: ga-260731 events arrive via the workbuddy channel and may map to a Tencent-hosted DeepSeek SKU reportedly priced 0.44/0.014/1.32 peak (unverified; equals the origin- gateway tier 3/0.1/9 CNY / 6.8); confirm the actual provider SKU before switching this rule.",
+      "notes": "Retired model name that the provider now routes to deepseek-flash at flash prices; dated variants (202605, ga-260731) carry the same rates. Peak applies at all times as with deepseek-flash. Open question: ga-260731 events arrive via the workbuddy channel and may map to a Tencent-hosted DeepSeek SKU reportedly priced 0.44/0.014/1.32 peak (unverified; equals the origin- gateway tier 3/0.1/9 CNY / 6.8); confirm the actual provider SKU before switching this rule. The zj- prefixed IDs match this official flash price, not the more expensive origin- gateway tier (0.44/0.015/1.32); confirm the gateway SKU if those events should use the origin rate instead.",
       "model_id": "deepseek-flash",
       "source_url": "https://api-docs.deepseek.com/quick_start/pricing",
       "as_of": "2026-10-09"
@@ -1669,6 +1858,30 @@
       "model_id": "hy4-preview",
       "source_url": "https://openrouter.ai/tencent/hy4-preview",
       "as_of": "2026-10-09"
+    },
+    {
+      "id": "kimi-k3.1-pro",
+      "model_patterns": [
+        "kimi-k3.1-pro",
+        "kimi-k3.1-pro-*"
+      ],
+      "priority": 30,
+      "basis": "official_model_list_price",
+      "rates": {
+        "input": 2.0,
+        "cache_write_5m": 2.0,
+        "cache_write_1h": 4.0,
+        "cache_read": 0.2,
+        "output": 10.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "5m_if_unknown",
+      "confidence": "estimated",
+      "notes": "User supplied the official rate card: input 2, cached input 0.20, 5-minute cache write 2, 1-hour cache write 4, output 10 per MTok. Cache writes are priced per TTL: events with an explicit 1-hour split use cache_write_1h, the remainder uses cache_write_5m; events without a split assume 5-minute writes. The 5-minute write rate equals the input rate. The provider also sells a highspeed variant and a batch tier at 60% of standard; neither is modeled.",
+      "model_id": "kimi-k3.1-pro",
+      "source_url": "https://platform.kimi.ai/docs/pricing/chat",
+      "pricing_notes_url": "https://platform.kimi.ai/docs/guide/kimi-k3.1-pro-quickstart",
+      "as_of": "2026-11-12"
     },
     {
       "id": "kimi-k3",
@@ -1736,6 +1949,51 @@
       "source_url": "https://platform.kimi.ai/docs/pricing/chat-k27-code",
       "pricing_notes_url": "https://platform.kimi.ai/docs/guide/kimi-k2-7-code-quickstart",
       "as_of": "2026-07-23"
+    },
+    {
+      "id": "grok-4.7-fast-long",
+      "model_patterns": [
+        "grok-4.7-fast",
+        "grok-4.7-fast-*"
+      ],
+      "priority": 100,
+      "basis": "official_model_list_price",
+      "condition": {
+        "min_input_side_tokens": 200000
+      },
+      "rates": {
+        "input": 6.0,
+        "cached_input": 1.5,
+        "output": 18.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Grok 4.7 Fast is the same model on faster infrastructure, billed at 1.5x the standard long-context rate once the prompt reaches 200000 input-side tokens. The higher rate applies to the entire request. It is not a public API model; xAI bills it through Cursor and Grok Build. The model ID selects this rate; it is not an OpenAI-style service tier.",
+      "model_id": "grok-4.7-fast",
+      "source_url": "https://docs.x.ai/developers/pricing",
+      "as_of": "2026-10-13"
+    },
+    {
+      "id": "grok-4.7-fast",
+      "model_patterns": [
+        "grok-4.7-fast",
+        "grok-4.7-fast-*"
+      ],
+      "priority": 30,
+      "basis": "official_model_list_price",
+      "rates": {
+        "input": 4.0,
+        "cached_input": 1.0,
+        "output": 12.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Grok 4.7 Fast is the same model on faster infrastructure, billed at 2x the standard token rates below 200000 input-side tokens. It is not a public API model; xAI bills it through Cursor and Grok Build. The model ID selects this rate; it is not an OpenAI-style service tier.",
+      "model_id": "grok-4.7-fast",
+      "source_url": "https://docs.x.ai/developers/pricing",
+      "as_of": "2026-10-13"
     },
     {
       "id": "grok-4.7-long",
@@ -1973,6 +2231,50 @@
       "confidence": "partial",
       "notes": "Gemini cached storage duration is not available in usage_events.",
       "model_id": "gemini-3-flash"
+    },
+    {
+      "id": "gemini-4-argon",
+      "model_patterns": [
+        "gemini-4-argon",
+        "gemini-4-argon-*"
+      ],
+      "priority": 10,
+      "basis": "official_model_list_price",
+      "effective_to": "2026-11-30",
+      "rates": {
+        "input": 2.0,
+        "cached_input": 0.1,
+        "output": 10.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "partial",
+      "notes": "Introductory standard rate through 2026-11-30; the official page doubles it from 2026-12-01 (input 4, cached 0.20, output 20), which is a separate rule. Flat across context length. Implicit caching only, no cache-write fee. Priority and batch tiers are not modeled.",
+      "model_id": "gemini-4-argon",
+      "source_url": "https://aistudio.google.com/docs/pricing",
+      "as_of": "2026-11-12"
+    },
+    {
+      "id": "gemini-4-argon-2026-12",
+      "model_patterns": [
+        "gemini-4-argon",
+        "gemini-4-argon-*"
+      ],
+      "priority": 10,
+      "basis": "official_model_list_price",
+      "rates": {
+        "input": 4.0,
+        "cached_input": 0.2,
+        "output": 20.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "partial",
+      "notes": "Standard rate from 2026-12-01, double the introductory rate. Flat across context length. Implicit caching only, no cache-write fee.",
+      "model_id": "gemini-4-argon",
+      "source_url": "https://aistudio.google.com/docs/pricing",
+      "as_of": "2026-11-12",
+      "effective_from": "2026-12-01"
     },
     {
       "id": "gemini-2.5-pro",

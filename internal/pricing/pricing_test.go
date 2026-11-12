@@ -14,7 +14,7 @@ func TestDefaultProfileLoads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load default profile: %v", err)
 	}
-	if profile.ID != "agentledger-pricing-2026-10-10" || profile.CheckedAt != "2026-10-10" || len(profile.Rules) == 0 {
+	if profile.ID != "agentledger-pricing-2026-11-12" || profile.CheckedAt != "2026-11-12" || len(profile.Rules) == 0 {
 		t.Fatalf("unexpected profile: %+v", profile)
 	}
 }
@@ -267,6 +267,30 @@ func TestDefaultProfilePricesCurrentModelIDs(t *testing.T) {
 			wantMicroUSD: 83_500,
 		},
 		{
+			name: "gpt 6.1 terra short context",
+			event: Event{
+				Model:               "gpt-6.1-terra",
+				InputTokens:         50_000,
+				OutputTokens:        50_000,
+				CacheCreationTokens: 50_000,
+				CacheReadTokens:     50_000,
+			},
+			wantRuleID:   "gpt-6.1-terra",
+			wantMicroUSD: 365_000,
+		},
+		{
+			name: "gpt 6.1 terra long context",
+			event: Event{
+				Model:               "gpt-6.1-terra",
+				InputTokens:         100_001,
+				OutputTokens:        100_000,
+				CacheCreationTokens: 72_000,
+				CacheReadTokens:     100_000,
+			},
+			wantRuleID:   "gpt-6.1-terra-long",
+			wantMicroUSD: 1_140_002,
+		},
+		{
 			name: "gpt 6 sol short context",
 			event: Event{
 				Model:               "gpt-6-sol",
@@ -411,6 +435,18 @@ func TestDefaultProfilePricesCurrentModelIDs(t *testing.T) {
 			wantMicroUSD: 83_000,
 		},
 		{
+			name: "glm 5.3 flashx official list price",
+			event: Event{
+				Model:               "glm-5.3-flashx",
+				InputTokens:         100_000,
+				OutputTokens:        100_000,
+				CacheCreationTokens: 100_000,
+				CacheReadTokens:     100_000,
+			},
+			wantRuleID:   "glm-5.3-flashx",
+			wantMicroUSD: 169_500,
+		},
+		{
 			name: "deepseek v4 pro dated alias uses peak price",
 			event: Event{
 				Model:               "deepseek-v4-pro-ga-260813",
@@ -433,6 +469,18 @@ func TestDefaultProfilePricesCurrentModelIDs(t *testing.T) {
 			},
 			wantRuleID:   "hy3",
 			wantMicroUSD: 82_500,
+		},
+		{
+			name: "kimi k3.1 pro official rate card",
+			event: Event{
+				Model:               "kimi-k3.1-pro",
+				InputTokens:         100_000,
+				OutputTokens:        100_000,
+				CacheCreationTokens: 100_000,
+				CacheReadTokens:     100_000,
+			},
+			wantRuleID:   "kimi-k3.1-pro",
+			wantMicroUSD: 1_420_000,
 		},
 		{
 			name: "kimi k3 exact model",
@@ -469,6 +517,30 @@ func TestDefaultProfilePricesCurrentModelIDs(t *testing.T) {
 			},
 			wantRuleID:   "kimi-k2.7-code-highspeed",
 			wantMicroUSD: 1_218_000,
+		},
+		{
+			name: "grok 4.7 fast short context",
+			event: Event{
+				Model:               "grok-4.7-fast",
+				InputTokens:         50_000,
+				OutputTokens:        100_000,
+				CacheCreationTokens: 50_000,
+				CacheReadTokens:     50_000,
+			},
+			wantRuleID:   "grok-4.7-fast",
+			wantMicroUSD: 1_650_000,
+		},
+		{
+			name: "grok 4.7 fast long context",
+			event: Event{
+				Model:               "grok-4.7-fast",
+				InputTokens:         50_000,
+				OutputTokens:        100_000,
+				CacheCreationTokens: 50_000,
+				CacheReadTokens:     100_000,
+			},
+			wantRuleID:   "grok-4.7-fast-long",
+			wantMicroUSD: 2_550_000,
 		},
 		{
 			name: "grok 4.6 short context",
@@ -659,6 +731,52 @@ func TestDefaultProfilePricesCurrentModelIDs(t *testing.T) {
 			wantMicroUSD: 15_000_000,
 		},
 		{
+			name: "claude haiku 5.5 short tier",
+			event: Event{
+				Model:        "claude-haiku-5-5",
+				InputTokens:  100_000,
+				OutputTokens: 100_000,
+			},
+			wantRuleID:   "claude-haiku-5-5",
+			wantMicroUSD: 60_000,
+		},
+		{
+			name: "claude haiku 5.5 long tier with cache",
+			event: Event{
+				Model:               "claude-haiku-5-5",
+				InputTokens:         200_000,
+				OutputTokens:        100_000,
+				CacheCreationTokens: 100_000,
+				CacheReadTokens:     100_000,
+			},
+			wantRuleID:   "claude-haiku-5-5-long",
+			wantMicroUSD: 417_500,
+		},
+		{
+			name: "gemini 4 argon introductory rate",
+			event: Event{
+				Model:           "gemini-4-argon",
+				InputTokens:     100_000,
+				OutputTokens:    100_000,
+				CacheReadTokens: 100_000,
+				TimestampMs:     1796054400000, // 2026-11-30
+			},
+			wantRuleID:   "gemini-4-argon",
+			wantMicroUSD: 1_210_000,
+		},
+		{
+			name: "gemini 4 argon doubled rate from december",
+			event: Event{
+				Model:           "gemini-4-argon",
+				InputTokens:     100_000,
+				OutputTokens:    100_000,
+				CacheReadTokens: 100_000,
+				TimestampMs:     1796083200000, // 2026-12-01
+			},
+			wantRuleID:   "gemini-4-argon-2026-12",
+			wantMicroUSD: 2_420_000,
+		},
+		{
 			name: "claude opus 4.8 standard pricing",
 			event: Event{
 				Model:               "claude-opus-4-8",
@@ -757,6 +875,16 @@ func TestDefaultProfileUsesExactAliasesAndContextBoundaries(t *testing.T) {
 		{name: "sol 6 at 272k stays short", event: Event{Model: "gpt-6-sol", InputTokens: 272_000}, wantRuleID: "gpt-6-sol", wantPriced: true},
 		{name: "sol 6 above 272k is long", event: Event{Model: "gpt-6-sol", InputTokens: 272_001}, wantRuleID: "gpt-6-sol-long", wantPriced: true},
 		{name: "luna 6 above 272k is long", event: Event{Model: "gpt-6-luna", InputTokens: 272_001}, wantRuleID: "gpt-6-luna-long", wantPriced: true},
+		{name: "terra 6.1 at 272k stays short", event: Event{Model: "gpt-6.1-terra", InputTokens: 272_000}, wantRuleID: "gpt-6.1-terra", wantPriced: true},
+		{name: "terra 6.1 above 272k is long", event: Event{Model: "gpt-6.1-terra", InputTokens: 272_001}, wantRuleID: "gpt-6.1-terra-long", wantPriced: true},
+		{name: "haiku 5.5 at 100k stays short", event: Event{Model: "claude-haiku-5-5", InputTokens: 100_000}, wantRuleID: "claude-haiku-5-5", wantPriced: true},
+		{name: "haiku 5.5 above 100k is long", event: Event{Model: "claude-haiku-5.5", InputTokens: 100_001}, wantRuleID: "claude-haiku-5-5-long", wantPriced: true},
+		{name: "zj deepseek v4 pro prefix", event: Event{Model: "zj-deepseek-v4-pro", InputTokens: 1}, wantRuleID: "deepseek-v4-pro", wantPriced: true},
+		{name: "zj deepseek v4 flash prefix", event: Event{Model: "zj-deepseek-v4-flash", InputTokens: 1}, wantRuleID: "deepseek-v4-flash", wantPriced: true},
+		{name: "grok 4.7 stays standard", event: Event{Model: "grok-4.7", InputTokens: 1}, wantRuleID: "grok-4.7", wantPriced: true},
+		{name: "grok 4.7 fast suffix", event: Event{Model: "grok-4.7-fast-preview", InputTokens: 1}, wantRuleID: "grok-4.7-fast", wantPriced: true},
+		{name: "grok 4.7 fast threshold minus one", event: Event{Model: "grok-4.7-fast", InputTokens: 199_999}, wantRuleID: "grok-4.7-fast", wantPriced: true},
+		{name: "grok 4.7 fast threshold", event: Event{Model: "grok-4.7-fast", InputTokens: 200_000}, wantRuleID: "grok-4.7-fast-long", wantPriced: true},
 		{name: "grok 4.6 threshold minus one", event: Event{Model: "grok-4.6", InputTokens: 199_999}, wantRuleID: "grok-4.6", wantPriced: true},
 		{name: "grok 4.6 threshold", event: Event{Model: "grok-4.6", InputTokens: 200_000}, wantRuleID: "grok-4.6-long", wantPriced: true},
 		{name: "grok 4.6 build threshold minus one", event: Event{Model: "grok-4.6-build", InputTokens: 199_999}, wantRuleID: "grok-4.6", wantPriced: true},
