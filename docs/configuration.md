@@ -47,6 +47,10 @@ paths = ["~/.workbuddy/projects"]
 enabled = true
 paths = ["~/.zcode/cli/db"]
 
+[agents.antigravity]
+enabled = true
+paths = ["~/.gemini/antigravity/conversations", "~/.gemini/antigravity-cli/conversations", "~/.gemini/antigravity-ide/conversations", "~/.gemini/antigravity-backup/conversations", "~/.gemini/antigravity-acp/conversations", "~/.config/antigravity/conversations"]
+
 ```
 
 ## 字段

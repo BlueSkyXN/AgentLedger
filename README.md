@@ -1,6 +1,6 @@
 # AgentLedger
 
-AgentLedger v3 是本地优先的 AI Coding Agent Session 用量统计工具。它从 Claude Code、Codex、Cursor、GitHub Copilot、Gemini CLI、WorkBuddy 和 ZCode 的本机日志中提取日期、Session、通道、来源形态、provider、模型、project 与 token 分项，写入 SQLite，并通过 CLI、只读 HTTP API 和 React 面板查询。
+AgentLedger v3 是本地优先的 AI Coding Agent Session 用量统计工具。它从 Claude Code、Codex、Cursor、GitHub Copilot、Gemini CLI、WorkBuddy、ZCode 和 Antigravity（AGY）的本机日志中提取日期、Session、通道、来源形态、provider、模型、project 与 token 分项，写入 SQLite，并通过 CLI、只读 HTTP API 和 React 面板查询。
 
 ## 产品边界
 

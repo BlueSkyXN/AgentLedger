@@ -60,13 +60,14 @@ var importCmd = &cobra.Command{
 
 		allAdapters := adapters.AllAdapters()
 		agentConfigs := map[string]*config.AgentConfig{
-			"claude":    &cfg.Agents.Claude,
-			"codex":     &cfg.Agents.Codex,
-			"cursor":    &cfg.Agents.Cursor,
-			"gemini":    &cfg.Agents.Gemini,
-			"copilot":   &cfg.Agents.Copilot,
-			"workbuddy": &cfg.Agents.WorkBuddy,
-			"zcode":     &cfg.Agents.ZCode,
+			"claude":      &cfg.Agents.Claude,
+			"codex":       &cfg.Agents.Codex,
+			"cursor":      &cfg.Agents.Cursor,
+			"gemini":      &cfg.Agents.Gemini,
+			"copilot":     &cfg.Agents.Copilot,
+			"workbuddy":   &cfg.Agents.WorkBuddy,
+			"zcode":       &cfg.Agents.ZCode,
+			"antigravity": &cfg.Agents.Antigravity,
 		}
 
 		for _, adapter := range allAdapters {
@@ -536,6 +537,8 @@ func sourceProductForAgent(agent string) string {
 		return "workbuddy"
 	case "zcode":
 		return "zcode-cli-db"
+	case "antigravity":
+		return "antigravity"
 	default:
 		return agent
 	}
@@ -543,7 +546,7 @@ func sourceProductForAgent(agent string) string {
 
 func defaultObservability(agent string) string {
 	switch agent {
-	case "claude", "codex", "copilot", "workbuddy", "zcode":
+	case "claude", "codex", "copilot", "workbuddy", "zcode", "antigravity":
 		return "full"
 	case "cursor":
 		return "partial"

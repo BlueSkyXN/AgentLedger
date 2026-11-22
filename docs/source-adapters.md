@@ -141,6 +141,24 @@ Token 按 `zcode_model_usage_v1` 归一化：来源 `input_tokens` 包含 cache 
 
 `model-io-*.jsonl`、`turn_usage`、`raw_usage_json`、`provider_metadata_json`、message 正文与 error 文本不读取也不落库；`provider_id` 列是路由 plan/account 而非模型厂商，事件 provider 由模型家族推导（glm→zai 等）。
 
+## Antigravity (AGY)
+
+```text
+channel = antigravity
+source_product = antigravity
+parser_version = antigravity-v1
+event_granularity = request
+identity = response ID → provider-assigned ID → message ID（global scope）
+```
+
+默认发现 `~/.gemini/antigravity`、`~/.gemini/antigravity-cli`、`~/.gemini/antigravity-ide`、`~/.gemini/antigravity-backup`、`~/.gemini/antigravity-acp` 与 `~/.config/antigravity` 下的 `conversations/`（配置根含 `conversations/` 子目录时只扫该子目录）。每个 conversation 是一个 SQLite 数据库：`gen_metadata.data` 与 `steps.metadata` 是 protobuf blob，`trajectory_metadata_blob` 提供会话级兜底时间戳。字段布局是 Antigravity 未公开写入格式的逆向契约（与 ccusage Antigravity adapter 一致）。
+
+同一请求会同时出现在关联 step 与 gen_metadata 中：两者共享 provider 分配的 response/provider-assigned/message ID，adapter 在文件内按 identity 并集用 max-token 语义合并为一 event（`retry_infos` 里重复主尝试的镜像先丢弃，真正独立的 retry 保留为独立 event）。时间戳优先 generation info，其次同 identity 的 step 时间戳，最后 trajectory；三者皆无的 usage 行跳过并计入 `antigravity_skipped_missing_timestamp` diagnostic。无任何 ID 的记录使用 session 内 `step:{idx}` / `gen:{idx}` 的 `session_record` 身份。
+
+Token 按 `antigravity_model_usage_v1` 归一化：来源各桶（input、cache creation、cache read、total output）为独立加法分量；`total_output_tokens` 为权威输出，`visible_output_tokens` 与 `reasoning_tokens` 是其分量，不一致时按 total 反推；total = input + cache creation + cache read + total output。模型证据优先 usage 内的模型枚举 ID（含 `model_placeholder_m*` 占位符映射），其次行内显示名（如 "gemini 3.6 flash (high)" 规范化为 `gemini-3.6-flash-high`）；两者皆无时记 `gemini-internal-model`（fallback、unknown resolution），provider 不猜测。
+
+Schema 探测 fail-closed：含 `gen_metadata` 但缺 `idx`/`data` 列、或有 steps/trajectory 却无 `gen_metadata` 的库整库拒绝；没有任何相关表的库（如 `conversation_summaries.db`）静默跳过。blob 解码失败整库拒绝，不做猜测式解析。上下文/编辑器 blob 中可能包含的私有路径不解析、不落库；`raw_sha256` 只对结构化 usage envelope 求值。来源的 serving API 枚举（Google/Vertex）不持久化为 provider，事件 provider 由模型厂商推导。
+
 ## Parser contract 测试
 
 每个 adapter 使用 synthetic fixture 覆盖：identity precedence、稳定 Session、同 native ID 下 model/token/path 变化不改变 event ID、subkey 拆分、非法 timestamp/token、accounting 守恒、二次 import 幂等，以及 append-only 文件分阶段补 metadata 时不产生第二个 event。fixture 不包含真实 Session、路径或客户数据。
