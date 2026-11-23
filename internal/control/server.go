@@ -20,7 +20,7 @@ import (
 //go:embed embed/placeholder.html
 var embeddedFS embed.FS
 
-const Version = "0.3.0"
+const Version = "0.4.0"
 
 type Options struct {
 	StaticDir string

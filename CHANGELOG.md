@@ -1,10 +1,15 @@
 # Changelog
 
-## Unreleased
+## v0.4.0
 
 ### Added
 
 - 增加本地 Antigravity（AGY）用量统计。只读导入 SQLite 会话中的结构化用量，合并 step 和 generation 镜像，支持跨库与增量导入时的身份补齐。报表按完整输出估算成本。
+- 内置价表补齐 GPT-6.1 Terra、Gemini 4 Argon、Claude Haiku 5.5、GLM 5.3 FlashX、Kimi K3.1 Pro 和 Grok 4.7 Fast 的估算规则，并更新 DeepSeek V4 费率。
+
+### Fixed
+
+- 更新 Web 锁定的 Vite、Browserslist、baseline-browser-mapping 和 source-map-js，修复依赖审计命中的版本。
 
 ## v0.3.0
 
