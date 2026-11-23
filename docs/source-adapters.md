@@ -141,6 +141,25 @@ Token 按 `zcode_model_usage_v1` 归一化：来源 `input_tokens` 包含 cache 
 
 `model-io-*.jsonl`、`turn_usage`、`raw_usage_json`、`provider_metadata_json`、message 正文与 error 文本不读取也不落库；`provider_id` 列是路由 plan/account 而非模型厂商，事件 provider 由模型家族推导（glm→zai 等）。
 
+## Antigravity (AGY)
+
+```text
+channel = antigravity
+source_product = antigravity
+parser_version = antigravity-v2
+event_granularity = request
+```
+
+默认发现 `~/.gemini/antigravity`、`~/.gemini/antigravity-cli`、`~/.gemini/antigravity-ide`、`~/.gemini/antigravity-backup`、`~/.gemini/antigravity-acp` 与 `~/.config/antigravity` 下的 `conversations/`。可配置父目录、conversation 目录或数据库文件，支持相对路径。每个库在同一个只读 SQLite 事务中读取 `gen_metadata.data`、`steps.metadata` 和 `trajectory_metadata_blob`。
+
+AGY 可能把同一笔用量写入 generation 和 step。adapter 在同轮导入中收齐各库观测，再按带类型的 response、provider-assigned、message ID 归并镜像。仅一侧有 ID 时，需要来源行关联和一致的用量才能归并。主尝试镜像从 retry 列表中去除，独立无 ID 的 retry 使用来源表、行和尝试位置作为会话内身份。入账时，同一请求新增的身份标识会关联到已有事件。检测到多个可匹配的历史事件时报告冲突。
+
+时间优先使用 generation 的请求时间，其次使用关联 step，最后用 trajectory 时间兜底。缺少有效时间的用量计入 `antigravity_skipped_missing_timestamp`。后续取得更高优先级的时间时可以修正事件日期。同一优先级的明确时间冲突由账本拒绝。
+
+`antigravity_model_usage_v1` 的总量是非缓存输入、缓存写入、缓存读取和完整输出的和。来源明确提供的输出总数优先。合并选择一份输出拆分，保证可见输出和推理之和等于采用的输出总数。两部分均按输出费率估算。模型优先使用本次请求的枚举和显示名。generation 可用同一会话中此前的模型信息作上下文，未解析出厂商时 provider 为 `unknown`。
+
+已识别的表缺必需列、存在 steps/trajectory 却无 gen_metadata，或已识别的 protobuf 字段解码失败时，导入该库会给出警告。有缺省字段或额外字段的有效 protobuf 仍按已识别字段解析。无相关表的库静默跳过。对话正文、上下文和编辑器 payload 不提取。protobuf 字段映射及部分实现来自 ccusage Antigravity adapter，参见 [ccusage MIT 许可](ccusage-LICENSE.txt)。
+
 ## Parser contract 测试
 
 每个 adapter 使用 synthetic fixture 覆盖：identity precedence、稳定 Session、同 native ID 下 model/token/path 变化不改变 event ID、subkey 拆分、非法 timestamp/token、accounting 守恒、二次 import 幂等，以及 append-only 文件分阶段补 metadata 时不产生第二个 event。fixture 不包含真实 Session、路径或客户数据。

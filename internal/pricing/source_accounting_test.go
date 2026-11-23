@@ -38,3 +38,21 @@ func TestCopilotSessionReasoningIsNotPricedTwice(t *testing.T) {
 		t.Fatalf("estimate=%+v err=%v", got, err)
 	}
 }
+
+func TestAntigravityPricesVisibleAndReasoningOutput(t *testing.T) {
+	profile, err := LoadDefaultProfile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	estimator, err := NewEstimator(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := Event{Provider: "google", Channel: "antigravity", Model: "gemini-2.5-pro",
+		TokenAccountingMethod: model.AccAntigravityModelUsage, InputTokens: 1000,
+		OutputTokens: 600, ReasoningTokens: 400, TotalTokens: 2000}
+	got, err := estimator.Estimate(event)
+	if err != nil || got.CostMicroUSD != 11250 || got.PricedTokens != 2000 {
+		t.Fatalf("estimate=%+v err=%v", got, err)
+	}
+}

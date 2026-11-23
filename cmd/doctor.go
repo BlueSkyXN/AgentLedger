@@ -41,13 +41,14 @@ var doctorCmd = &cobra.Command{
 		fmt.Println("\nConfigured agents:")
 
 		agentConfigs := map[string]*config.AgentConfig{
-			"claude":    &cfg.Agents.Claude,
-			"codex":     &cfg.Agents.Codex,
-			"cursor":    &cfg.Agents.Cursor,
-			"copilot":   &cfg.Agents.Copilot,
-			"gemini":    &cfg.Agents.Gemini,
-			"workbuddy": &cfg.Agents.WorkBuddy,
-			"zcode":     &cfg.Agents.ZCode,
+			"claude":      &cfg.Agents.Claude,
+			"codex":       &cfg.Agents.Codex,
+			"cursor":      &cfg.Agents.Cursor,
+			"copilot":     &cfg.Agents.Copilot,
+			"gemini":      &cfg.Agents.Gemini,
+			"workbuddy":   &cfg.Agents.WorkBuddy,
+			"zcode":       &cfg.Agents.ZCode,
+			"antigravity": &cfg.Agents.Antigravity,
 		}
 
 		allAdapters := adapters.AllAdapters()

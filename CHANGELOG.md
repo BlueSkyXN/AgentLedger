@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- 增加本地 Antigravity（AGY）用量统计。只读导入 SQLite 会话中的结构化用量，合并 step 和 generation 镜像，支持跨库与增量导入时的身份补齐。报表按完整输出估算成本。
+
 ## v0.3.0
 
 ### Added

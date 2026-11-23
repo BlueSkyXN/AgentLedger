@@ -35,13 +35,14 @@ type ReportsConfig struct {
 }
 
 type AgentsConfig struct {
-	Claude    AgentConfig `toml:"claude"`
-	Codex     AgentConfig `toml:"codex"`
-	Cursor    AgentConfig `toml:"cursor"`
-	Gemini    AgentConfig `toml:"gemini"`
-	Copilot   AgentConfig `toml:"copilot"`
-	WorkBuddy AgentConfig `toml:"workbuddy"`
-	ZCode     AgentConfig `toml:"zcode"`
+	Claude      AgentConfig `toml:"claude"`
+	Codex       AgentConfig `toml:"codex"`
+	Cursor      AgentConfig `toml:"cursor"`
+	Gemini      AgentConfig `toml:"gemini"`
+	Copilot     AgentConfig `toml:"copilot"`
+	WorkBuddy   AgentConfig `toml:"workbuddy"`
+	ZCode       AgentConfig `toml:"zcode"`
+	Antigravity AgentConfig `toml:"antigravity"`
 }
 
 type AgentConfig struct {
@@ -72,6 +73,14 @@ func Default() *Config {
 			Copilot:   AgentConfig{Enabled: true, Paths: []string{"~/.copilot/otel", "~/.copilot/session-state"}},
 			WorkBuddy: AgentConfig{Enabled: true, Paths: []string{"~/.workbuddy/projects"}},
 			ZCode:     AgentConfig{Enabled: true, Paths: []string{"~/.zcode/cli/db"}},
+			Antigravity: AgentConfig{Enabled: true, Paths: []string{
+				"~/.gemini/antigravity/conversations",
+				"~/.gemini/antigravity-cli/conversations",
+				"~/.gemini/antigravity-ide/conversations",
+				"~/.gemini/antigravity-backup/conversations",
+				"~/.gemini/antigravity-acp/conversations",
+				"~/.config/antigravity/conversations",
+			}},
 		},
 	}
 }

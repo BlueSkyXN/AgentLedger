@@ -117,6 +117,15 @@ func (d *Database) upsertEvent(event *model.UsageEvent, coveredIDs []string) (st
 	if err != nil {
 		return "", err
 	}
+	if isAntigravityEvent(incoming) {
+		existing, err = selectAntigravityMatch(tx, incoming, existing)
+		if err != nil {
+			if IsRejectError(err) {
+				return ReconcileRejected, err
+			}
+			return "", err
+		}
+	}
 	if existing == nil {
 		duplicate, semErr := selectSemanticDuplicate(tx, incoming)
 		if semErr != nil {
@@ -291,6 +300,15 @@ func validateAccountingProfile(event *model.UsageEvent) error {
 			return reject("accounting_reasoning_exceeds_output")
 		}
 		expected = event.InputTokens + event.OutputTokens + event.CacheCreationTokens + event.CacheReadTokens
+	case model.AccAntigravityModelUsage:
+		var valid bool
+		expected, valid = model.AntigravityTotal(event.InputTokens, event.OutputTokens, event.ReasoningTokens, event.CacheCreationTokens, event.CacheReadTokens)
+		if !valid {
+			return reject("accounting_total_mismatch")
+		}
+		if err := validateAntigravityEvidence(event); err != nil {
+			return err
+		}
 	case model.AccZCodeModelUsage:
 		if event.ReasoningTokens > event.OutputTokens {
 			return reject("accounting_reasoning_exceeds_output")
@@ -369,6 +387,10 @@ func reconcile(existing, incoming *model.UsageEvent) (*model.UsageEvent, string,
 	upgraded := original != nil && (original.ParserVersion != existing.ParserVersion || original.ContentSHA256 != existing.ContentSHA256)
 	if existing == nil {
 		return incoming, ReconcileInserted, nil
+	}
+	if isAntigravityEvent(existing) && isAntigravityEvent(incoming) &&
+		(existing.ParserVersion == model.AntigravityParser || incoming.ParserVersion == model.AntigravityParser) {
+		return reconcileAntigravity(existing, incoming)
 	}
 	if existing.EventID != incoming.EventID || existing.IdentityVersion != incoming.IdentityVersion ||
 		existing.IdentityStrategy != incoming.IdentityStrategy || existing.IdentityScope != incoming.IdentityScope {
@@ -850,6 +872,7 @@ func (d *Database) MergeFrom(incomingPath string) (result MergeResult, err error
 	type identityUpgrade struct{ oldID, newID string }
 	var identityUpgrades []identityUpgrade
 	semanticIndex := make(semanticEventIndex)
+	antigravityIndex := make(antigravityMergeIndex)
 	for _, event := range existingEvents {
 		if validationErr := validateStoredEvent(event); validationErr != nil {
 			return result, fmt.Errorf("destination database contains an invalid event: %w", validationErr)
@@ -866,6 +889,7 @@ func (d *Database) MergeFrom(incomingPath string) (result MergeResult, err error
 		}
 		virtual[event.EventID] = event
 		semanticIndex.add(event)
+		antigravityIndex.add(event)
 	}
 	actions := make([]mergeAction, 0, len(incomingEvents))
 	conflictCounts := make(map[string]int)
@@ -891,6 +915,14 @@ func (d *Database) MergeFrom(incomingPath string) (result MergeResult, err error
 		}
 		incoming = canonicalParserEvent(incoming)
 		existing := virtual[incoming.EventID]
+		if isAntigravityEvent(incoming) {
+			matched, matchErr := antigravityIndex.match(virtual, incoming, existing)
+			if matchErr != nil {
+				conflictCounts["antigravity_identity_ambiguous"]++
+				continue
+			}
+			existing = matched
+		}
 		if existing == nil && semanticIndex.contains(incoming) {
 			actions = append(actions, mergeAction{status: ReconcileSkipped})
 			continue
@@ -907,8 +939,10 @@ func (d *Database) MergeFrom(incomingPath string) (result MergeResult, err error
 		}
 		actions = append(actions, mergeAction{status: status, event: canonical})
 		semanticIndex.remove(existing)
-		virtual[incoming.EventID] = canonical
+		antigravityIndex.remove(existing)
+		virtual[canonical.EventID] = canonical
 		semanticIndex.add(canonical)
+		antigravityIndex.add(canonical)
 	}
 	if len(conflictCounts) > 0 {
 		result.Conflicts = sortedConflicts(conflictCounts)

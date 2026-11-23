@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/BlueSkyXN/AgentLedger/internal/model"
 )
 
 // ParsedRecord contains the parsed fields from a source record.  The fields
@@ -207,6 +209,16 @@ func ComputeIdentity(rec *ParsedRecord) (sessionKey, eventID string, strategy St
 	parts = append(parts, kind, nativeID, subkey)
 	eventID = hashIdentityTuple(parts...)
 	return sessionKey, eventID, strategy, contentSHA256, nil
+}
+
+// AntigravityNativeEventID hashes a typed ID or the v1 untyped form (empty namespace).
+func AntigravityNativeEventID(namespace, id string) string {
+	return hashIdentityTuple("event:v2", model.AntigravitySource, "global", "message", id, namespace)
+}
+
+func AntigravityRecordEventID(sessionID, subkey string) string {
+	sessionKey := hashIdentityTuple("session:v1", model.AntigravitySource, strings.TrimSpace(sessionID))
+	return hashIdentityTuple("event:v2", model.AntigravitySource, "session", sessionKey, "record", subkey, subkey)
 }
 
 func ClaudeRequestlessEventID(sessionKey, messageID string, timestamp int64) string {
