@@ -4,7 +4,7 @@
 
 ### Added
 
-- 增加纯本地只读 Antigravity（AGY）adapter：读取 `~/.gemini/antigravity*/conversations/*.db` 与 `~/.config/antigravity/conversations/` 的 SQLite conversation 数据库，解码 `gen_metadata`/`steps.metadata` protobuf blob 中的 per-request usage（input、total/visible output、reasoning、cache read/creation），按 response/provider/message ID 全局去重 steps 与 gen 的镜像记录，时间戳按 generation → 同 identity step → trajectory 兜底；schema fail-closed（缺 `gen_metadata` 列或含 steps 却无 gen_metadata 的库整库拒绝，无相关表的库静默跳过）。内部模型枚举 ID 与显示名按 ccusage 逆向契约映射为公开模型名；上下文 blob 中可能包含的私有路径不解析、不落库。
+- 增加本地 Antigravity（AGY）用量统计。只读导入 SQLite 会话中的结构化用量，合并 step 和 generation 镜像，支持跨库与增量导入时的身份补齐。报表按完整输出估算成本。
 
 ## v0.3.0
 

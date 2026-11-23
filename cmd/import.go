@@ -388,7 +388,9 @@ func importParsedRecords(database *db.Database, adapterName string, records []*f
 			channel = adapterName
 		}
 		provider := rec.Provider
-		if provider == "" || (provider == "unknown" && channel != "cursor") {
+		if channel == model.AntigravitySource && modelIsFallback {
+			provider = "unknown"
+		} else if provider == "" || (provider == "unknown" && channel != "cursor") {
 			provider = modelProvider
 		}
 		if strings.TrimSpace(provider) == "" {

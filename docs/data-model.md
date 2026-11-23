@@ -141,7 +141,7 @@ raw_usage_json
 
 | 条件 | 结果 |
 |---|---|
-| event ID 不存在，且不满足下述受限语义重复条件 | insert |
+| event ID 不存在，且没有符合下述规则的语义重复或 AGY 身份别名 | insert |
 | event ID 不存在，双方均为 Codex 累计用量的 `session_record`，且 Session/turn identity 与完整 content facts 相同 | skip，零写入；import 与 merge 使用同一判定 |
 | content hash 相同且无缺失 metadata | skip，零写入 |
 | content hash 相同且仅补本机 locator metadata | update |
@@ -156,6 +156,8 @@ raw_usage_json
 
 不同原生事件/消息/请求 ID 不会因同一毫秒和相同 token 被合并，其他来源与非累计样本也不适用此 fallback。跨 ID 的 TTL 或累计值不同，或不满足上述证据条件时，不猜测为同一事件，保留独立记录；同 ID 仍按正常 reconcile 补齐或拒绝冲突，不绕过 `timestamp_conflict`。此规则不重写旧 event ID，也不清理已经存在的重复行。
 
+Antigravity 的 `request_id` 保存私有的事件身份哈希集合，分别记录带类型的原生 ID、会话内来源行键及预览版兼容键。import 与 merge 可用已知别名找到首见事件。来源行键只在至少一侧缺原生 ID、会话及用量相符时用于匹配。时间优先级和输出证据保存在 `accounting_profile` 的 `time`、`output` 后缀，参与 content hash。更强证据可补充已入账的时间或分项。
+
 拒绝不新增行、不覆盖原行。merge 在 preflight 的虚拟状态中同步维护语义索引，包含本批次已接受的新增/更新；所有校验与去重完成后才写入，任一拒绝会回滚整次 merge。
 
 ## 已知 parser 规则升级
@@ -164,6 +166,7 @@ schema v4 与 identity version 2 不变。import/merge 对以下可确定的旧 
 
 - `claude-v1`、无 request ID、原生 message identity 且 event hash 符合旧算法的行，以原始 timestamp 生成 requestless 子标识；旧记录的 token 不做猜测性修改，重新解析可补回此前被误合并的其他调用。
 - `copilot-session-state-v1` 的 raw input、缓存和总量严格符合旧算法时，改为 input 包含 cache read/write、output 包含 reasoning 的新 profile，并重算 content hash。无法证明的记录保持冲突拒绝。
+- Antigravity `antigravity-v1` 预览行在身份可唯一匹配时，按 v2 观测修正并保留原 event ID。多个历史事件同时匹配，或预览版匿名 retry 缺少可对应的行身份时，报告冲突并保留原行供核对。
 - Codex `accounting_profile` 可从 `ledger` / `ccusage_compatible` 补齐为 `<原值>;service_tier=<规范化档位>`，不新增 schema 列。未知可补已知；已知不被缺失值覆盖，两个已知档位不一致仍拒绝。
 
 merge 的 identity 升级在全部 preflight 通过后才写入，拒绝仍整批回滚。默认脱敏规则不变。Copilot import 只替换本轮明确选中、同会话/模型且被 shutdown 覆盖的 OTel event ID，不基于目录存在与否删除历史。

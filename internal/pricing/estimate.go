@@ -136,7 +136,7 @@ func outputTokensForPricing(ev Event, rule *Rule, profile *Profile) int64 {
 			return ev.OutputTokens
 		}
 		return ev.OutputTokens + ev.ReasoningTokens
-	case model.AccCopilotOtelParts, model.AccCopilotOtelTotalFallback:
+	case model.AccCopilotOtelParts, model.AccCopilotOtelTotalFallback, model.AccAntigravityModelUsage:
 		return ev.OutputTokens + ev.ReasoningTokens
 	case model.AccWorkBuddyRawUsage:
 		// WorkBuddy completion_tokens already includes reasoning_tokens.

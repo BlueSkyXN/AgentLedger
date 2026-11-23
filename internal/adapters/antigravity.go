@@ -1,6 +1,7 @@
 package adapters
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -8,9 +9,11 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
+	"github.com/BlueSkyXN/AgentLedger/internal/db"
 	"github.com/BlueSkyXN/AgentLedger/internal/fingerprint"
 	"github.com/BlueSkyXN/AgentLedger/internal/model"
 
@@ -20,13 +23,8 @@ import (
 )
 
 const (
-	antigravityAdapterName   = "antigravity"
-	antigravityParserVersion = "antigravity-v1"
-	antigravityAccounting    = "antigravity_model_usage_v1"
-	antigravitySourceProduct = "antigravity"
+	antigravityAdapterName   = model.AntigravitySource
 	antigravityConversations = "conversations"
-	antigravityTimestampRank = 3
-	antigravityFallbackRank  = 1
 )
 
 // antigravityDefaultPaths mirrors the conversation roots the Antigravity
@@ -45,7 +43,8 @@ var antigravityDefaultPaths = []string{
 // gen_metadata/steps protobuf blobs are read; context payloads that may embed
 // private paths or conversation bodies are never decoded or persisted.
 type AntigravityAdapter struct {
-	skipped map[string]int64
+	skipped     map[string]int64
+	batchEvents map[*fingerprint.ParsedRecord]antigravityUsageEvent
 }
 
 func NewAntigravityAdapter() *AntigravityAdapter {
@@ -53,6 +52,25 @@ func NewAntigravityAdapter() *AntigravityAdapter {
 }
 
 func (a *AntigravityAdapter) Name() string { return antigravityAdapterName }
+
+// Keep the observations from valid files until all import sources have been
+// parsed. An additional copy may link IDs from two older copies.
+func (a *AntigravityAdapter) PrepareFileSet([]string) error {
+	a.batchEvents = make(map[*fingerprint.ParsedRecord]antigravityUsageEvent)
+	return nil
+}
+
+func (a *AntigravityAdapter) PostProcessRecords(records []*fingerprint.ParsedRecord) []*fingerprint.ParsedRecord {
+	if a.batchEvents == nil {
+		return records
+	}
+	events := make([]antigravityUsageEvent, 0, len(records))
+	for _, record := range records {
+		events = append(events, a.batchEvents[record])
+	}
+	a.batchEvents = nil
+	return a.antigravityRecords(a.deduplicateAntigravityEvents(events))
+}
 
 // Discover collects conversation databases below the configured roots. A root
 // that contains a conversations/ child scans only that child, matching the
@@ -135,7 +153,14 @@ func (a *AntigravityAdapter) ParseFileWithWarnings(path string) ([]*fingerprint.
 	}
 	defer conn.Close()
 
-	conversationDB, err := validateAntigravitySchema(conn)
+	// Each SQLite statement would otherwise see its own snapshot, including
+	// writes that land in WAL between the generation and steps queries.
+	tx, err := conn.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, nil, fmt.Errorf("begin Antigravity snapshot: %w", err)
+	}
+	defer tx.Rollback()
+	conversationDB, err := validateAntigravitySchema(tx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -145,27 +170,39 @@ func (a *AntigravityAdapter) ParseFileWithWarnings(path string) ([]*fingerprint.
 		return nil, nil, nil
 	}
 
-	trajectoryTimestamp, err := readAntigravityTrajectoryTimestamp(conn)
+	trajectoryTimestamp, err := readAntigravityTrajectoryTimestamp(tx)
 	if err != nil {
 		return nil, nil, err
 	}
-	generationRows, err := readAntigravityGenerationRows(conn)
+	generationRows, err := readAntigravityGenerationRows(tx)
 	if err != nil {
 		return nil, nil, err
 	}
-	stepRows, err := readAntigravityStepRows(conn)
+	stepRows, err := readAntigravityStepRows(tx)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	events := a.collectAntigravityEvents(sessionID, trajectoryTimestamp, generationRows, stepRows)
-	events = deduplicateAntigravityEvents(events)
+	events := a.collectAntigravityEvents(sessionID, path, trajectoryTimestamp, generationRows, stepRows)
+	return a.antigravityRecords(a.deduplicateAntigravityEvents(events)), nil, nil
+}
 
+func (a *AntigravityAdapter) antigravityRecords(events []antigravityUsageEvent) []*fingerprint.ParsedRecord {
 	records := make([]*fingerprint.ParsedRecord, 0, len(events))
 	for _, event := range events {
-		if record := antigravityRecordFromEvent(sessionID, path, event); record != nil {
-			records = append(records, record)
+		if event.timestamp.ms == 0 {
+			a.skipped["missing_timestamp"]++
+			continue
 		}
+		record := antigravityRecordFromEvent(event)
+		if record == nil {
+			a.skipped["invalid_token_magnitude"]++
+			continue
+		}
+		if a.batchEvents != nil {
+			a.batchEvents[record] = event
+		}
+		records = append(records, record)
 	}
 	sort.Slice(records, func(i, j int) bool {
 		if records[i].TimestampMs != records[j].TimestampMs {
@@ -173,7 +210,7 @@ func (a *AntigravityAdapter) ParseFileWithWarnings(path string) ([]*fingerprint.
 		}
 		return records[i].NativeEventID+records[i].IdentitySubkey < records[j].NativeEventID+records[j].IdentitySubkey
 	})
-	return records, nil, nil
+	return records
 }
 
 type antigravityGenerationRow struct {
@@ -186,333 +223,273 @@ type antigravityStepRow struct {
 	metadata antigravityStepMetadata
 }
 
-// antigravityUsageEvent is one token-bearing usage observation before the
-// in-file mirror merge.
+type antigravityTime struct {
+	ms   int64
+	rank model.AntigravityTime
+}
+
+func (t antigravityTime) betterThan(other antigravityTime) bool {
+	return t.ms > 0 && (other.ms == 0 || t.rank > other.rank || (t.rank == other.rank && t.ms < other.ms))
+}
+
+type antigravityRowKey struct {
+	session, key string
+}
+
 type antigravityUsageEvent struct {
-	timestampMs     int64
-	timestampRank   int
-	sessionID       string
-	sourceTable     string
-	sourceIdx       int64
-	model           string
-	modelDisplay    string
-	provider        uint64
-	hasProvider     bool
-	inputTokens     uint64
-	outputTokens    uint64
-	cacheCreation   uint64
-	cacheRead       uint64
-	reasoningTokens uint64
-	totalOutput     uint64
-	messageID       string
-	messageIDRank   int
-	identities      []string
+	sessionID     string
+	sourceFile    string
+	timestamp     antigravityTime
+	sourceTable   string
+	sourceIdx     int64
+	model         string
+	modelDisplay  string
+	modelRank     int
+	inputTokens   int64
+	cacheCreation int64
+	cacheRead     int64
+	output        model.AntigravityOutput
+	identities    []string
+	rowKeys       []antigravityRowKey
+}
+
+type antigravityEventContext struct {
+	table      string
+	idx        int64
+	model      string
+	modelID    uint64
+	hasModelID bool
+	inherited  bool
+	timestamp  antigravityTime
 }
 
 func (a *AntigravityAdapter) collectAntigravityEvents(
-	sessionID string,
+	sessionID, path string,
 	trajectoryTimestamp int64,
 	generationRows []antigravityGenerationRow,
 	stepRows []antigravityStepRow,
 ) []antigravityUsageEvent {
-	// identityTimestamps associates every identity of a dated row (fallback
-	// labels and all usage ids, retries included) with the earliest timestamp
-	// observed for it, so undated mirrors and retries resolve to the request
-	// time instead of the session start.
-	identityTimestamps := make(map[string]int64)
-	seed := func(timestampMs int64, identities []string, usages []*antigravityModelUsage) {
-		if timestampMs <= 0 {
-			return
-		}
-		keys := append([]string(nil), identities...)
-		for _, usage := range usages {
-			if usage != nil {
-				keys = append(keys, usage.identityKeys()...)
-			}
-		}
-		for _, key := range keys {
-			if known, ok := identityTimestamps[key]; !ok || timestampMs < known {
-				identityTimestamps[key] = timestampMs
-			}
-		}
-	}
+	stepTimes := make(map[int64]antigravityTime, len(stepRows))
 	for _, row := range stepRows {
-		var usages []*antigravityModelUsage
-		if row.metadata.usage != nil {
-			usages = append(usages, row.metadata.usage)
-		}
-		for index := range row.metadata.retryUsages {
-			usages = append(usages, &row.metadata.retryUsages[index])
-		}
-		seed(row.metadata.timestampMs, []string{antigravityStepLabel(sessionID, row.idx)}, usages)
+		stepTimes[row.idx] = antigravityTime{row.metadata.timestampMs, model.AntigravityStepTime}
 	}
+	generationTimes := make(map[int64]antigravityTime)
 	for _, row := range generationRows {
-		var usages []*antigravityModelUsage
-		if row.metadata.usage != nil {
-			usages = append(usages, row.metadata.usage)
+		timestamp := antigravityTime{row.metadata.timestampMs, model.AntigravityGenerationTime}
+		for _, step := range row.metadata.stepIndices {
+			if timestamp.betterThan(generationTimes[step]) {
+				generationTimes[step] = timestamp
+			}
 		}
-		for index := range row.metadata.retryUsages {
-			usages = append(usages, &row.metadata.retryUsages[index])
-		}
-		seed(row.metadata.timestampMs, antigravityGenerationIdentities(sessionID, row.idx, row.metadata.stepIndices), usages)
 	}
 
-	// The last generation row with model evidence provides the fallback for
-	// step rows without their own model information.
-	generationModel := ""
-	for index := len(generationRows) - 1; index >= 0 && generationModel == ""; index-- {
-		generationModel = antigravityRowModel(generationRows[index].metadata.model, generationRows[index].metadata.modelID, generationRows[index].metadata.hasModelID)
+	var events []antigravityUsageEvent
+	appendRow := func(ctx antigravityEventContext, primary *antigravityModelUsage, retries []antigravityRetryUsage, keys []string) {
+		if ctx.timestamp.ms == 0 {
+			ctx.timestamp = antigravityTime{trajectoryTimestamp, model.AntigravityTrajectoryTime}
+		}
+		appendUsage := func(usage antigravityModelUsage, rowKeys []string) {
+			event, ok := a.antigravityUsageEvent(usage, ctx)
+			if !ok {
+				return
+			}
+			event.sessionID, event.sourceFile = sessionID, path
+			for _, key := range rowKeys {
+				event.rowKeys = append(event.rowKeys, antigravityRowKey{sessionID, key})
+			}
+			events = append(events, event)
+		}
+		if primary != nil {
+			appendUsage(*primary, keys)
+		}
+		for _, retry := range retries {
+			key := fmt.Sprintf("%s:%d:retry:%d", ctx.table, ctx.idx, retry.ordinal)
+			appendUsage(retry.usage, []string{key})
+		}
 	}
 
-	events := make([]antigravityUsageEvent, 0)
 	for _, row := range stepRows {
-		model := antigravityRowModel(row.metadata.model, row.metadata.modelID, row.metadata.hasModelID)
-		if model == "" {
-			model = generationModel
+		metadata := row.metadata
+		timestamp := stepTimes[row.idx]
+		if timestamp.ms == 0 {
+			timestamp = generationTimes[row.idx]
 		}
-		if row.metadata.usage != nil {
-			a.appendAntigravityUsageEvent(&events, identityTimestamps, *row.metadata.usage, antigravityEventContext{
-				sessionID:          sessionID,
-				sourceTable:        "steps",
-				sourceIdx:          row.idx,
-				model:              model,
-				modelID:            row.metadata.modelID,
-				hasModelID:         row.metadata.hasModelID,
-				provider:           row.metadata.provider,
-				hasProvider:        row.metadata.hasProvider,
-				timestampMs:        row.metadata.timestampMs,
-				timestampRank:      antigravityTimestampRank,
-				fallbackIdentities: []string{antigravityStepLabel(sessionID, row.idx)},
-				trajectoryMs:       trajectoryTimestamp,
-			})
-		}
-		for _, retry := range row.metadata.retryUsages {
-			a.appendAntigravityUsageEvent(&events, identityTimestamps, retry, antigravityEventContext{
-				sessionID:          sessionID,
-				sourceTable:        "steps",
-				sourceIdx:          row.idx,
-				model:              model,
-				modelID:            row.metadata.modelID,
-				hasModelID:         row.metadata.hasModelID,
-				provider:           row.metadata.provider,
-				hasProvider:        row.metadata.hasProvider,
-				timestampMs:        row.metadata.timestampMs,
-				timestampRank:      antigravityTimestampRank,
-				fallbackIdentities: nil,
-				trajectoryMs:       trajectoryTimestamp,
-			})
-		}
+		appendRow(antigravityEventContext{
+			table: "step", idx: row.idx, timestamp: timestamp,
+			model:   antigravityRowModel(metadata.model, metadata.modelID, metadata.hasModelID),
+			modelID: metadata.modelID, hasModelID: metadata.hasModelID,
+		}, metadata.usage, metadata.retryUsages, []string{antigravityStepLabel(row.idx)})
 	}
-
 	currentModel := ""
 	for _, row := range generationRows {
-		resolved := antigravityRowModel(row.metadata.model, row.metadata.modelID, row.metadata.hasModelID)
-		if resolved == "" && row.metadata.usage != nil && row.metadata.usage.hasModelID {
-			if fromID, ok := antigravityModelFromID(row.metadata.usage.modelID); ok {
-				resolved = fromID
+		metadata := row.metadata
+		timestamp := antigravityTime{metadata.timestampMs, model.AntigravityGenerationTime}
+		keys := make([]string, 0, len(metadata.stepIndices)+1)
+		for _, step := range metadata.stepIndices {
+			keys = append(keys, antigravityStepLabel(step))
+			if candidate := stepTimes[step]; candidate.betterThan(timestamp) {
+				timestamp = candidate
 			}
 		}
-		if resolved != "" {
-			currentModel = resolved
+		keys = append(keys, fmt.Sprintf("gen:%d", row.idx))
+		rowModel := antigravityRowModel(metadata.model, metadata.modelID, metadata.hasModelID)
+		inherited := rowModel == ""
+		if rowModel != "" {
+			currentModel = rowModel
 		}
-		fallbackIdentities := antigravityGenerationIdentities(sessionID, row.idx, row.metadata.stepIndices)
-		if row.metadata.usage != nil {
-			a.appendAntigravityUsageEvent(&events, identityTimestamps, *row.metadata.usage, antigravityEventContext{
-				sessionID:          sessionID,
-				sourceTable:        "gen_metadata",
-				sourceIdx:          row.idx,
-				model:              currentModel,
-				modelID:            row.metadata.modelID,
-				hasModelID:         row.metadata.hasModelID,
-				timestampMs:        row.metadata.timestampMs,
-				timestampRank:      antigravityTimestampRank,
-				fallbackIdentities: fallbackIdentities,
-				trajectoryMs:       trajectoryTimestamp,
-			})
-		}
-		for _, retry := range row.metadata.retryUsages {
-			a.appendAntigravityUsageEvent(&events, identityTimestamps, retry, antigravityEventContext{
-				sessionID:          sessionID,
-				sourceTable:        "gen_metadata",
-				sourceIdx:          row.idx,
-				model:              currentModel,
-				modelID:            row.metadata.modelID,
-				hasModelID:         row.metadata.hasModelID,
-				timestampMs:        row.metadata.timestampMs,
-				timestampRank:      antigravityTimestampRank,
-				fallbackIdentities: nil,
-				trajectoryMs:       trajectoryTimestamp,
-			})
-		}
+		appendRow(antigravityEventContext{
+			table: "gen", idx: row.idx, timestamp: timestamp,
+			model: currentModel, modelID: metadata.modelID, hasModelID: metadata.hasModelID, inherited: inherited,
+		}, metadata.usage, metadata.retryUsages, keys)
 	}
 	return events
 }
 
-type antigravityEventContext struct {
-	sessionID          string
-	sourceTable        string
-	sourceIdx          int64
-	model              string
-	modelID            uint64
-	hasModelID         bool
-	provider           uint64
-	hasProvider        bool
-	timestampMs        int64
-	timestampRank      int
-	fallbackIdentities []string
-	trajectoryMs       int64
-}
-
-func (a *AntigravityAdapter) appendAntigravityUsageEvent(
-	events *[]antigravityUsageEvent,
-	identityTimestamps map[string]int64,
-	usage antigravityModelUsage,
-	context antigravityEventContext,
-) {
+func (a *AntigravityAdapter) antigravityUsageEvent(usage antigravityModelUsage, ctx antigravityEventContext) (antigravityUsageEvent, bool) {
 	if !usage.isTokenBearing() {
 		a.skipped["zero_usage"]++
-		return
+		return antigravityUsageEvent{}, false
 	}
-	identities := usage.identityKeys()
-	if len(identities) == 0 {
-		identities = append([]string(nil), context.fallbackIdentities...)
-	}
-	timestampMs, timestampRank := int64(0), 0
-	if context.timestampMs > 0 {
-		timestampMs, timestampRank = context.timestampMs, context.timestampRank
-	} else {
-		for _, identity := range identities {
-			if known, ok := identityTimestamps[identity]; ok && (timestampMs == 0 || known < timestampMs) {
-				timestampMs, timestampRank = known, antigravityTimestampRank
-			}
-		}
-		if timestampMs == 0 && context.trajectoryMs > 0 {
-			timestampMs, timestampRank = context.trajectoryMs, antigravityFallbackRank
-		}
-	}
-	if timestampMs <= 0 {
-		a.skipped["missing_timestamp"]++
-		return
-	}
-
-	// Output adjustment: total output is authoritative; visible output and
-	// reasoning are its components and are reconciled when the source reports
-	// an inconsistent split.
-	totalOutput := maxUint64(usage.totalOutputTokens, addUint64(usage.visibleOutputTokens, usage.reasoningTokens))
-	output := maxUint64(usage.visibleOutputTokens, subUint64(totalOutput, usage.reasoningTokens))
-	reasoning := maxUint64(usage.reasoningTokens, subUint64(totalOutput, output))
-	for _, value := range []uint64{usage.inputTokens, output, usage.cacheCreationTokens, usage.cacheReadTokens, reasoning, totalOutput} {
+	for _, value := range []uint64{usage.inputTokens, usage.cacheCreationTokens, usage.cacheReadTokens,
+		usage.totalOutputTokens, usage.visibleOutputTokens, usage.reasoningTokens} {
 		if value > math.MaxInt64 {
 			a.skipped["invalid_token_magnitude"]++
-			return
+			return antigravityUsageEvent{}, false
 		}
 	}
-
-	// Model evidence: a resolved model id from the usage wins, then the row's
-	// display name when it belongs to the same model id, then any id-derived
-	// name, then any display name, then the internal default.
-	model := antigravityDefaultModelName
-	modelDisplay := strings.TrimSpace(context.model)
-	if usage.hasModelID {
-		if fromID, ok := antigravityModelFromID(usage.modelID); ok && isResolvedAntigravityModel(fromID) {
-			model = fromID
+	output, ok := antigravityOutput(usage)
+	if !ok {
+		a.skipped["invalid_token_magnitude"]++
+		return antigravityUsageEvent{}, false
+	}
+	event := antigravityUsageEvent{
+		timestamp: ctx.timestamp, sourceTable: ctx.table, sourceIdx: ctx.idx,
+		inputTokens: int64(usage.inputTokens), cacheCreation: int64(usage.cacheCreationTokens),
+		cacheRead: int64(usage.cacheReadTokens), output: output,
+		identities: usage.identityKeys(),
+		model:      antigravityDefaultModelName, modelDisplay: strings.TrimSpace(ctx.model),
+	}
+	if name, ok := antigravityModelFromID(usage.modelID); usage.hasModelID && ok {
+		event.model = name
+		if isResolvedAntigravityModel(name) {
+			event.modelRank = 3
+			if ctx.inherited || (ctx.hasModelID && ctx.modelID != usage.modelID) {
+				event.modelDisplay = ""
+			}
+			return event, true
 		}
 	}
-	if model == antigravityDefaultModelName && modelDisplay != "" {
-		sameModelID := context.hasModelID == usage.hasModelID && context.modelID == usage.modelID
-		if normalized, err := normalizeAntigravityModel(modelDisplay); err == nil && sameModelID && isResolvedAntigravityModel(normalized) {
-			model = normalized
-		}
-	}
-	if model == antigravityDefaultModelName && usage.hasModelID {
-		if fromID, ok := antigravityModelFromID(usage.modelID); ok {
-			model = fromID
-		}
-	}
-	if model == antigravityDefaultModelName && modelDisplay != "" {
-		if normalized, err := normalizeAntigravityModel(modelDisplay); err == nil {
-			model = normalized
-		}
-	}
-
-	messageID, messageIDRank := usage.preferredMessageID()
-	provider, hasProvider := usage.provider, usage.hasProvider
-	if !hasProvider && context.hasProvider {
-		provider, hasProvider = context.provider, true
-	}
-	*events = append(*events, antigravityUsageEvent{
-		timestampMs:     timestampMs,
-		timestampRank:   timestampRank,
-		sessionID:       context.sessionID,
-		sourceTable:     context.sourceTable,
-		sourceIdx:       context.sourceIdx,
-		model:           model,
-		modelDisplay:    modelDisplay,
-		provider:        provider,
-		hasProvider:     hasProvider,
-		inputTokens:     usage.inputTokens,
-		outputTokens:    output,
-		cacheCreation:   usage.cacheCreationTokens,
-		cacheRead:       usage.cacheReadTokens,
-		reasoningTokens: reasoning,
-		totalOutput:     totalOutput,
-		messageID:       messageID,
-		messageIDRank:   messageIDRank,
-		identities:      identities,
-	})
-}
-
-func antigravityStepLabel(sessionID string, idx int64) string {
-	return fmt.Sprintf("step:%s:%d", sessionID, idx)
-}
-
-func antigravityGenerationIdentities(sessionID string, idx int64, stepIndices []int64) []string {
-	if len(stepIndices) == 0 {
-		return []string{fmt.Sprintf("gen:%s:%d", sessionID, idx)}
-	}
-	labels := make([]string, 0, len(stepIndices))
-	for _, stepIdx := range stepIndices {
-		labels = append(labels, antigravityStepLabel(sessionID, stepIdx))
-	}
-	return labels
-}
-
-// deduplicateAntigravityEvents merges events that share any identity (the
-// same request is mirrored across steps and gen_metadata) with max-token
-// semantics, keeping the strongest model evidence and best timestamp.
-func deduplicateAntigravityEvents(events []antigravityUsageEvent) []antigravityUsageEvent {
-	slots := make([]*antigravityUsageEvent, 0, len(events))
-	identitySlots := make(map[string]int)
-	for index := range events {
-		event := events[index]
-		matching := make(map[int]struct{})
-		for _, identity := range event.identities {
-			if slot, ok := identitySlots[identity]; ok {
-				matching[slot] = struct{}{}
+	if event.modelDisplay != "" && (!usage.hasModelID || (ctx.hasModelID && ctx.modelID == usage.modelID)) {
+		if name, err := normalizeAntigravityModel(event.modelDisplay); err == nil {
+			event.model = name
+			if isResolvedAntigravityModel(name) {
+				event.modelRank = 2
+				if ctx.inherited {
+					event.modelRank = 1
+				}
 			}
 		}
-		ordered := make([]int, 0, len(matching))
-		for slot := range matching {
+	}
+	return event, true
+}
+
+func antigravityOutput(usage antigravityModelUsage) (model.AntigravityOutput, bool) {
+	visible, reasoning := int64(usage.visibleOutputTokens), int64(usage.reasoningTokens)
+	if !usage.hasTotalOutput {
+		_, valid := model.AntigravityTotal(visible, reasoning)
+		return model.AntigravityOutput{Visible: visible, Reasoning: reasoning, Evidence: model.AntigravityDerivedOutput}, valid
+	}
+	total := int64(usage.totalOutputTokens)
+	evidence := model.AntigravityReportedOutput
+	if visible > 0 && visible <= total && reasoning <= total-visible && visible+reasoning == total {
+		evidence = model.AntigravityReportedOutputWithSplit
+	} else if reasoning > 0 && reasoning <= total {
+		evidence = model.AntigravityReportedOutputWithPart
+	} else if visible > 0 && visible <= total {
+		evidence = model.AntigravityReportedOutputWithPart
+	}
+	switch {
+	case reasoning > 0 && reasoning <= total:
+		// The reported reasoning fits the authoritative output total.
+	case visible > 0 && visible <= total:
+		reasoning = total - visible
+	default:
+		reasoning = 0
+	}
+	return model.AntigravityOutput{Visible: total - reasoning, Reasoning: reasoning, Evidence: evidence}, true
+}
+
+func antigravityStepLabel(idx int64) string {
+	return fmt.Sprintf("step:%d", idx)
+}
+
+func antigravityCompatibleRows(left, right antigravityUsageEvent) bool {
+	return (len(left.identities) == 0 || len(right.identities) == 0) &&
+		left.inputTokens == right.inputTokens && left.cacheCreation == right.cacheCreation &&
+		left.cacheRead == right.cacheRead && left.output.Total() == right.output.Total()
+}
+
+// Native links form the primary identity. A row link is evidence for an
+// otherwise unkeyed mirror only when the observed usage agrees.
+func (a *AntigravityAdapter) deduplicateAntigravityEvents(events []antigravityUsageEvent) []antigravityUsageEvent {
+	slots := make([]*antigravityUsageEvent, 0, len(events))
+	nativeSlots := make(map[string]int)
+	rowSlots := make(map[antigravityRowKey][]int)
+	for _, event := range events {
+		matches := make(map[int]struct{})
+		for _, id := range event.identities {
+			if slot, ok := nativeSlots[id]; ok {
+				matches[slot] = struct{}{}
+			}
+		}
+		locations := make(map[int]struct{})
+		for _, key := range event.rowKeys {
+			for _, slot := range rowSlots[key] {
+				if existing := slots[slot]; existing != nil && antigravityCompatibleRows(event, *existing) {
+					locations[slot] = struct{}{}
+				}
+			}
+		}
+		if len(event.identities) == 0 {
+			nativeLocations := 0
+			for slot := range locations {
+				if len(slots[slot].identities) > 0 {
+					nativeLocations++
+				}
+			}
+			if nativeLocations > 1 {
+				// More than one native attempt fits these row links. Keep
+				// the proven attempts and skip this ambiguous mirror.
+				a.skipped["ambiguous_row_link"]++
+				continue
+			}
+		}
+		for slot := range locations {
+			matches[slot] = struct{}{}
+		}
+		ordered := make([]int, 0, len(matches))
+		for slot := range matches {
 			ordered = append(ordered, slot)
 		}
 		sort.Ints(ordered)
+		target := len(slots)
 		if len(ordered) == 0 {
-			slot := len(slots)
-			for _, identity := range event.identities {
-				identitySlots[identity] = slot
+			slots = append(slots, &event)
+		} else {
+			target = ordered[0]
+			for _, slot := range ordered[1:] {
+				mergeAntigravityEvents(slots[target], *slots[slot])
+				slots[slot] = nil
 			}
-			eventCopy := event
-			slots = append(slots, &eventCopy)
-			continue
+			mergeAntigravityEvents(slots[target], event)
 		}
-		target := ordered[0]
-		for _, duplicate := range ordered[1:] {
-			mergeAntigravityEvents(slots[target], *slots[duplicate])
-			slots[duplicate] = nil
+		for _, id := range slots[target].identities {
+			nativeSlots[id] = target
 		}
-		mergeAntigravityEvents(slots[target], event)
-		for _, identity := range slots[target].identities {
-			identitySlots[identity] = target
+		for _, key := range slots[target].rowKeys {
+			if !slices.Contains(rowSlots[key], target) {
+				rowSlots[key] = append(rowSlots[key], target)
+			}
 		}
 	}
 	merged := make([]antigravityUsageEvent, 0, len(slots))
@@ -525,143 +502,128 @@ func deduplicateAntigravityEvents(events []antigravityUsageEvent) []antigravityU
 }
 
 func mergeAntigravityEvents(target *antigravityUsageEvent, duplicate antigravityUsageEvent) {
-	target.inputTokens = maxUint64(target.inputTokens, duplicate.inputTokens)
-	target.outputTokens = maxUint64(target.outputTokens, duplicate.outputTokens)
-	target.cacheCreation = maxUint64(target.cacheCreation, duplicate.cacheCreation)
-	target.cacheRead = maxUint64(target.cacheRead, duplicate.cacheRead)
-	target.reasoningTokens = maxUint64(target.reasoningTokens, duplicate.reasoningTokens)
-	target.totalOutput = maxUint64(
-		maxUint64(target.totalOutput, duplicate.totalOutput),
-		addUint64(target.outputTokens, target.reasoningTokens),
-	)
-	if antigravityModelResolution(duplicate.model) > antigravityModelResolution(target.model) {
-		target.model = duplicate.model
-		target.modelDisplay = duplicate.modelDisplay
+	target.inputTokens = max(target.inputTokens, duplicate.inputTokens)
+	target.cacheCreation = max(target.cacheCreation, duplicate.cacheCreation)
+	target.cacheRead = max(target.cacheRead, duplicate.cacheRead)
+	if duplicate.output.BetterThan(target.output) {
+		target.output = duplicate.output
 	}
-	if !target.hasProvider && duplicate.hasProvider {
-		target.provider, target.hasProvider = duplicate.provider, true
+	if duplicate.modelRank > target.modelRank ||
+		(duplicate.modelRank == target.modelRank && antigravityModelResolution(duplicate.model) > antigravityModelResolution(target.model)) {
+		target.model, target.modelDisplay, target.modelRank = duplicate.model, duplicate.modelDisplay, duplicate.modelRank
 	}
-	useDuplicateTimestamp := duplicate.timestampRank > target.timestampRank ||
-		(duplicate.timestampRank == target.timestampRank && duplicate.timestampMs < target.timestampMs)
-	if useDuplicateTimestamp {
-		target.timestampMs, target.timestampRank = duplicate.timestampMs, duplicate.timestampRank
+	if duplicate.timestamp.betterThan(target.timestamp) {
+		target.timestamp = duplicate.timestamp
 	}
-	if duplicate.messageIDRank > target.messageIDRank {
-		target.messageID, target.messageIDRank = duplicate.messageID, duplicate.messageIDRank
-	}
-	for _, identity := range duplicate.identities {
-		found := false
-		for _, existing := range target.identities {
-			if existing == identity {
-				found = true
-				break
-			}
-		}
-		if !found {
-			target.identities = append(target.identities, identity)
-		}
-	}
+	target.identities = uniqueAntigravityKeys(target.identities, duplicate.identities)
+	target.rowKeys = uniqueAntigravityKeys(target.rowKeys, duplicate.rowKeys)
 }
 
-func antigravityRecordFromEvent(sessionID, path string, event antigravityUsageEvent) *fingerprint.ParsedRecord {
-	totalTokens := addUint64(
-		addUint64(event.inputTokens, event.cacheCreation),
-		addUint64(event.cacheRead, event.totalOutput),
-	)
-	if totalTokens > math.MaxInt64 {
+func uniqueAntigravityKeys[T comparable](existing, incoming []T) []T {
+	for _, key := range incoming {
+		if !slices.Contains(existing, key) {
+			existing = append(existing, key)
+		}
+	}
+	return existing
+}
+
+func antigravityRecordFromEvent(event antigravityUsageEvent) *fingerprint.ParsedRecord {
+	total, ok := model.AntigravityTotal(event.inputTokens, event.cacheCreation, event.cacheRead, event.output.Total())
+	if !ok || total == 0 {
 		return nil
 	}
-
-	modelRaw := event.modelDisplay
-	if modelRaw == "" {
-		modelRaw = event.model
-	}
-	modelResolution := model.ModelResolutionDirectEvent
-	modelIsFallback := false
-	if event.model == antigravityDefaultModelName {
-		modelResolution = model.ModelResolutionUnknown
-		modelIsFallback = true
-	}
-	// Provider stays the model-vendor label used across AgentLedger; the
-	// source's serving-API enum (Google/Vertex) is not persisted. Without
-	// model evidence no vendor is guessed.
+	modelRaw := firstNonEmpty(event.modelDisplay, event.model)
+	modelResolution := model.ModelResolutionUnknown
 	provider := ""
-	if !modelIsFallback {
+	if event.modelRank > 0 {
+		modelResolution = model.ModelResolutionDirectEvent
+		if event.modelRank == 1 {
+			modelResolution = model.ModelResolutionTurnContext
+		}
 		_, provider, _ = NormalizeModelName(event.model)
 	}
-
-	nativeEventID, identityKind, identityScope, identitySubkey := "", "", "", ""
-	if event.messageID != "" {
-		nativeEventID, identityKind, identityScope = event.messageID, "message", "global"
-	} else {
-		labels := sortAntigravityIdentities(event.identities)
-		subkey := "record"
-		if len(labels) > 0 {
-			subkey = strings.Replace(labels[0], sessionID+":", "", 1)
-		}
-		identityKind, identityScope, identitySubkey = "record", "session", subkey
+	usageProfile := model.AntigravityAccountingEvidence{
+		Time: event.timestamp.rank, Output: event.output.Evidence,
+	}.Profile()
+	record := &fingerprint.ParsedRecord{
+		Agent: antigravityAdapterName, SourceProduct: model.AntigravitySource,
+		Provider: provider, Model: modelRaw, ModelNormalized: event.model,
+		ModelResolution: modelResolution, ModelIsFallback: event.modelRank == 0,
+		NativeSessionID: event.sessionID, SessionID: event.sessionID,
+		ParserVersion: model.AntigravityParser, Granularity: "request",
+		TimestampMs: event.timestamp.ms, InputTokens: event.inputTokens,
+		OutputTokens: event.output.Visible, ReasoningTokens: event.output.Reasoning,
+		CacheCreationTokens: event.cacheCreation, CacheReadTokens: event.cacheRead,
+		TotalTokens: total, TokenAccountingMethod: model.AccAntigravityModelUsage,
+		ObservabilityLevel: "full", AccountingProfile: usageProfile,
+		SourceFile: event.sourceFile, LineNumber: int(event.sourceIdx) + 1,
 	}
-
-	envelope := map[string]interface{}{
-		"session_id":            sessionID,
-		"source_table":          event.sourceTable,
-		"source_idx":            event.sourceIdx,
-		"input_tokens":          event.inputTokens,
-		"output_tokens":         event.outputTokens,
-		"cache_creation_tokens": event.cacheCreation,
-		"cache_read_tokens":     event.cacheRead,
-		"reasoning_tokens":      event.reasoningTokens,
-		"total_output_tokens":   event.totalOutput,
-		"message_id":            event.messageID,
-	}
-	if event.hasProvider {
-		envelope["provider_id"] = event.provider
-	}
-	rawJSON, err := json.Marshal(envelope)
+	record.RequestID = setAntigravityRecordIdentity(record, event)
+	rawJSON, err := json.Marshal(struct {
+		Table         string `json:"source_table"`
+		Index         int64  `json:"source_idx"`
+		Input         int64  `json:"input_tokens"`
+		Output        int64  `json:"total_output_tokens"`
+		Reasoning     int64  `json:"reasoning_tokens"`
+		CacheCreation int64  `json:"cache_creation_tokens"`
+		CacheRead     int64  `json:"cache_read_tokens"`
+	}{event.sourceTable, event.sourceIdx, event.inputTokens, event.output.Total(), event.output.Reasoning, event.cacheCreation, event.cacheRead})
 	if err != nil {
 		return nil
 	}
+	record.FingerprintJSON = string(rawJSON)
+	record.RawSHA256 = sha256Hex(rawJSON)
+	return record
+}
 
-	return &fingerprint.ParsedRecord{
-		Agent:                 antigravityAdapterName,
-		Provider:              provider,
-		Model:                 modelRaw,
-		ModelNormalized:       event.model,
-		ModelResolution:       modelResolution,
-		ModelIsFallback:       modelIsFallback,
-		NativeSessionID:       sessionID,
-		SessionID:             sessionID,
-		NativeEventID:         nativeEventID,
-		IdentityKind:          identityKind,
-		IdentityScope:         identityScope,
-		IdentitySubkey:        identitySubkey,
-		ParserVersion:         antigravityParserVersion,
-		Granularity:           "request",
-		TimestampMs:           event.timestampMs,
-		MessageID:             event.messageID,
-		InputTokens:           int64(event.inputTokens),
-		OutputTokens:          int64(event.outputTokens),
-		CacheCreationTokens:   int64(event.cacheCreation),
-		CacheReadTokens:       int64(event.cacheRead),
-		ReasoningTokens:       int64(event.reasoningTokens),
-		TotalTokens:           int64(totalTokens),
-		SourceProduct:         antigravitySourceProduct,
-		ObservabilityLevel:    "full",
-		TokenAccountingMethod: model.AccAntigravityModelUsage,
-		AccountingProfile:     antigravityAccounting,
-		FingerprintJSON:       string(rawJSON),
-		SourceFile:            path,
-		LineNumber:            int(event.sourceIdx) + 1,
-		RawSHA256:             sha256Hex(rawJSON),
+func setAntigravityRecordIdentity(record *fingerprint.ParsedRecord, event antigravityUsageEvent) string {
+	var evidence model.AntigravityRequestIdentity
+	rowKeys := slices.Clone(event.rowKeys)
+	sort.Slice(rowKeys, func(i, j int) bool { return rowKeys[i].key < rowKeys[j].key })
+	record.IdentityKind, record.IdentityScope = "record", "session"
+	record.IdentitySubkey = rowKeys[0].key
+	for _, key := range rowKeys {
+		if strings.HasPrefix(key.key, "step:") {
+			record.IdentitySubkey = key.key
+			break
+		}
 	}
+	for _, key := range rowKeys {
+		evidence.Rows = append(evidence.Rows, fingerprint.AntigravityRecordEventID(key.session, key.key))
+		if strings.Contains(key.key, ":retry:") {
+			evidence.Legacy = append(evidence.Legacy, fingerprint.AntigravityRecordEventID(key.session, "record"))
+		}
+	}
+	for _, namespace := range []string{"response", "provider", "message"} {
+		for _, identity := range event.identities {
+			kind, value, _ := strings.Cut(identity, ":")
+			if kind != namespace {
+				continue
+			}
+			if record.NativeEventID == "" {
+				record.NativeEventID, record.MessageID = value, value
+				record.IdentityKind, record.IdentityScope, record.IdentitySubkey = "message", "global", namespace
+			}
+			evidence.Native = append(evidence.Native, fingerprint.AntigravityNativeEventID(namespace, value))
+			evidence.Legacy = append(evidence.Legacy, fingerprint.AntigravityNativeEventID("", value))
+		}
+	}
+	slices.Sort(evidence.Native)
+	slices.Sort(evidence.Rows)
+	slices.Sort(evidence.Legacy)
+	evidence.Legacy = slices.Compact(evidence.Legacy)
+	encoded, _ := json.Marshal(evidence)
+	return string(encoded)
 }
 
 func openAntigravityReadOnly(path string) (*sql.DB, error) {
-	uri := (&url.URL{
-		Scheme:   "file",
-		Path:     filepath.Clean(path),
-		RawQuery: "mode=ro&_busy_timeout=5000",
-	}).String()
+	uri, err := db.SQLiteFileURI(path, url.Values{
+		"mode": {"ro"}, "_busy_timeout": {"5000"}, "_query_only": {"1"},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("open Antigravity database %s: %w", path, err)
+	}
 	conn, err := sql.Open("sqlite3", uri)
 	if err != nil {
 		return nil, fmt.Errorf("open Antigravity database %s: %w", path, err)
@@ -679,7 +641,7 @@ func openAntigravityReadOnly(path string) (*sql.DB, error) {
 // trajectory metadata but no gen_metadata is an unsupported schema; a database
 // without any of the three tables (for example conversation_summaries.db) is
 // reported as a benign skip.
-func validateAntigravitySchema(conn *sql.DB) (bool, error) {
+func validateAntigravitySchema(conn *sql.Tx) (bool, error) {
 	genExists, err := antigravityTableExists(conn, "gen_metadata")
 	if err != nil {
 		return false, err
@@ -712,7 +674,7 @@ func validateAntigravitySchema(conn *sql.DB) (bool, error) {
 	return true, nil
 }
 
-func antigravityTableExists(conn *sql.DB, table string) (bool, error) {
+func antigravityTableExists(conn *sql.Tx, table string) (bool, error) {
 	rows, err := conn.Query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", table)
 	if err != nil {
 		return false, fmt.Errorf("inspect Antigravity schema: %w", err)
@@ -721,7 +683,7 @@ func antigravityTableExists(conn *sql.DB, table string) (bool, error) {
 	return rows.Next(), rows.Err()
 }
 
-func antigravityRequireColumns(conn *sql.DB, table string, required map[string]bool) error {
+func antigravityRequireColumns(conn *sql.Tx, table string, required map[string]bool) error {
 	rows, err := conn.Query("PRAGMA table_info(" + table + ")")
 	if err != nil {
 		return fmt.Errorf("inspect Antigravity schema table %s: %w", table, err)
@@ -749,7 +711,7 @@ func antigravityRequireColumns(conn *sql.DB, table string, required map[string]b
 	return nil
 }
 
-func readAntigravityTrajectoryTimestamp(conn *sql.DB) (int64, error) {
+func readAntigravityTrajectoryTimestamp(conn *sql.Tx) (int64, error) {
 	exists, err := antigravityTableExists(conn, "trajectory_metadata_blob")
 	if err != nil || !exists {
 		return 0, err
@@ -765,14 +727,18 @@ func readAntigravityTrajectoryTimestamp(conn *sql.DB) (int64, error) {
 		if err := rows.Scan(&blob); err != nil {
 			return 0, fmt.Errorf("scan Antigravity trajectory metadata: %w", err)
 		}
-		if candidate, ok := parseAntigravityTrajectoryTimestamp(blob); ok && timestamp == 0 {
+		candidate, err := parseAntigravityTrajectoryTimestamp(blob)
+		if err != nil {
+			return 0, fmt.Errorf("decode Antigravity trajectory metadata: %w", err)
+		}
+		if timestamp == 0 {
 			timestamp = candidate
 		}
 	}
 	return timestamp, rows.Err()
 }
 
-func readAntigravityGenerationRows(conn *sql.DB) ([]antigravityGenerationRow, error) {
+func readAntigravityGenerationRows(conn *sql.Tx) ([]antigravityGenerationRow, error) {
 	rows, err := conn.Query("SELECT idx, data FROM gen_metadata WHERE data IS NOT NULL ORDER BY idx ASC")
 	if err != nil {
 		return nil, fmt.Errorf("query Antigravity gen_metadata: %w", err)
@@ -794,7 +760,7 @@ func readAntigravityGenerationRows(conn *sql.DB) ([]antigravityGenerationRow, er
 	return parsed, rows.Err()
 }
 
-func readAntigravityStepRows(conn *sql.DB) ([]antigravityStepRow, error) {
+func readAntigravityStepRows(conn *sql.Tx) ([]antigravityStepRow, error) {
 	exists, err := antigravityTableExists(conn, "steps")
 	if err != nil {
 		return nil, err
@@ -836,26 +802,4 @@ func (a *AntigravityAdapter) ImportDiagnostics() []ImportDiagnostic {
 	}
 	sort.Slice(diagnostics, func(i, j int) bool { return diagnostics[i].Code < diagnostics[j].Code })
 	return diagnostics
-}
-
-func maxUint64(left, right uint64) uint64 {
-	if left > right {
-		return left
-	}
-	return right
-}
-
-func addUint64(left, right uint64) uint64 {
-	sum := left + right
-	if sum < left {
-		return math.MaxUint64
-	}
-	return sum
-}
-
-func subUint64(left, right uint64) uint64 {
-	if left < right {
-		return 0
-	}
-	return left - right
 }

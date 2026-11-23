@@ -146,18 +146,19 @@ Token 按 `zcode_model_usage_v1` 归一化：来源 `input_tokens` 包含 cache 
 ```text
 channel = antigravity
 source_product = antigravity
-parser_version = antigravity-v1
+parser_version = antigravity-v2
 event_granularity = request
-identity = response ID → provider-assigned ID → message ID（global scope）
 ```
 
-默认发现 `~/.gemini/antigravity`、`~/.gemini/antigravity-cli`、`~/.gemini/antigravity-ide`、`~/.gemini/antigravity-backup`、`~/.gemini/antigravity-acp` 与 `~/.config/antigravity` 下的 `conversations/`（配置根含 `conversations/` 子目录时只扫该子目录）。每个 conversation 是一个 SQLite 数据库：`gen_metadata.data` 与 `steps.metadata` 是 protobuf blob，`trajectory_metadata_blob` 提供会话级兜底时间戳。字段布局是 Antigravity 未公开写入格式的逆向契约（与 ccusage Antigravity adapter 一致）。
+默认发现 `~/.gemini/antigravity`、`~/.gemini/antigravity-cli`、`~/.gemini/antigravity-ide`、`~/.gemini/antigravity-backup`、`~/.gemini/antigravity-acp` 与 `~/.config/antigravity` 下的 `conversations/`。可配置父目录、conversation 目录或数据库文件，支持相对路径。每个库在同一个只读 SQLite 事务中读取 `gen_metadata.data`、`steps.metadata` 和 `trajectory_metadata_blob`。
 
-同一请求会同时出现在关联 step 与 gen_metadata 中：两者共享 provider 分配的 response/provider-assigned/message ID，adapter 在文件内按 identity 并集用 max-token 语义合并为一 event（`retry_infos` 里重复主尝试的镜像先丢弃，真正独立的 retry 保留为独立 event）。时间戳优先 generation info，其次同 identity 的 step 时间戳，最后 trajectory；三者皆无的 usage 行跳过并计入 `antigravity_skipped_missing_timestamp` diagnostic。无任何 ID 的记录使用 session 内 `step:{idx}` / `gen:{idx}` 的 `session_record` 身份。
+AGY 可能把同一笔用量写入 generation 和 step。adapter 在同轮导入中收齐各库观测，再按带类型的 response、provider-assigned、message ID 归并镜像。仅一侧有 ID 时，需要来源行关联和一致的用量才能归并。主尝试镜像从 retry 列表中去除，独立无 ID 的 retry 使用来源表、行和尝试位置作为会话内身份。入账时，同一请求新增的身份标识会关联到已有事件。检测到多个可匹配的历史事件时报告冲突。
 
-Token 按 `antigravity_model_usage_v1` 归一化：来源各桶（input、cache creation、cache read、total output）为独立加法分量；`total_output_tokens` 为权威输出，`visible_output_tokens` 与 `reasoning_tokens` 是其分量，不一致时按 total 反推；total = input + cache creation + cache read + total output。模型证据优先 usage 内的模型枚举 ID（含 `model_placeholder_m*` 占位符映射），其次行内显示名（如 "gemini 3.6 flash (high)" 规范化为 `gemini-3.6-flash-high`）；两者皆无时记 `gemini-internal-model`（fallback、unknown resolution），provider 不猜测。
+时间优先使用 generation 的请求时间，其次使用关联 step，最后用 trajectory 时间兜底。缺少有效时间的用量计入 `antigravity_skipped_missing_timestamp`。后续取得更高优先级的时间时可以修正事件日期。同一优先级的明确时间冲突由账本拒绝。
 
-Schema 探测 fail-closed：含 `gen_metadata` 但缺 `idx`/`data` 列、或有 steps/trajectory 却无 `gen_metadata` 的库整库拒绝；没有任何相关表的库（如 `conversation_summaries.db`）静默跳过。blob 解码失败整库拒绝，不做猜测式解析。上下文/编辑器 blob 中可能包含的私有路径不解析、不落库；`raw_sha256` 只对结构化 usage envelope 求值。来源的 serving API 枚举（Google/Vertex）不持久化为 provider，事件 provider 由模型厂商推导。
+`antigravity_model_usage_v1` 的总量是非缓存输入、缓存写入、缓存读取和完整输出的和。来源明确提供的输出总数优先。合并选择一份输出拆分，保证可见输出和推理之和等于采用的输出总数。两部分均按输出费率估算。模型优先使用本次请求的枚举和显示名。generation 可用同一会话中此前的模型信息作上下文，未解析出厂商时 provider 为 `unknown`。
+
+已识别的表缺必需列、存在 steps/trajectory 却无 gen_metadata，或已识别的 protobuf 字段解码失败时，导入该库会给出警告。有缺省字段或额外字段的有效 protobuf 仍按已识别字段解析。无相关表的库静默跳过。对话正文、上下文和编辑器 payload 不提取。protobuf 字段映射及部分实现来自 ccusage Antigravity adapter，参见 [ccusage MIT 许可](ccusage-LICENSE.txt)。
 
 ## Parser contract 测试
 

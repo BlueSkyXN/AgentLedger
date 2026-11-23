@@ -3,8 +3,8 @@ package adapters
 import (
 	"fmt"
 	"math"
-	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 // Antigravity stores per-request usage inside SQLite conversation databases as
@@ -37,12 +37,12 @@ func decodeProtoFields(blob []byte) ([]protoField, error) {
 		if err != nil {
 			return nil, err
 		}
-		number := int(tag >> 3)
-		if number <= 0 || number > math.MaxInt32 {
+		number := tag >> 3
+		if number == 0 || number >= 1<<29 {
 			return nil, fmt.Errorf("invalid protobuf field number %d", number)
 		}
 		wireType := byte(tag & 7)
-		field := protoField{number: number, kind: wireType}
+		field := protoField{number: int(number), kind: wireType}
 		switch wireType {
 		case protoWireVarint:
 			value, valueRest, err := readProtoVarint(rest)
@@ -100,8 +100,37 @@ func readProtoVarint(blob []byte) (uint64, []byte, error) {
 	return 0, nil, fmt.Errorf("protobuf varint overflow")
 }
 
-// protoVarint returns the last varint occurrence of a field, matching the
-// protobuf "last oneof member wins" behavior of generated decoders.
+func checkAntigravityWire(fields []protoField, number int, allowed ...byte) error {
+	for _, field := range fields {
+		if field.number != number {
+			continue
+		}
+		valid := false
+		for _, kind := range allowed {
+			valid = valid || field.kind == kind
+		}
+		if !valid {
+			return fmt.Errorf("unexpected protobuf wire type for field %d", number)
+		}
+	}
+	return nil
+}
+
+func checkAntigravityText(fields []protoField, numbers ...int) error {
+	for _, number := range numbers {
+		if err := checkAntigravityWire(fields, number, protoWireBytes); err != nil {
+			return err
+		}
+		for _, data := range protoBytesAll(fields, number) {
+			if !utf8.Valid(data) {
+				return fmt.Errorf("invalid protobuf text for field %d", number)
+			}
+		}
+	}
+	return nil
+}
+
+// protoVarint returns the last varint occurrence of a field.
 func protoVarint(fields []protoField, number int) (uint64, bool) {
 	for i := len(fields) - 1; i >= 0; i-- {
 		if fields[i].number == number && fields[i].kind == protoWireVarint {
@@ -153,12 +182,11 @@ type antigravityModelUsage struct {
 	hasModelID          bool
 	inputTokens         uint64
 	totalOutputTokens   uint64
+	hasTotalOutput      bool
 	cacheCreationTokens uint64
 	cacheReadTokens     uint64
 	reasoningTokens     uint64
 	visibleOutputTokens uint64
-	provider            uint64
-	hasProvider         bool
 	messageID           string
 	responseID          string
 	providerAssignedID  string
@@ -167,6 +195,14 @@ type antigravityModelUsage struct {
 func parseAntigravityModelUsage(blob []byte) (antigravityModelUsage, error) {
 	fields, err := decodeProtoFields(blob)
 	if err != nil {
+		return antigravityModelUsage{}, err
+	}
+	for _, number := range []int{1, 2, 3, 4, 5, 6, 9, 10} {
+		if err := checkAntigravityWire(fields, number, protoWireVarint); err != nil {
+			return antigravityModelUsage{}, err
+		}
+	}
+	if err := checkAntigravityText(fields, 7, 11, 12); err != nil {
 		return antigravityModelUsage{}, err
 	}
 	usage := antigravityModelUsage{
@@ -178,12 +214,9 @@ func parseAntigravityModelUsage(blob []byte) (antigravityModelUsage, error) {
 		usage.modelID, usage.hasModelID = value, true
 	}
 	usage.inputTokens, _ = protoVarint(fields, 2)
-	usage.totalOutputTokens, _ = protoVarint(fields, 3)
+	usage.totalOutputTokens, usage.hasTotalOutput = protoVarint(fields, 3)
 	usage.cacheCreationTokens, _ = protoVarint(fields, 4)
 	usage.cacheReadTokens, _ = protoVarint(fields, 5)
-	if value, ok := protoVarint(fields, 6); ok && value != 0 {
-		usage.provider, usage.hasProvider = value, true
-	}
 	usage.reasoningTokens, _ = protoVarint(fields, 9)
 	usage.visibleOutputTokens, _ = protoVarint(fields, 10)
 	return usage, nil
@@ -197,7 +230,7 @@ func (u antigravityModelUsage) isTokenBearing() bool {
 func (u antigravityModelUsage) sameTokenCounts(other antigravityModelUsage) bool {
 	return u.modelID == other.modelID &&
 		u.inputTokens == other.inputTokens &&
-		u.totalOutputTokens == other.totalOutputTokens &&
+		u.totalOutputTokens == other.totalOutputTokens && u.hasTotalOutput == other.hasTotalOutput &&
 		u.cacheCreationTokens == other.cacheCreationTokens &&
 		u.cacheReadTokens == other.cacheReadTokens &&
 		u.reasoningTokens == other.reasoningTokens &&
@@ -218,24 +251,6 @@ func (u antigravityModelUsage) identityKeys() []string {
 		}
 	}
 	return keys
-}
-
-// preferredMessageID picks the strongest native identifier: response id over
-// provider-assigned id over message id. The rank records which kind won.
-func (u antigravityModelUsage) preferredMessageID() (string, int) {
-	for _, candidate := range []struct {
-		value string
-		rank  int
-	}{
-		{u.responseID, 3},
-		{u.providerAssignedID, 2},
-		{u.messageID, 1},
-	} {
-		if strings.TrimSpace(candidate.value) != "" {
-			return candidate.value, candidate.rank
-		}
-	}
-	return "", 0
 }
 
 // isMirrorOf reports whether this usage repeats the primary attempt. Retry
@@ -263,12 +278,17 @@ func (u antigravityModelUsage) isMirrorOf(primary antigravityModelUsage) bool {
 
 // dropAntigravityPrimaryMirror removes a single retry that mirrors the primary
 // usage, preserving the usage of distinct retries.
-func dropAntigravityPrimaryMirror(primary *antigravityModelUsage, retries []antigravityModelUsage) []antigravityModelUsage {
+type antigravityRetryUsage struct {
+	usage   antigravityModelUsage
+	ordinal int
+}
+
+func dropAntigravityPrimaryMirror(primary *antigravityModelUsage, retries []antigravityRetryUsage) []antigravityRetryUsage {
 	if primary == nil {
 		return retries
 	}
 	for index, retry := range retries {
-		if retry.isMirrorOf(*primary) {
+		if retry.usage.isMirrorOf(*primary) {
 			return append(retries[:index:index], retries[index+1:]...)
 		}
 	}
@@ -282,7 +302,7 @@ type antigravityGeneratorMetadata struct {
 	modelID     uint64
 	hasModelID  bool
 	usage       *antigravityModelUsage
-	retryUsages []antigravityModelUsage
+	retryUsages []antigravityRetryUsage
 	timestampMs int64
 	stepIndices []int64
 }
@@ -298,6 +318,14 @@ func parseAntigravityGeneratorMetadata(blob []byte) (antigravityGeneratorMetadat
 	}
 	chatFields, err := decodeProtoFields(chatModel)
 	if err != nil {
+		return antigravityGeneratorMetadata{}, err
+	}
+	for _, number := range []int{4, 9, 17} {
+		if err := checkAntigravityWire(chatFields, number, protoWireBytes); err != nil {
+			return antigravityGeneratorMetadata{}, err
+		}
+	}
+	if err := checkAntigravityText(chatFields, 19, 21); err != nil {
 		return antigravityGeneratorMetadata{}, err
 	}
 	metadata := antigravityGeneratorMetadata{
@@ -323,22 +351,29 @@ func parseAntigravityGeneratorMetadata(blob []byte) (antigravityGeneratorMetadat
 		if err != nil {
 			return antigravityGeneratorMetadata{}, err
 		}
+		if err := checkAntigravityWire(infoFields, 4, protoWireBytes); err != nil {
+			return antigravityGeneratorMetadata{}, err
+		}
 		if timestampBlob, ok := protoBytes(infoFields, 4); ok {
-			if timestamp, ok := parseAntigravityTimestamp(timestampBlob); ok {
-				metadata.timestampMs = timestamp
+			metadata.timestampMs, err = parseAntigravityTimestamp(timestampBlob)
+			if err != nil {
+				return antigravityGeneratorMetadata{}, err
 			}
 		}
 	}
-	metadata.stepIndices = parseAntigravityStepIndices(root)
-	return metadata, nil
+	metadata.stepIndices, err = parseAntigravityStepIndices(root)
+	return metadata, err
 }
 
-func parseAntigravityRetryInfos(fields []protoField, number int) ([]antigravityModelUsage, error) {
+func parseAntigravityRetryInfos(fields []protoField, number int) ([]antigravityRetryUsage, error) {
 	blobs := protoBytesAll(fields, number)
-	usages := make([]antigravityModelUsage, 0, len(blobs))
-	for _, blob := range blobs {
+	usages := make([]antigravityRetryUsage, 0, len(blobs))
+	for index, blob := range blobs {
 		retryFields, err := decodeProtoFields(blob)
 		if err != nil {
+			return nil, err
+		}
+		if err := checkAntigravityWire(retryFields, 2, protoWireBytes); err != nil {
 			return nil, err
 		}
 		usageBlob, ok := protoBytes(retryFields, 2)
@@ -349,12 +384,12 @@ func parseAntigravityRetryInfos(fields []protoField, number int) ([]antigravityM
 		if err != nil {
 			return nil, err
 		}
-		usages = append(usages, usage)
+		usages = append(usages, antigravityRetryUsage{usage: usage, ordinal: index})
 	}
 	return usages, nil
 }
 
-func parseAntigravityStepIndices(root []protoField) []int64 {
+func parseAntigravityStepIndices(root []protoField) ([]int64, error) {
 	var indices []int64
 	for _, field := range root {
 		if field.number != 2 {
@@ -362,22 +397,24 @@ func parseAntigravityStepIndices(root []protoField) []int64 {
 		}
 		switch field.kind {
 		case protoWireVarint:
-			if field.value <= math.MaxInt64 {
-				indices = append(indices, int64(field.value))
+			if field.value > math.MaxInt64 {
+				return nil, fmt.Errorf("invalid Antigravity step index")
 			}
+			indices = append(indices, int64(field.value))
 		case protoWireBytes:
-			packed := field.bytes
-			for len(packed) > 0 {
+			for packed := field.bytes; len(packed) > 0; {
 				value, rest, err := readProtoVarint(packed)
 				if err != nil || value > math.MaxInt64 {
-					break
+					return nil, fmt.Errorf("invalid packed Antigravity step index")
 				}
 				indices = append(indices, int64(value))
 				packed = rest
 			}
+		default:
+			return nil, fmt.Errorf("unexpected protobuf wire type for step indices")
 		}
 	}
-	return indices
+	return indices, nil
 }
 
 // antigravityStepMetadata is the steps.metadata blob.
@@ -385,10 +422,8 @@ type antigravityStepMetadata struct {
 	model       string
 	modelID     uint64
 	hasModelID  bool
-	provider    uint64
-	hasProvider bool
 	usage       *antigravityModelUsage
-	retryUsages []antigravityModelUsage
+	retryUsages []antigravityRetryUsage
 	timestampMs int64
 }
 
@@ -397,18 +432,23 @@ func parseAntigravityStepMetadata(blob []byte) (antigravityStepMetadata, error) 
 	if err != nil {
 		return antigravityStepMetadata{}, err
 	}
+	for _, number := range []int{1, 8, 9, 24, 28} {
+		if err := checkAntigravityWire(fields, number, protoWireBytes); err != nil {
+			return antigravityStepMetadata{}, err
+		}
+	}
 	metadata := antigravityStepMetadata{}
 	if infoBlob, ok := protoBytes(fields, 24); ok {
 		infoFields, err := decodeProtoFields(infoBlob)
 		if err != nil {
 			return antigravityStepMetadata{}, err
 		}
+		if err := checkAntigravityText(infoFields, 12, 8); err != nil {
+			return antigravityStepMetadata{}, err
+		}
 		metadata.model = firstNonEmpty(protoText(infoFields, 12), protoText(infoFields, 8))
 		if value, ok := protoVarint(infoFields, 1); ok && value != 0 {
 			metadata.modelID, metadata.hasModelID = value, true
-		}
-		if value, ok := protoVarint(infoFields, 7); ok && value != 0 {
-			metadata.provider, metadata.hasProvider = value, true
 		}
 	}
 	if usageBlob, ok := protoBytes(fields, 9); ok {
@@ -425,8 +465,11 @@ func parseAntigravityStepMetadata(blob []byte) (antigravityStepMetadata, error) 
 	metadata.retryUsages = dropAntigravityPrimaryMirror(metadata.usage, retries)
 	for _, number := range []int{8, 1} {
 		if timestampBlob, ok := protoBytes(fields, number); ok {
-			if timestamp, ok := parseAntigravityTimestamp(timestampBlob); ok {
-				metadata.timestampMs = timestamp
+			metadata.timestampMs, err = parseAntigravityTimestamp(timestampBlob)
+			if err != nil {
+				return antigravityStepMetadata{}, err
+			}
+			if metadata.timestampMs > 0 {
 				break
 			}
 		}
@@ -434,43 +477,38 @@ func parseAntigravityStepMetadata(blob []byte) (antigravityStepMetadata, error) 
 	return metadata, nil
 }
 
-// parseAntigravityTimestamp converts a google.protobuf.Timestamp message to
-// milliseconds, saturating instead of overflowing.
-func parseAntigravityTimestamp(blob []byte) (int64, bool) {
+// parseAntigravityTimestamp converts the source's protobuf Timestamp to
+// milliseconds. Absence can fall back to another source time.
+func parseAntigravityTimestamp(blob []byte) (int64, error) {
 	fields, err := decodeProtoFields(blob)
 	if err != nil {
-		return 0, false
+		return 0, err
 	}
-	seconds, ok := protoVarint(fields, 1)
-	if !ok || seconds == 0 || seconds > math.MaxInt64 {
-		return 0, false
+	for _, number := range []int{1, 2} {
+		if err := checkAntigravityWire(fields, number, protoWireVarint); err != nil {
+			return 0, err
+		}
 	}
+	seconds, _ := protoVarint(fields, 1)
 	nanos, _ := protoVarint(fields, 2)
-	if nanos > 999_999_999 {
-		nanos = 999_999_999
+	if seconds > 253_402_300_799 || nanos >= 1_000_000_000 {
+		return 0, fmt.Errorf("invalid Antigravity timestamp")
 	}
-	millis := seconds * 1000
-	if millis/1000 != seconds {
-		return math.MaxInt64, true
+	if seconds == 0 {
+		return 0, nil
 	}
-	millis += nanos / 1_000_000
-	if millis > math.MaxInt64 {
-		return math.MaxInt64, true
-	}
-	return int64(millis), true
+	return int64(seconds*1000 + nanos/1_000_000), nil
 }
 
-// parseAntigravityTrajectoryTimestamp reads the trajectory metadata blob; its
-// field 2 is a Timestamp used as the session-level fallback.
-func parseAntigravityTrajectoryTimestamp(blob []byte) (int64, bool) {
+func parseAntigravityTrajectoryTimestamp(blob []byte) (int64, error) {
 	fields, err := decodeProtoFields(blob)
 	if err != nil {
-		return 0, false
+		return 0, err
 	}
-	timestampBlob, ok := protoBytes(fields, 2)
-	if !ok {
-		return 0, false
+	if err := checkAntigravityWire(fields, 2, protoWireBytes); err != nil {
+		return 0, err
 	}
+	timestampBlob, _ := protoBytes(fields, 2)
 	return parseAntigravityTimestamp(timestampBlob)
 }
 
@@ -687,12 +725,4 @@ func antigravityFlashEffortVariant(lower string) (string, bool) {
 		return variant, true
 	}
 	return "", false
-}
-
-// sortAntigravityIdentities returns the identity keys in a stable order so
-// merged events always pick the same fallback label.
-func sortAntigravityIdentities(keys []string) []string {
-	sorted := append([]string(nil), keys...)
-	sort.Strings(sorted)
-	return sorted
 }

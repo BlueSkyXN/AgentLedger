@@ -1,6 +1,7 @@
 package adapters
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -336,10 +337,10 @@ func TestAntigravityParsesGenAndStepMirror(t *testing.T) {
 	if record.Agent != "antigravity" || record.SourceProduct != "antigravity" {
 		t.Fatalf("unexpected channel fields: %+v", record)
 	}
-	if record.TokenAccountingMethod != model.AccAntigravityModelUsage || record.AccountingProfile != "antigravity_model_usage_v1" {
+	if record.TokenAccountingMethod != model.AccAntigravityModelUsage || record.AccountingProfile != (model.AntigravityAccountingEvidence{Time: model.AntigravityStepTime, Output: model.AntigravityReportedOutputWithSplit}).Profile() {
 		t.Fatalf("unexpected accounting: %q %q", record.TokenAccountingMethod, record.AccountingProfile)
 	}
-	if record.ParserVersion != "antigravity-v1" || record.Granularity != "request" {
+	if record.ParserVersion != model.AntigravityParser || record.Granularity != "request" {
 		t.Fatalf("unexpected parser metadata: %+v", record)
 	}
 }
@@ -725,5 +726,151 @@ func TestAntigravityNamedModelFromStepMetadata(t *testing.T) {
 	}
 	if fmt.Sprint(records[0].TotalTokens) != "6" {
 		t.Fatalf("unexpected total: %d", records[0].TotalTokens)
+	}
+}
+
+func TestAntigravityMixedIdentityUsesLinkedStep(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "conversation.db")
+	gen := antigravityFixtureUsage{inputTokens: 10, totalOutputTokens: 100, messageID: "synthetic-message"}
+	step := antigravityFixtureUsage{inputTokens: 10, totalOutputTokens: 100, visibleOutputTokens: 60, reasoningTokens: 40}
+	antigravityFixtureDB(t, path,
+		[]antigravityFixtureGen{{idx: 0, usage: &gen, stepIndices: []int64{5}}},
+		[]antigravityFixtureStep{{idx: 5, usage: &step, timestampMs: 1700000050000}},
+		1700000000000,
+	)
+	records := antigravityParseFixture(t, path)
+	if len(records) != 1 {
+		t.Fatalf("wanted one linked request, got %d", len(records))
+	}
+	record := records[0]
+	if record.NativeEventID != "synthetic-message" || record.TimestampMs != 1700000050000 ||
+		record.TotalTokens != 110 || record.OutputTokens != 60 || record.ReasoningTokens != 40 {
+		t.Fatalf("wrong linked usage: %+v", record)
+	}
+}
+
+func TestAntigravityUnkeyedRetriesKeepDistinctRecords(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "conversation.db")
+	a := antigravityFixtureUsage{inputTokens: 12}
+	b := antigravityFixtureUsage{inputTokens: 23}
+	c := antigravityFixtureUsage{inputTokens: 34}
+	antigravityFixtureDB(t, path,
+		[]antigravityFixtureGen{{idx: 1, usage: &a, retries: []antigravityFixtureUsage{a, b, c}}},
+		nil, 1700000000000)
+	records := antigravityParseFixture(t, path)
+	if len(records) != 3 || len(antigravityIdentityMap(t, records)) != 3 {
+		t.Fatalf("wanted three distinct records, got %d", len(records))
+	}
+}
+
+func TestAntigravityScopesModelAndTimestampToLinkedRequest(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "conversation.db")
+	first := antigravityFixtureUsage{inputTokens: 10, messageID: "synthetic-first"}
+	second := antigravityFixtureUsage{inputTokens: 10, messageID: "synthetic-second"}
+	antigravityFixtureDB(t, path,
+		[]antigravityFixtureGen{
+			{idx: 1, usage: &first, timestampMs: 1700000001000, modelDisplay: "gemini-4-carbon", stepIndices: []int64{5}},
+			{idx: 2, usage: &second, modelDisplay: "gemini-4-hydrogen", stepIndices: []int64{6}},
+		},
+		[]antigravityFixtureStep{
+			{idx: 5, usage: &first, timestampMs: 1700000000000},
+			{idx: 6, usage: &second, timestampMs: 1700000002000},
+		}, 0)
+	records := antigravityParseFixture(t, path)
+	if len(records) != 2 || records[0].ModelNormalized != "gemini-4-carbon" ||
+		records[0].TimestampMs != 1700000001000 || records[1].ModelNormalized != "gemini-4-hydrogen" {
+		t.Fatalf("unexpected requests: %+v", records)
+	}
+}
+
+func TestAntigravityOpensRelativePath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "conversation.db")
+	usage := antigravityFixtureUsage{inputTokens: 10}
+	antigravityFixtureDB(t, path, []antigravityFixtureGen{{idx: 1, usage: &usage}}, nil, 1700000000000)
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	relative, err := filepath.Rel(cwd, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	records := antigravityParseFixture(t, relative)
+	if len(records) != 1 {
+		t.Fatalf("expected the relative path to yield a record, got %d", len(records))
+	}
+}
+
+func TestAntigravityMalformedTrajectoryFailsClosed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "conversation.db")
+	usage := antigravityFixtureUsage{inputTokens: 10}
+	antigravityFixtureDB(t, path, []antigravityFixtureGen{{idx: 1, usage: &usage, timestampMs: 1700000000000}}, nil, 0)
+	conn, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := conn.Exec("INSERT INTO trajectory_metadata_blob (data) VALUES (?)", []byte{0x12, 0x80}); err != nil {
+		t.Fatal(err)
+	}
+	records, err := NewAntigravityAdapter().ParseFile(path)
+	if err == nil || !strings.Contains(err.Error(), "trajectory metadata") || len(records) != 0 {
+		t.Fatalf("expected rejection of malformed trajectory, records=%d err=%v", len(records), err)
+	}
+}
+
+func TestAntigravityReadTransactionSeesOneSnapshot(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "conversation.db")
+	old := antigravityFixtureUsage{inputTokens: 10, messageID: "synthetic-before"}
+	replacement := antigravityFixtureUsage{inputTokens: 20, messageID: "synthetic-after"}
+	antigravityFixtureDB(t, path,
+		[]antigravityFixtureGen{{idx: 1, usage: &old, timestampMs: 1700000000000}}, nil, 0)
+	writer, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	if _, err := writer.Exec("PRAGMA journal_mode = WAL"); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := openAntigravityReadOnly(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	snapshot, err := reader.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer snapshot.Rollback()
+	gens, err := readAntigravityGenerationRows(snapshot)
+	if err != nil || len(gens) != 1 || gens[0].metadata.usage.messageID != "synthetic-before" {
+		t.Fatalf("generation before commit: %+v %v", gens, err)
+	}
+
+	update, err := writer.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer update.Rollback()
+	gen := antigravityFixtureGen{idx: 1, usage: &replacement, timestampMs: 1700000000000}
+	if _, err := update.Exec("UPDATE gen_metadata SET data = ? WHERE idx = 1", gen.blob()); err != nil {
+		t.Fatal(err)
+	}
+	step := antigravityFixtureStep{idx: 5, usage: &replacement, timestampMs: 1700000000000}
+	if _, err := update.Exec("INSERT INTO steps (idx, metadata) VALUES (5, ?)", step.blob()); err != nil {
+		t.Fatal(err)
+	}
+	if err := update.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	steps, err := readAntigravityStepRows(snapshot)
+	if err != nil || len(steps) != 0 {
+		t.Fatalf("snapshot picked up later steps: %d %v", len(steps), err)
+	}
+	records := antigravityParseFixture(t, path)
+	if len(records) != 1 || records[0].NativeEventID != "synthetic-after" {
+		t.Fatalf("next snapshot has unexpected records: %+v", records)
 	}
 }
