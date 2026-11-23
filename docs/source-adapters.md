@@ -156,7 +156,7 @@ AGY 可能把同一笔用量写入 generation 和 step。adapter 在同轮导入
 
 时间优先使用 generation 的请求时间，其次使用关联 step，最后用 trajectory 时间兜底。缺少有效时间的用量计入 `antigravity_skipped_missing_timestamp`。后续取得更高优先级的时间时可以修正事件日期。同一优先级的明确时间冲突由账本拒绝。
 
-`antigravity_model_usage_v1` 的总量是非缓存输入、缓存写入、缓存读取和完整输出的和。来源明确提供的输出总数优先。合并选择一份输出拆分，保证可见输出和推理之和等于采用的输出总数。两部分均按输出费率估算。模型优先使用本次请求的枚举和显示名。generation 可用同一会话中此前的模型信息作上下文，未解析出厂商时 provider 为 `unknown`。
+`antigravity_model_usage_v1` 的总量是非缓存输入、缓存写入、缓存读取和完整输出的和。来源明确提供的输出总数优先。合并选择一份输出拆分，保证可见输出和推理之和等于采用的输出总数。两部分均按输出费率估算。模型优先使用本次请求的枚举和显示名。只有内部编号时，可以用同库生成记录中该编号一致的规范化模型名补齐。生成记录的名称互相冲突时保留占位符。generation 可用同一会话中此前的模型信息作上下文，未解析出厂商时 provider 为 `unknown`。
 
 已识别的表缺必需列、存在 steps/trajectory 却无 gen_metadata，或已识别的 protobuf 字段解码失败时，导入该库会给出警告。有缺省字段或额外字段的有效 protobuf 仍按已识别字段解析。无相关表的库静默跳过。对话正文、上下文和编辑器 payload 不提取。protobuf 字段映射及部分实现来自 ccusage Antigravity adapter，参见 [ccusage MIT 许可](ccusage-LICENSE.txt)。
 

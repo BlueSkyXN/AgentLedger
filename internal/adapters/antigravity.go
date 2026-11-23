@@ -274,12 +274,31 @@ func (a *AntigravityAdapter) collectAntigravityEvents(
 		stepTimes[row.idx] = antigravityTime{row.metadata.timestampMs, model.AntigravityStepTime}
 	}
 	generationTimes := make(map[int64]antigravityTime)
+	observedModelNames := make(map[uint64]string)
 	for _, row := range generationRows {
-		timestamp := antigravityTime{row.metadata.timestampMs, model.AntigravityGenerationTime}
-		for _, step := range row.metadata.stepIndices {
+		metadata := row.metadata
+		timestamp := antigravityTime{metadata.timestampMs, model.AntigravityGenerationTime}
+		for _, step := range metadata.stepIndices {
 			if timestamp.betterThan(generationTimes[step]) {
 				generationTimes[step] = timestamp
 			}
+		}
+
+		if !metadata.hasModelID || metadata.model == "" {
+			continue
+		}
+		if usage := metadata.usage; usage != nil && usage.hasModelID && usage.modelID != metadata.modelID {
+			continue
+		}
+		name, err := normalizeAntigravityModel(metadata.model)
+		if err != nil || !isResolvedAntigravityModel(name) || strings.EqualFold(name, "unknown") {
+			continue
+		}
+		if previous, seen := observedModelNames[metadata.modelID]; seen && previous != name {
+			// Remember the conflict for the rest of this database.
+			observedModelNames[metadata.modelID] = ""
+		} else {
+			observedModelNames[metadata.modelID] = name
 		}
 	}
 
@@ -292,6 +311,10 @@ func (a *AntigravityAdapter) collectAntigravityEvents(
 			event, ok := a.antigravityUsageEvent(usage, ctx)
 			if !ok {
 				return
+			}
+			if name := observedModelNames[usage.modelID]; event.modelRank == 0 && usage.hasModelID && name != "" {
+				event.model, event.modelDisplay = name, name
+				event.modelRank = 1 // Context evidence yields to a directly resolved mirror.
 			}
 			event.sessionID, event.sourceFile = sessionID, path
 			for _, key := range rowKeys {
@@ -369,13 +392,13 @@ func (a *AntigravityAdapter) antigravityUsageEvent(usage antigravityModelUsage, 
 		identities: usage.identityKeys(),
 		model:      antigravityDefaultModelName, modelDisplay: strings.TrimSpace(ctx.model),
 	}
+	if usage.hasModelID && (ctx.inherited || !ctx.hasModelID || ctx.modelID != usage.modelID) {
+		event.modelDisplay = ""
+	}
 	if name, ok := antigravityModelFromID(usage.modelID); usage.hasModelID && ok {
 		event.model = name
 		if isResolvedAntigravityModel(name) {
 			event.modelRank = 3
-			if ctx.inherited || (ctx.hasModelID && ctx.modelID != usage.modelID) {
-				event.modelDisplay = ""
-			}
 			return event, true
 		}
 	}
@@ -394,14 +417,20 @@ func (a *AntigravityAdapter) antigravityUsageEvent(usage antigravityModelUsage, 
 }
 
 func antigravityOutput(usage antigravityModelUsage) (model.AntigravityOutput, bool) {
+	if usage.totalOutputTokens > math.MaxInt64 {
+		return model.AntigravityOutput{}, false
+	}
 	visible, reasoning := int64(usage.visibleOutputTokens), int64(usage.reasoningTokens)
-	if !usage.hasTotalOutput {
-		_, valid := model.AntigravityTotal(visible, reasoning)
-		return model.AntigravityOutput{Visible: visible, Reasoning: reasoning, Evidence: model.AntigravityDerivedOutput}, valid
+	partsTotal, valid := model.AntigravityTotal(visible, reasoning)
+	if !valid {
+		return model.AntigravityOutput{}, false
+	}
+	if !usage.hasTotalOutput || partsTotal > int64(usage.totalOutputTokens) {
+		return model.AntigravityOutput{Visible: visible, Reasoning: reasoning, Evidence: model.AntigravityDerivedOutput}, true
 	}
 	total := int64(usage.totalOutputTokens)
 	evidence := model.AntigravityReportedOutput
-	if visible > 0 && visible <= total && reasoning <= total-visible && visible+reasoning == total {
+	if visible > 0 && reasoning > 0 && visible <= total && reasoning == total-visible {
 		evidence = model.AntigravityReportedOutputWithSplit
 	} else if reasoning > 0 && reasoning <= total {
 		evidence = model.AntigravityReportedOutputWithPart

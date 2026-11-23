@@ -167,6 +167,30 @@ func TestAntigravityUnknownProviderCanBeEnriched(t *testing.T) {
 	}
 }
 
+func TestAntigravityIncrementalPlaceholderUpgrade(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "conversation.db")
+	source := agySource(t, path, agyUsage("message", "", false))
+	database := agyLedger(t)
+	agyImport(t, database, path)
+
+	placeholderStep := append(agyBytes(1, agyVarint(1, 1700000000)), agyBytes(9, append(agyUsage("message", "", false), agyVarint(1, 1427)...))...)
+	agyExec(t, source, "INSERT INTO steps VALUES (5, ?)", placeholderStep)
+	if got := agyImport(t, database, path); got.added != 0 || got.updated != 1 {
+		t.Fatalf("placeholder upgrade %+v", got)
+	}
+	var modelRaw, modelNorm string
+	if err := database.Conn().QueryRow("SELECT model_raw, model_normalized FROM usage_events").Scan(&modelRaw, &modelNorm); err != nil ||
+		modelRaw != "model_placeholder_m427" || modelNorm != "model_placeholder_m427" {
+		t.Fatalf("model_raw=%q model_normalized=%q err=%v", modelRaw, modelNorm, err)
+	}
+	if got := agyImport(t, database, path); got.skipped != 1 {
+		t.Fatalf("placeholder replay %+v", got)
+	}
+	if result, err := agyLedger(t).MergeFrom(database.Path()); err != nil || result.Added != 1 {
+		t.Fatalf("merge upgraded placeholder row %+v err=%v", result, err)
+	}
+}
+
 func agyImportPreview(t *testing.T, database *db.Database, id string) {
 	t.Helper()
 	record := &fingerprint.ParsedRecord{

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/BlueSkyXN/AgentLedger/internal/fingerprint"
@@ -235,7 +236,10 @@ func reconcileAntigravity(existing, incoming *model.UsageEvent) (*model.UsageEve
 		if currentRank == 2 && incomingRank == 2 && knownConflict(existing.ModelNormalized, incoming.ModelNormalized) {
 			return nil, ReconcileRejected, reject("direct_model_conflict")
 		}
-		if incomingRank > currentRank {
+		if incomingRank > currentRank || (currentRank == 0 && incomingRank == 0 &&
+			existing.ModelNormalized == "gemini-internal-model" &&
+			incoming.ModelNormalized != "" && incoming.ModelNormalized != "gemini-internal-model" &&
+			!strings.EqualFold(incoming.ModelNormalized, "unknown")) {
 			canonical.ModelNormalized, canonical.ModelRaw = incoming.ModelNormalized, incoming.ModelRaw
 			canonical.ModelResolution, canonical.ModelIsFallback = incoming.ModelResolution, incoming.ModelIsFallback
 			canonical.Provider = incoming.Provider
