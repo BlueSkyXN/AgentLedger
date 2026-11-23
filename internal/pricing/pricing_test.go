@@ -1374,3 +1374,139 @@ func TestEstimateSplitFallsBackWhenRuleLacksOneHourRate(t *testing.T) {
 		t.Fatalf("rule-wide cache_write rate should apply to both shares: %+v", flat)
 	}
 }
+
+func TestDefaultProfilePricesAntigravityModels(t *testing.T) {
+	profile, err := LoadDefaultProfile()
+	if err != nil {
+		t.Fatalf("load default profile: %v", err)
+	}
+	estimator, err := NewEstimator(profile)
+	if err != nil {
+		t.Fatalf("estimator: %v", err)
+	}
+
+	for _, tt := range []struct {
+		name         string
+		event        Event
+		wantRuleID   string
+		wantMicroUSD int64
+	}{
+		{
+			name: "gemini 4 carbon introductory rate",
+			event: Event{
+				Model:           "gemini-4-carbon",
+				InputTokens:     100_000,
+				OutputTokens:    100_000,
+				CacheReadTokens: 100_000,
+				TimestampMs:     1796054400000, // 2026-11-30
+			},
+			wantRuleID:   "gemini-4-carbon",
+			wantMicroUSD: 1_210_000,
+		},
+		{
+			name: "gemini 4 carbon doubled rate from december",
+			event: Event{
+				Model:           "gemini-4-carbon",
+				InputTokens:     100_000,
+				OutputTokens:    100_000,
+				CacheReadTokens: 100_000,
+				TimestampMs:     1796083200000, // 2026-12-01
+			},
+			wantRuleID:   "gemini-4-carbon-2026-12",
+			wantMicroUSD: 2_420_000,
+		},
+		{
+			name: "gemini 4 hydrogen flat rate",
+			event: Event{
+				Model:           "gemini-4-hydrogen",
+				InputTokens:     100_000,
+				OutputTokens:    100_000,
+				CacheReadTokens: 100_000,
+			},
+			wantRuleID:   "gemini-4-hydrogen",
+			wantMicroUSD: 907_500,
+		},
+		{
+			name: "claude sonnet 5.5 low effort",
+			event: Event{
+				Model:               "claude-sonnet-5-5-low",
+				InputTokens:         100_000,
+				OutputTokens:        100_000,
+				CacheCreationTokens: 100_000,
+				CacheReadTokens:     100_000,
+			},
+			wantRuleID:   "claude-sonnet-5-5",
+			wantMicroUSD: 1_470_000,
+		},
+		{
+			name: "claude opus 5.5 medium effort",
+			event: Event{
+				Model:               "claude-opus-5-5-medium",
+				InputTokens:         100_000,
+				OutputTokens:        100_000,
+				CacheCreationTokens: 100_000,
+				CacheReadTokens:     100_000,
+			},
+			wantRuleID:   "claude-opus-5-5",
+			wantMicroUSD: 2_920_000,
+		},
+		{
+			name: "claude opus 5.5 fast still matches fast rule",
+			event: Event{
+				Model:               "claude-opus-5-5-fast",
+				InputTokens:         100_000,
+				OutputTokens:        100_000,
+				CacheCreationTokens: 100_000,
+				CacheReadTokens:     100_000,
+			},
+			wantRuleID:   "claude-opus-5-5-fast",
+			wantMicroUSD: 5_840_000,
+		},
+		{
+			name: "claude sonnet 4 exact enum id",
+			event: Event{
+				Model:               "claude-sonnet-4",
+				InputTokens:         100_000,
+				OutputTokens:        100_000,
+				CacheCreationTokens: 100_000,
+				CacheReadTokens:     100_000,
+			},
+			wantRuleID:   "claude-sonnet-4",
+			wantMicroUSD: 2_205_000,
+		},
+		{
+			name: "claude 4.5 sonnet antigravity enum id",
+			event: Event{
+				Model:               "claude-4.5-sonnet",
+				InputTokens:         100_000,
+				OutputTokens:        100_000,
+				CacheCreationTokens: 100_000,
+				CacheReadTokens:     100_000,
+			},
+			wantRuleID:   "claude-sonnet-4",
+			wantMicroUSD: 2_205_000,
+		},
+		{
+			name: "claude 4.5 haiku antigravity enum id",
+			event: Event{
+				Model:               "claude-4.5-haiku",
+				InputTokens:         100_000,
+				OutputTokens:        100_000,
+				CacheCreationTokens: 100_000,
+				CacheReadTokens:     100_000,
+			},
+			wantRuleID:   "claude-haiku-4.5",
+			wantMicroUSD: 735_000,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			estimate, err := estimator.Estimate(tt.event)
+			if err != nil {
+				t.Fatalf("estimate: %v", err)
+			}
+			if !estimate.Priced || estimate.RuleID != tt.wantRuleID || estimate.CostMicroUSD != tt.wantMicroUSD {
+				t.Fatalf("got %+v, want rule=%q cost=%d", estimate, tt.wantRuleID, tt.wantMicroUSD)
+			}
+		})
+	}
+}
