@@ -214,7 +214,9 @@ func parseAntigravityModelUsage(blob []byte) (antigravityModelUsage, error) {
 		usage.modelID, usage.hasModelID = value, true
 	}
 	usage.inputTokens, _ = protoVarint(fields, 2)
-	usage.totalOutputTokens, usage.hasTotalOutput = protoVarint(fields, 3)
+	if value, ok := protoVarint(fields, 3); ok && value != 0 {
+		usage.totalOutputTokens, usage.hasTotalOutput = value, true
+	}
 	usage.cacheCreationTokens, _ = protoVarint(fields, 4)
 	usage.cacheReadTokens, _ = protoVarint(fields, 5)
 	usage.reasoningTokens, _ = protoVarint(fields, 9)

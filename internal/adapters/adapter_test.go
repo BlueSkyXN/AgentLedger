@@ -9,7 +9,7 @@ func TestAllAdaptersExcludesRemovedSources(t *testing.T) {
 		names[adapter.Name()] = true
 	}
 
-	for _, name := range []string{"claude", "codex", "cursor", "copilot", "gemini", "workbuddy"} {
+	for _, name := range []string{"claude", "codex", "cursor", "copilot", "gemini", "workbuddy", "zcode", "antigravity"} {
 		if !names[name] {
 			t.Fatalf("expected adapter %q to be registered", name)
 		}

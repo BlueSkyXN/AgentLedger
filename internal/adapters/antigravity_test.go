@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -416,24 +417,50 @@ func TestAntigravityRetryMirrorDroppedDistinctKept(t *testing.T) {
 
 func TestAntigravityTokenDerivation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "11111111-0000-0000-0000-000000000000.db")
-	// visible=0 forces the visible/reasoning split to be derived from the
-	// authoritative total output.
-	usage := antigravityFixtureUsage{
-		inputTokens:         10,
-		totalOutputTokens:   100,
-		reasoningTokens:     40,
-		visibleOutputTokens: 0,
-		messageID:           "msg-split",
+	// Explicit wire 0 on field 3 keeps non-zero visible/reasoning; partial
+	// mirrors preserve reasoning regardless of gen/step order; parts > total
+	// fall back to the observed sum instead of fabricating total - reasoning.
+	wireZero := antigravityFixtureUsage{
+		inputTokens: 10, totalOutputTokens: 0, visibleOutputTokens: 25, reasoningTokens: 15, messageID: "msg-wire-zero",
 	}
-	antigravityFixtureDB(t, path, []antigravityFixtureGen{{idx: 0, usage: &usage}}, nil, 1_700_000_000_000)
+	visibleOnly := antigravityFixtureUsage{
+		inputTokens: 10, totalOutputTokens: 100, visibleOutputTokens: 100, reasoningTokens: 0, messageID: "msg-split",
+	}
+	reasoningPart := antigravityFixtureUsage{
+		inputTokens: 10, totalOutputTokens: 100, visibleOutputTokens: 0, reasoningTokens: 40, messageID: "msg-split",
+	}
+	exceedsTotal := antigravityFixtureUsage{
+		inputTokens: 10, totalOutputTokens: 50, visibleOutputTokens: 40, reasoningTokens: 30, messageID: "msg-exceeds",
+	}
+	antigravityFixtureDB(t, path,
+		[]antigravityFixtureGen{
+			{idx: 0, usage: &wireZero},
+			{idx: 1, usage: &visibleOnly, stepIndices: []int64{1}},
+			{idx: 2, usage: &exceedsTotal},
+		},
+		[]antigravityFixtureStep{
+			{idx: 1, usage: &reasoningPart, timestampMs: 1_700_000_001_000},
+		},
+		1_700_000_000_000,
+	)
 
-	records := antigravityParseFixture(t, path)
-	if len(records) != 1 {
-		t.Fatalf("expected 1 record, got %d", len(records))
+	byID := map[string]*fingerprint.ParsedRecord{}
+	for _, record := range antigravityParseFixture(t, path) {
+		byID[record.NativeEventID] = record
 	}
-	record := records[0]
-	if record.OutputTokens != 60 || record.ReasoningTokens != 40 || record.TotalTokens != 110 {
-		t.Fatalf("unexpected derived split: output=%d reasoning=%d total=%d", record.OutputTokens, record.ReasoningTokens, record.TotalTokens)
+	if got := byID["msg-wire-zero"]; got == nil || got.OutputTokens != 25 || got.ReasoningTokens != 15 || got.TotalTokens != 50 {
+		t.Fatalf("wire-zero field 3 wiped output split: %+v", got)
+	}
+	if got := byID["msg-split"]; got == nil || got.OutputTokens != 60 || got.ReasoningTokens != 40 || got.TotalTokens != 110 {
+		t.Fatalf("visible-only mirror clobbered reasoning split: %+v", got)
+	}
+	if got := byID["msg-exceeds"]; got == nil || got.OutputTokens != 40 || got.ReasoningTokens != 30 || got.TotalTokens != 80 {
+		t.Fatalf("parts > total fabricated output split: %+v", got)
+	}
+	if _, ok := antigravityOutput(antigravityModelUsage{
+		hasTotalOutput: true, totalOutputTokens: 50, visibleOutputTokens: math.MaxInt64, reasoningTokens: 1,
+	}); ok {
+		t.Fatal("expected overflowing visible+reasoning to be rejected")
 	}
 }
 
@@ -780,6 +807,98 @@ func TestAntigravityScopesModelAndTimestampToLinkedRequest(t *testing.T) {
 	if len(records) != 2 || records[0].ModelNormalized != "gemini-4-carbon" ||
 		records[0].TimestampMs != 1700000001000 || records[1].ModelNormalized != "gemini-4-hydrogen" {
 		t.Fatalf("unexpected requests: %+v", records)
+	}
+}
+
+func TestAntigravityStepModelUsesUnambiguousConversationEvidence(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		generations  []antigravityFixtureGen
+		wantModel    string
+		wantEvidence string
+	}{
+		{
+			name: "use the same model ID in a mixed-model conversation",
+			generations: []antigravityFixtureGen{
+				{idx: 1, modelID: 1526, hasModelID: true, modelDisplay: "gemini-4-hydrogen"},
+				{idx: 2, modelID: 1526, hasModelID: true, modelDisplay: "Gemini 4 Hydrogen (Medium)"},
+				{idx: 3, modelID: 1427, hasModelID: true, modelDisplay: "gemini-4-carbon"},
+			},
+			wantModel:    "gemini-4-hydrogen",
+			wantEvidence: model.ModelResolutionTurnContext,
+		},
+		{
+			name: "keep the placeholder when names conflict",
+			generations: []antigravityFixtureGen{
+				{idx: 1, modelID: 1526, hasModelID: true, modelDisplay: "gemini-4-hydrogen"},
+				{idx: 2, modelID: 1526, hasModelID: true, modelDisplay: "gemini-4-carbon"},
+				{idx: 3, modelID: 1526, hasModelID: true, modelDisplay: "gemini-4-hydrogen"},
+			},
+			wantModel:    "model_placeholder_m526",
+			wantEvidence: model.ModelResolutionUnknown,
+		},
+		{
+			name: "ignore a generation when its usage reports a different model ID",
+			generations: []antigravityFixtureGen{{
+				idx: 1, modelID: 1526, hasModelID: true, modelDisplay: "gemini-4-hydrogen",
+				usage: &antigravityFixtureUsage{modelID: 1427, hasModelID: true},
+			}},
+			wantModel:    "model_placeholder_m526",
+			wantEvidence: model.ModelResolutionUnknown,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "conversation.db")
+			checkpoint := antigravityFixtureUsage{
+				modelID: 1526, hasModelID: true, messageID: "synthetic-checkpoint", inputTokens: 10,
+			}
+			antigravityFixtureDB(t, path, test.generations, []antigravityFixtureStep{
+				{idx: 5, usage: &checkpoint, timestampMs: 1_700_000_005_000},
+			}, 0)
+
+			records := antigravityParseFixture(t, path)
+			if len(records) != 1 {
+				t.Fatalf("wanted one checkpoint record, got %d", len(records))
+			}
+			got := records[0]
+			if got.ModelNormalized != test.wantModel || got.ModelResolution != test.wantEvidence {
+				t.Fatalf("model %q with evidence %q, want %q with %q",
+					got.ModelNormalized, got.ModelResolution, test.wantModel, test.wantEvidence)
+			}
+			if got.NativeEventID != checkpoint.messageID || got.TotalTokens != int64(checkpoint.inputTokens) {
+				t.Fatalf("checkpoint identity or usage changed: %+v", got)
+			}
+		})
+	}
+}
+
+func TestAntigravityClearsMismatchedModelDisplay(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "conversation.db")
+	primary := antigravityFixtureUsage{modelID: 1526, hasModelID: true, inputTokens: 10, messageID: "msg-primary"}
+	retry := antigravityFixtureUsage{modelID: 1427, hasModelID: true, inputTokens: 12, messageID: "msg-retry"}
+	inherited := antigravityFixtureUsage{modelID: 1428, hasModelID: true, inputTokens: 14, messageID: "msg-inherited"}
+	untaggedRow := antigravityFixtureUsage{modelID: 1429, hasModelID: true, inputTokens: 16, messageID: "msg-untagged"}
+	antigravityFixtureDB(t, path, []antigravityFixtureGen{
+		{idx: 1, modelID: 1526, hasModelID: true, modelDisplay: "Gemini 4 Hydrogen (Medium)", usage: &primary, retries: []antigravityFixtureUsage{retry}},
+		{idx: 2, usage: &inherited},
+		{idx: 3, modelDisplay: "Gemini 4 Carbon", usage: &untaggedRow},
+	}, nil, 1_700_000_000_000)
+
+	byID := map[string]*fingerprint.ParsedRecord{}
+	for _, record := range antigravityParseFixture(t, path) {
+		byID[record.NativeEventID] = record
+	}
+	if got := byID["msg-primary"]; got == nil || got.Model != "Gemini 4 Hydrogen (Medium)" || got.ModelNormalized != "gemini-4-hydrogen" {
+		t.Fatalf("same-model display name lost: %+v", got)
+	}
+	for id, want := range map[string]string{
+		"msg-retry":     "model_placeholder_m427",
+		"msg-inherited": "model_placeholder_m428",
+		"msg-untagged":  "model_placeholder_m429",
+	} {
+		if got := byID[id]; got == nil || got.Model != want || got.ModelNormalized != want {
+			t.Fatalf("%s model_raw polluted: got Model=%q ModelNormalized=%q, want %q", id, got.Model, got.ModelNormalized, want)
+		}
 	}
 }
 
