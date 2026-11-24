@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.4.2
+
+### Added
+
+- 内置价表补齐 GPT-6.2 Sol 和 GPT-6.2 Astra 的 Standard、Fast 与 Batch 费率，按 272,000 输入侧 Token 划分短、长上下文档。
+
+### Fixed
+
+- 修正 Web 健康接口显示的发行版本号。
+
 ## v0.4.1
 
 ### Fixed
