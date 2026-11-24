@@ -14,7 +14,7 @@ func TestDefaultProfileLoads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load default profile: %v", err)
 	}
-	if profile.ID != "agentledger-pricing-2026-11-12" || profile.CheckedAt != "2026-11-12" || len(profile.Rules) == 0 {
+	if profile.ID != "agentledger-pricing-2026-11-24" || profile.CheckedAt != "2026-11-24" || len(profile.Rules) == 0 {
 		t.Fatalf("unexpected profile: %+v", profile)
 	}
 }
@@ -674,7 +674,7 @@ func TestDefaultProfilePricesCurrentModelIDs(t *testing.T) {
 				CacheReadTokens:     100_000,
 			},
 			wantRuleID:   "claude-sonnet-5-5",
-			wantMicroUSD: 1_470_000,
+			wantMicroUSD: 1_460_000,
 		},
 		{
 			name: "claude opus 5.5 official pricing",
@@ -1427,6 +1427,20 @@ func TestDefaultProfilePricesAntigravityModels(t *testing.T) {
 			wantMicroUSD: 907_500,
 		},
 		{
+			name: "gemini 4 neon prices cached input and full output",
+			event: Event{
+				Model:                 "gemini-4-neon",
+				Channel:               model.AntigravitySource,
+				TokenAccountingMethod: model.AccAntigravityModelUsage,
+				InputTokens:           100_000,
+				CacheReadTokens:       100_000,
+				OutputTokens:          60_000,
+				ReasoningTokens:       40_000,
+			},
+			wantRuleID:   "gemini-4-neon",
+			wantMicroUSD: 1_815_000,
+		},
+		{
 			name: "claude sonnet 5.5 low effort",
 			event: Event{
 				Model:               "claude-sonnet-5-5-low",
@@ -1436,7 +1450,7 @@ func TestDefaultProfilePricesAntigravityModels(t *testing.T) {
 				CacheReadTokens:     100_000,
 			},
 			wantRuleID:   "claude-sonnet-5-5",
-			wantMicroUSD: 1_470_000,
+			wantMicroUSD: 1_460_000,
 		},
 		{
 			name: "claude opus 5.5 medium effort",
