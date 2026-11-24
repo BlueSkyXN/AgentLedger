@@ -245,6 +245,7 @@ type antigravityUsageEvent struct {
 	model         string
 	modelDisplay  string
 	modelRank     int
+	modelConflict bool
 	inputTokens   int64
 	cacheCreation int64
 	cacheRead     int64
@@ -291,7 +292,7 @@ func (a *AntigravityAdapter) collectAntigravityEvents(
 			continue
 		}
 		name, err := normalizeAntigravityModel(metadata.model)
-		if err != nil || !isResolvedAntigravityModel(name) || strings.EqualFold(name, "unknown") {
+		if err != nil || !isResolvedAntigravityModel(name) {
 			continue
 		}
 		if previous, seen := observedModelNames[metadata.modelID]; seen && previous != name {
@@ -312,9 +313,14 @@ func (a *AntigravityAdapter) collectAntigravityEvents(
 			if !ok {
 				return
 			}
-			if name := observedModelNames[usage.modelID]; event.modelRank == 0 && usage.hasModelID && name != "" {
-				event.model, event.modelDisplay = name, name
-				event.modelRank = 1 // Context evidence yields to a directly resolved mirror.
+			if name, observed := observedModelNames[usage.modelID]; observed && usage.hasModelID && event.modelRank == 0 {
+				if name != "" {
+					event.model, event.modelDisplay = name, name
+					event.modelRank = 1
+				} else if model.IsAntigravityModelPlaceholder(event.model) {
+					event.modelDisplay = ""
+					event.modelConflict = true
+				}
 			}
 			event.sessionID, event.sourceFile = sessionID, path
 			for _, key := range rowKeys {
@@ -390,7 +396,7 @@ func (a *AntigravityAdapter) antigravityUsageEvent(usage antigravityModelUsage, 
 		inputTokens: int64(usage.inputTokens), cacheCreation: int64(usage.cacheCreationTokens),
 		cacheRead: int64(usage.cacheReadTokens), output: output,
 		identities: usage.identityKeys(),
-		model:      antigravityDefaultModelName, modelDisplay: strings.TrimSpace(ctx.model),
+		model:      model.AntigravityDefaultModel, modelDisplay: strings.TrimSpace(ctx.model),
 	}
 	if usage.hasModelID && (ctx.inherited || !ctx.hasModelID || ctx.modelID != usage.modelID) {
 		event.modelDisplay = ""
@@ -403,7 +409,7 @@ func (a *AntigravityAdapter) antigravityUsageEvent(usage antigravityModelUsage, 
 		}
 	}
 	if event.modelDisplay != "" && (!usage.hasModelID || (ctx.hasModelID && ctx.modelID == usage.modelID)) {
-		if name, err := normalizeAntigravityModel(event.modelDisplay); err == nil {
+		if name, err := normalizeAntigravityModel(event.modelDisplay); err == nil && !strings.EqualFold(name, "unknown") {
 			event.model = name
 			if isResolvedAntigravityModel(name) {
 				event.modelRank = 2
@@ -425,10 +431,14 @@ func antigravityOutput(usage antigravityModelUsage) (model.AntigravityOutput, bo
 	if !valid {
 		return model.AntigravityOutput{}, false
 	}
-	if !usage.hasTotalOutput || partsTotal > int64(usage.totalOutputTokens) {
-		return model.AntigravityOutput{Visible: visible, Reasoning: reasoning, Evidence: model.AntigravityDerivedOutput}, true
-	}
 	total := int64(usage.totalOutputTokens)
+	if !usage.hasTotalOutput || partsTotal > total {
+		output := model.AntigravityOutput{Visible: visible, Reasoning: reasoning, Evidence: model.AntigravityDerivedOutput}
+		if partsTotal > total && (usage.hasTotalOutput || usage.hasEncodedZeroOutput) {
+			output.DiscardedTotal = &total
+		}
+		return output, true
+	}
 	evidence := model.AntigravityReportedOutput
 	if visible > 0 && reasoning > 0 && visible <= total && reasoning == total-visible {
 		evidence = model.AntigravityReportedOutputWithSplit
@@ -537,9 +547,12 @@ func mergeAntigravityEvents(target *antigravityUsageEvent, duplicate antigravity
 	if duplicate.output.BetterThan(target.output) {
 		target.output = duplicate.output
 	}
-	if duplicate.modelRank > target.modelRank ||
-		(duplicate.modelRank == target.modelRank && antigravityModelResolution(duplicate.model) > antigravityModelResolution(target.model)) {
+	currentRank := model.AntigravityModelPriority(target.modelRank, target.modelConflict)
+	incomingRank := model.AntigravityModelPriority(duplicate.modelRank, duplicate.modelConflict)
+	if incomingRank > currentRank ||
+		(incomingRank == currentRank && antigravityModelResolution(duplicate.model) > antigravityModelResolution(target.model)) {
 		target.model, target.modelDisplay, target.modelRank = duplicate.model, duplicate.modelDisplay, duplicate.modelRank
+		target.modelConflict = duplicate.modelConflict
 	}
 	if duplicate.timestamp.betterThan(target.timestamp) {
 		target.timestamp = duplicate.timestamp
@@ -574,6 +587,7 @@ func antigravityRecordFromEvent(event antigravityUsageEvent) *fingerprint.Parsed
 	}
 	usageProfile := model.AntigravityAccountingEvidence{
 		Time: event.timestamp.rank, Output: event.output.Evidence,
+		DiscardedOutputTotal: event.output.DiscardedTotal, ModelConflict: event.modelConflict,
 	}.Profile()
 	record := &fingerprint.ParsedRecord{
 		Agent: antigravityAdapterName, SourceProduct: model.AntigravitySource,

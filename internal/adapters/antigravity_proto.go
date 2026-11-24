@@ -5,6 +5,8 @@ import (
 	"math"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/BlueSkyXN/AgentLedger/internal/model"
 )
 
 // Antigravity stores per-request usage inside SQLite conversation databases as
@@ -178,18 +180,19 @@ func protoText(fields []protoField, number int) string {
 // antigravityModelUsage is the per-request usage message embedded in both
 // generator and step metadata.
 type antigravityModelUsage struct {
-	modelID             uint64
-	hasModelID          bool
-	inputTokens         uint64
-	totalOutputTokens   uint64
-	hasTotalOutput      bool
-	cacheCreationTokens uint64
-	cacheReadTokens     uint64
-	reasoningTokens     uint64
-	visibleOutputTokens uint64
-	messageID           string
-	responseID          string
-	providerAssignedID  string
+	modelID              uint64
+	hasModelID           bool
+	inputTokens          uint64
+	totalOutputTokens    uint64
+	hasTotalOutput       bool
+	hasEncodedZeroOutput bool
+	cacheCreationTokens  uint64
+	cacheReadTokens      uint64
+	reasoningTokens      uint64
+	visibleOutputTokens  uint64
+	messageID            string
+	responseID           string
+	providerAssignedID   string
 }
 
 func parseAntigravityModelUsage(blob []byte) (antigravityModelUsage, error) {
@@ -214,8 +217,10 @@ func parseAntigravityModelUsage(blob []byte) (antigravityModelUsage, error) {
 		usage.modelID, usage.hasModelID = value, true
 	}
 	usage.inputTokens, _ = protoVarint(fields, 2)
-	if value, ok := protoVarint(fields, 3); ok && value != 0 {
-		usage.totalOutputTokens, usage.hasTotalOutput = value, true
+	if value, ok := protoVarint(fields, 3); ok {
+		usage.totalOutputTokens = value
+		usage.hasTotalOutput = value != 0
+		usage.hasEncodedZeroOutput = value == 0
 	}
 	usage.cacheCreationTokens, _ = protoVarint(fields, 4)
 	usage.cacheReadTokens, _ = protoVarint(fields, 5)
@@ -514,15 +519,6 @@ func parseAntigravityTrajectoryTimestamp(blob []byte) (int64, error) {
 	return parseAntigravityTimestamp(timestampBlob)
 }
 
-// antigravityDefaultModelName marks events where neither the usage nor the row
-// carried any usable model evidence.
-const antigravityDefaultModelName = "gemini-internal-model"
-
-const (
-	antigravityPlaceholderPrefix  = "model_placeholder_m"
-	antigravityUnresolvedIDPrefix = "antigravity-model-"
-)
-
 // antigravityModelResolution ranks how strong a model name evidence is; higher
 // wins when mirror events disagree.
 const (
@@ -555,9 +551,9 @@ func antigravityModelNameFromID(id uint64) string {
 		return "model_openai_gpt_oss_120b_medium"
 	}
 	if id >= 1000 {
-		return fmt.Sprintf("%s%d", antigravityPlaceholderPrefix, id-1000)
+		return fmt.Sprintf("%s%d", model.AntigravityPlaceholderPrefix, id-1000)
 	}
-	return fmt.Sprintf("%s%d", antigravityUnresolvedIDPrefix, id)
+	return fmt.Sprintf("%s%d", model.AntigravityUnresolvedPrefix, id)
 }
 
 func antigravityModelFromID(id uint64) (string, bool) {
@@ -586,12 +582,11 @@ func antigravityRowModel(model string, modelID uint64, hasModelID bool) string {
 	return ""
 }
 
-func antigravityModelResolution(model string) int {
+func antigravityModelResolution(name string) int {
 	switch {
-	case model == antigravityDefaultModelName:
+	case name == model.AntigravityDefaultModel || strings.EqualFold(name, "unknown"):
 		return antigravityModelDefault
-	case strings.HasPrefix(model, antigravityPlaceholderPrefix),
-		strings.HasPrefix(model, antigravityUnresolvedIDPrefix):
+	case model.IsAntigravityModelPlaceholder(name):
 		return antigravityModelPlaceholder
 	default:
 		return antigravityModelResolved

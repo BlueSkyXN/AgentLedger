@@ -36,7 +36,10 @@ func validateAntigravityEvidence(event *model.UsageEvent) error {
 	if !isAntigravityEvent(event) || event.EventGranularity != "request" {
 		return reject("invalid_antigravity_source")
 	}
-	if _, ok := model.ParseAntigravityAccountingEvidence(event.AccountingProfile); !ok {
+	evidence, ok := model.ParseAntigravityAccountingEvidence(event.AccountingProfile)
+	if !ok || (evidence.DiscardedOutputTotal != nil && *evidence.DiscardedOutputTotal >= event.OutputTokens+event.ReasoningTokens) ||
+		(evidence.ModelConflict && (!event.ModelIsFallback || !model.IsAntigravityModelPlaceholder(event.ModelNormalized) ||
+			event.ModelRaw != event.ModelNormalized)) {
 		return reject("invalid_antigravity_accounting_evidence")
 	}
 	ids := antigravityIdentity(event)
@@ -192,7 +195,25 @@ func reconcileAntigravity(existing, incoming *model.UsageEvent) (*model.UsageEve
 			return nil, ReconcileRejected, reject("antigravity_preview_retry_ambiguous")
 		}
 	}
-	if !native && !sameAntigravityUsage(existing, incoming) {
+	a, b := antigravityIdentity(existing), antigravityIdentity(incoming)
+	currentEvidence, _ := model.ParseAntigravityAccountingEvidence(existing.AccountingProfile)
+	incomingEvidence, _ := model.ParseAntigravityAccountingEvidence(incoming.AccountingProfile)
+	currentOutput := model.AntigravityOutput{
+		Visible: existing.OutputTokens, Reasoning: existing.ReasoningTokens,
+		Evidence: currentEvidence.Output, DiscardedTotal: currentEvidence.DiscardedOutputTotal,
+	}
+	incomingOutput := model.AntigravityOutput{
+		Visible: incoming.OutputTokens, Reasoning: incoming.ReasoningTokens,
+		Evidence: incomingEvidence.Output, DiscardedTotal: incomingEvidence.DiscardedOutputTotal,
+	}
+	sameRow := existing.SessionKey == incoming.SessionKey && antigravitySharesKey(a.Rows, b.Rows)
+	repairsExisting := sameRow && incomingOutput.RepairsLegacy(currentOutput)
+	repairsIncoming := sameRow && currentOutput.RepairsLegacy(incomingOutput)
+	// An unkeyed row can change its total only when the new evidence explains
+	// exactly what the previous parser wrote for the same row and input.
+	provenRowRepair := (repairsExisting || repairsIncoming) && existing.TimestampMs == incoming.TimestampMs &&
+		sameAntigravityInput(existing, incoming)
+	if !native && !sameAntigravityUsage(existing, incoming) && !provenRowRepair {
 		return nil, ReconcileRejected, reject("antigravity_row_conflict")
 	}
 	if incoming.ParserVersion == antigravityPreviewParser {
@@ -206,8 +227,6 @@ func reconcileAntigravity(existing, incoming *model.UsageEvent) (*model.UsageEve
 		canonical.EventID, canonical.IdentityScope, canonical.IdentityStrategy = existing.EventID, existing.IdentityScope, existing.IdentityStrategy
 		canonical.SessionKey, canonical.SessionID, canonical.SessionPathID = existing.SessionKey, existing.SessionID, existing.SessionPathID
 	} else {
-		currentEvidence, _ := model.ParseAntigravityAccountingEvidence(existing.AccountingProfile)
-		incomingEvidence, _ := model.ParseAntigravityAccountingEvidence(incoming.AccountingProfile)
 		if incomingEvidence.Time == currentEvidence.Time && incoming.TimestampMs != existing.TimestampMs &&
 			currentEvidence.Time != model.AntigravityTrajectoryTime {
 			return nil, ReconcileRejected, reject("timestamp_conflict")
@@ -216,11 +235,10 @@ func reconcileAntigravity(existing, incoming *model.UsageEvent) (*model.UsageEve
 			(incomingEvidence.Time == currentEvidence.Time && incoming.TimestampMs < canonical.TimestampMs) {
 			canonical.TimestampMs, currentEvidence.Time = incoming.TimestampMs, incomingEvidence.Time
 		}
-		currentOutput := model.AntigravityOutput{Visible: canonical.OutputTokens, Reasoning: canonical.ReasoningTokens, Evidence: currentEvidence.Output}
-		incomingOutput := model.AntigravityOutput{Visible: incoming.OutputTokens, Reasoning: incoming.ReasoningTokens, Evidence: incomingEvidence.Output}
-		if incomingOutput.BetterThan(currentOutput) {
+		if repairsExisting || (!repairsIncoming && incomingOutput.BetterThan(currentOutput)) {
 			canonical.OutputTokens, canonical.ReasoningTokens = incomingOutput.Visible, incomingOutput.Reasoning
 			currentEvidence.Output = incomingEvidence.Output
+			currentEvidence.DiscardedOutputTotal = incomingEvidence.DiscardedOutputTotal
 		}
 		canonical.InputTokens = max(canonical.InputTokens, incoming.InputTokens)
 		canonical.CacheCreationTokens = max(canonical.CacheCreationTokens, incoming.CacheCreationTokens)
@@ -230,25 +248,31 @@ func reconcileAntigravity(existing, incoming *model.UsageEvent) (*model.UsageEve
 			return nil, ReconcileRejected, reject("accounting_total_mismatch")
 		}
 		canonical.TotalTokens = total
-		canonical.AccountingProfile = currentEvidence.Profile()
-
 		currentRank, incomingRank := modelEvidenceRank(existing), modelEvidenceRank(incoming)
 		if currentRank == 2 && incomingRank == 2 && knownConflict(existing.ModelNormalized, incoming.ModelNormalized) {
 			return nil, ReconcileRejected, reject("direct_model_conflict")
 		}
-		if incomingRank > currentRank || (currentRank == 0 && incomingRank == 0 &&
-			existing.ModelNormalized == "gemini-internal-model" &&
-			incoming.ModelNormalized != "" && incoming.ModelNormalized != "gemini-internal-model" &&
+		currentPriority := model.AntigravityModelPriority(currentRank, currentEvidence.ModelConflict)
+		incomingPriority := model.AntigravityModelPriority(incomingRank, incomingEvidence.ModelConflict)
+		if incomingPriority > currentPriority || (currentPriority == 0 && incomingPriority == 0 &&
+			existing.ModelNormalized == model.AntigravityDefaultModel &&
+			incoming.ModelNormalized != "" && incoming.ModelNormalized != model.AntigravityDefaultModel &&
 			!strings.EqualFold(incoming.ModelNormalized, "unknown")) {
 			canonical.ModelNormalized, canonical.ModelRaw = incoming.ModelNormalized, incoming.ModelRaw
 			canonical.ModelResolution, canonical.ModelIsFallback = incoming.ModelResolution, incoming.ModelIsFallback
 			canonical.Provider = incoming.Provider
+			currentEvidence.ModelConflict = incomingEvidence.ModelConflict
 		} else if !knownConflict(canonical.ModelNormalized, incoming.ModelNormalized) {
 			fillKnownString(&canonical.Provider, incoming.Provider)
 		}
+		if canonical.ModelIsFallback && incoming.ModelIsFallback &&
+			canonical.ModelNormalized == incoming.ModelNormalized &&
+			model.IsAntigravityModelPlaceholder(incoming.ModelNormalized) && incoming.ModelRaw == incoming.ModelNormalized {
+			canonical.ModelRaw = incoming.ModelRaw
+		}
+		canonical.AccountingProfile = currentEvidence.Profile()
 	}
 
-	a, b := antigravityIdentity(existing), antigravityIdentity(incoming)
 	ids := model.AntigravityRequestIdentity{
 		Native: mergeAntigravityKeys(a.Native, b.Native),
 		Rows:   mergeAntigravityKeys(a.Rows, b.Rows),
@@ -276,8 +300,12 @@ func reconcileAntigravity(existing, incoming *model.UsageEvent) (*model.UsageEve
 }
 
 func sameAntigravityUsage(left, right *model.UsageEvent) bool {
+	return sameAntigravityInput(left, right) && left.TotalTokens == right.TotalTokens
+}
+
+func sameAntigravityInput(left, right *model.UsageEvent) bool {
 	return left.InputTokens == right.InputTokens && left.CacheCreationTokens == right.CacheCreationTokens &&
-		left.CacheReadTokens == right.CacheReadTokens && left.TotalTokens == right.TotalTokens
+		left.CacheReadTokens == right.CacheReadTokens
 }
 
 func mergeAntigravityKeys(left, right []string) []string {
