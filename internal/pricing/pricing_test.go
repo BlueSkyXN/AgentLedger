@@ -14,8 +14,60 @@ func TestDefaultProfileLoads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load default profile: %v", err)
 	}
-	if profile.ID != "agentledger-pricing-2026-11-24" || profile.CheckedAt != "2026-11-24" || len(profile.Rules) == 0 {
-		t.Fatalf("unexpected profile: %+v", profile)
+	if profile.ID != "agentledger-pricing-2026-11-24-r2" || profile.CheckedAt != "2026-11-24" || len(profile.Rules) == 0 {
+		t.Fatalf("unexpected profile ID=%q checked_at=%q rules=%d", profile.ID, profile.CheckedAt, len(profile.Rules))
+	}
+}
+
+func TestDefaultProfilePricesGPT62(t *testing.T) {
+	profile, err := LoadDefaultProfile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	estimator, err := NewEstimator(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name, tier, ruleSuffix string
+		cacheWriteTokens       int64
+		solMicroUSD            int64
+		astraMicroUSD          int64
+	}{
+		{"standard at 272K input", "default", "", 2_000, 1_412_000, 5_648_000},
+		{"standard above 272K input", "default", "-long", 2_001, 2_324_005, 9_296_020},
+		{"fast short context", "priority", "-fast", 2_000, 2_824_000, 11_296_000},
+		{"fast long context", "priority", "-fast-long", 2_001, 4_648_010, 18_592_040},
+		{"batch short context", "batch", "-batch", 2_000, 706_000, 2_824_000},
+		{"batch long context", "batch", "-batch-long", 2_001, 1_162_003, 4_648_010},
+		{"no tier uses standard pricing", "", "", 2_000, 1_412_000, 5_648_000},
+	}
+	for _, tt := range tests {
+		for _, modelCase := range []struct {
+			id   string
+			cost int64
+		}{
+			{"gpt-6.2-sol", tt.solMicroUSD},
+			{"gpt-6.2-astra", tt.astraMicroUSD},
+		} {
+			t.Run(modelCase.id+"/"+tt.name, func(t *testing.T) {
+				event := Event{
+					Model:                 modelCase.id + "[1m] (high)",
+					Channel:               "codex",
+					AccountingProfile:     model.AccountingProfileWithTier("ledger", tt.tier),
+					TokenAccountingMethod: model.AccCodexTotalDelta,
+					InputTokens:           200_000,
+					CacheReadTokens:       70_000,
+					CacheCreationTokens:   tt.cacheWriteTokens,
+					OutputTokens:          100_000,
+					ReasoningTokens:       50_000,
+				}
+				got, err := estimator.Estimate(event)
+				if err != nil || !got.Priced || got.RuleID != modelCase.id+tt.ruleSuffix || got.CostMicroUSD != modelCase.cost {
+					t.Fatalf("estimate=%+v err=%v, want rule %q and %d micro USD", got, err, modelCase.id+tt.ruleSuffix, modelCase.cost)
+				}
+			})
+		}
 	}
 }
 

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "id": "agentledger-pricing-2026-11-24",
+  "id": "agentledger-pricing-2026-11-24-r2",
   "currency": "USD",
   "unit": "usd_per_1m_tokens",
   "checked_at": "2026-11-24",
@@ -15,7 +15,7 @@
       "provider": "openai",
       "name": "OpenAI API pricing",
       "url": "https://developers.openai.com/api/docs/pricing",
-      "checked_at": "2026-11-12"
+      "checked_at": "2026-11-24"
     },
     {
       "provider": "zai",
@@ -128,6 +128,324 @@
       "notes": "OpenAI-internal Codex auto-review pseudo-model with no public rate card; tracked at zero by local policy rather than counted as missing pricing.",
       "model_id": "codex-auto-review",
       "as_of": "2026-10-09"
+    },
+    {
+      "id": "gpt-6.2-astra-fast-long",
+      "model_patterns": [
+        "gpt-6.2-astra"
+      ],
+      "priority": 400,
+      "basis": "official_model_list_price",
+      "condition": {
+        "min_input_side_tokens": 272001,
+        "service_tier": [
+          "fast",
+          "priority"
+        ]
+      },
+      "rates": {
+        "input": 32.0,
+        "cached_input": 1.6,
+        "cache_write": 40.0,
+        "output": 120.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Fast rate for the selected context length. Cache writes use the 30-minute rate.",
+      "model_id": "gpt-6.2-astra",
+      "source_url": "https://developers.openai.com/api/docs/pricing#latest-models",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/models/gpt-6.2-astra",
+      "as_of": "2026-11-24"
+    },
+    {
+      "id": "gpt-6.2-astra-fast",
+      "model_patterns": [
+        "gpt-6.2-astra"
+      ],
+      "priority": 300,
+      "basis": "official_model_list_price",
+      "condition": {
+        "service_tier": [
+          "fast",
+          "priority"
+        ]
+      },
+      "rates": {
+        "input": 16.0,
+        "cached_input": 0.8,
+        "cache_write": 20.0,
+        "output": 80.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Fast rate for the selected context length. Cache writes use the 30-minute rate.",
+      "model_id": "gpt-6.2-astra",
+      "source_url": "https://developers.openai.com/api/docs/pricing#latest-models",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/models/gpt-6.2-astra",
+      "as_of": "2026-11-24"
+    },
+    {
+      "id": "gpt-6.2-astra-batch-long",
+      "model_patterns": [
+        "gpt-6.2-astra"
+      ],
+      "priority": 400,
+      "basis": "official_model_list_price",
+      "condition": {
+        "min_input_side_tokens": 272001,
+        "service_tier": [
+          "batch"
+        ]
+      },
+      "rates": {
+        "input": 8.0,
+        "cached_input": 0.4,
+        "cache_write": 10.0,
+        "output": 30.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Batch rate for the selected context length. Cache writes use the 30-minute rate.",
+      "model_id": "gpt-6.2-astra",
+      "source_url": "https://developers.openai.com/api/docs/pricing#latest-models",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/models/gpt-6.2-astra",
+      "as_of": "2026-11-24"
+    },
+    {
+      "id": "gpt-6.2-astra-batch",
+      "model_patterns": [
+        "gpt-6.2-astra"
+      ],
+      "priority": 300,
+      "basis": "official_model_list_price",
+      "condition": {
+        "service_tier": [
+          "batch"
+        ]
+      },
+      "rates": {
+        "input": 4.0,
+        "cached_input": 0.2,
+        "cache_write": 5.0,
+        "output": 20.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Batch rate for the selected context length. Cache writes use the 30-minute rate.",
+      "model_id": "gpt-6.2-astra",
+      "source_url": "https://developers.openai.com/api/docs/pricing#latest-models",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/models/gpt-6.2-astra",
+      "as_of": "2026-11-24"
+    },
+    {
+      "id": "gpt-6.2-astra-long",
+      "model_patterns": [
+        "gpt-6.2-astra"
+      ],
+      "priority": 100,
+      "basis": "official_model_list_price",
+      "condition": {
+        "min_input_side_tokens": 272001
+      },
+      "rates": {
+        "input": 16.0,
+        "cached_input": 0.8,
+        "cache_write": 20.0,
+        "output": 60.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Above 272000 input-side tokens, long-context rates apply to the whole request. Cache writes use the 30-minute rate.",
+      "model_id": "gpt-6.2-astra",
+      "source_url": "https://developers.openai.com/api/docs/pricing#latest-models",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/models/gpt-6.2-astra",
+      "as_of": "2026-11-24"
+    },
+    {
+      "id": "gpt-6.2-astra",
+      "model_patterns": [
+        "gpt-6.2-astra"
+      ],
+      "priority": 30,
+      "basis": "official_model_list_price",
+      "rates": {
+        "input": 8.0,
+        "cached_input": 0.4,
+        "cache_write": 10.0,
+        "output": 40.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Standard rate through 272000 input-side tokens. Cache writes use the 30-minute rate.",
+      "model_id": "gpt-6.2-astra",
+      "source_url": "https://developers.openai.com/api/docs/pricing#latest-models",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/models/gpt-6.2-astra",
+      "as_of": "2026-11-24"
+    },
+    {
+      "id": "gpt-6.2-sol-fast-long",
+      "model_patterns": [
+        "gpt-6.2-sol"
+      ],
+      "priority": 400,
+      "basis": "official_model_list_price",
+      "condition": {
+        "min_input_side_tokens": 272001,
+        "service_tier": [
+          "fast",
+          "priority"
+        ]
+      },
+      "rates": {
+        "input": 8.0,
+        "cached_input": 0.4,
+        "cache_write": 10.0,
+        "output": 30.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Fast rate for the selected context length. Cache writes use the 30-minute rate.",
+      "model_id": "gpt-6.2-sol",
+      "source_url": "https://developers.openai.com/api/docs/pricing#latest-models",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/models/gpt-6.2-sol",
+      "as_of": "2026-11-24"
+    },
+    {
+      "id": "gpt-6.2-sol-fast",
+      "model_patterns": [
+        "gpt-6.2-sol"
+      ],
+      "priority": 300,
+      "basis": "official_model_list_price",
+      "condition": {
+        "service_tier": [
+          "fast",
+          "priority"
+        ]
+      },
+      "rates": {
+        "input": 4.0,
+        "cached_input": 0.2,
+        "cache_write": 5.0,
+        "output": 20.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Fast rate for the selected context length. Cache writes use the 30-minute rate.",
+      "model_id": "gpt-6.2-sol",
+      "source_url": "https://developers.openai.com/api/docs/pricing#latest-models",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/models/gpt-6.2-sol",
+      "as_of": "2026-11-24"
+    },
+    {
+      "id": "gpt-6.2-sol-batch-long",
+      "model_patterns": [
+        "gpt-6.2-sol"
+      ],
+      "priority": 400,
+      "basis": "official_model_list_price",
+      "condition": {
+        "min_input_side_tokens": 272001,
+        "service_tier": [
+          "batch"
+        ]
+      },
+      "rates": {
+        "input": 2.0,
+        "cached_input": 0.1,
+        "cache_write": 2.5,
+        "output": 7.5
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Batch rate for the selected context length. Cache writes use the 30-minute rate.",
+      "model_id": "gpt-6.2-sol",
+      "source_url": "https://developers.openai.com/api/docs/pricing#latest-models",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/models/gpt-6.2-sol",
+      "as_of": "2026-11-24"
+    },
+    {
+      "id": "gpt-6.2-sol-batch",
+      "model_patterns": [
+        "gpt-6.2-sol"
+      ],
+      "priority": 300,
+      "basis": "official_model_list_price",
+      "condition": {
+        "service_tier": [
+          "batch"
+        ]
+      },
+      "rates": {
+        "input": 1.0,
+        "cached_input": 0.05,
+        "cache_write": 1.25,
+        "output": 5.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Batch rate for the selected context length. Cache writes use the 30-minute rate.",
+      "model_id": "gpt-6.2-sol",
+      "source_url": "https://developers.openai.com/api/docs/pricing#latest-models",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/models/gpt-6.2-sol",
+      "as_of": "2026-11-24"
+    },
+    {
+      "id": "gpt-6.2-sol-long",
+      "model_patterns": [
+        "gpt-6.2-sol"
+      ],
+      "priority": 100,
+      "basis": "official_model_list_price",
+      "condition": {
+        "min_input_side_tokens": 272001
+      },
+      "rates": {
+        "input": 4.0,
+        "cached_input": 0.2,
+        "cache_write": 5.0,
+        "output": 15.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Above 272000 input-side tokens, long-context rates apply to the whole request. Cache writes use the 30-minute rate.",
+      "model_id": "gpt-6.2-sol",
+      "source_url": "https://developers.openai.com/api/docs/pricing#latest-models",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/models/gpt-6.2-sol",
+      "as_of": "2026-11-24"
+    },
+    {
+      "id": "gpt-6.2-sol",
+      "model_patterns": [
+        "gpt-6.2-sol"
+      ],
+      "priority": 30,
+      "basis": "official_model_list_price",
+      "rates": {
+        "input": 2.0,
+        "cached_input": 0.1,
+        "cache_write": 2.5,
+        "output": 10.0
+      },
+      "reasoning_policy": "included_in_output",
+      "cache_write_assumption": "treat_as_input",
+      "confidence": "estimated",
+      "notes": "Standard rate through 272000 input-side tokens. Cache writes use the 30-minute rate.",
+      "model_id": "gpt-6.2-sol",
+      "source_url": "https://developers.openai.com/api/docs/pricing#latest-models",
+      "pricing_notes_url": "https://developers.openai.com/api/docs/models/gpt-6.2-sol",
+      "as_of": "2026-11-24"
     },
     {
       "id": "gpt-6-astra-fast-long",
